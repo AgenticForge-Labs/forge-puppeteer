@@ -51,6 +51,45 @@ The migration now includes the durable concepts from the old Puppeteer/Studio re
 
 Concrete vendor/device SDKs remain external dependencies behind these interfaces.
 
+## OBSBOT pan/tilt/zoom camera control
+
+The proven OBSBOT Tiny 2 / Tiny 2 Lite SDK control path from `robo-studio` has been migrated into Forge Puppeteer's Stage/camera layer.
+
+Install the native helper on Ubuntu:
+
+```bash
+cd ~/code/forge-puppeteer
+bash scripts/install-obsbot-sdk-helper.sh
+```
+
+The installer downloads the OBSBOT Linux SDK headers and `libdev.so` used by the existing working controller into:
+
+```text
+~/.local/share/forge-puppeteer/obsbot-sdk/v1.0.2/
+```
+
+and builds:
+
+```text
+~/.local/bin/forge-puppeteer-obsbot-helper
+```
+
+The Python adapter is `forge_puppeteer.obsbot.ObsbotSdkPTZController`. It implements the generic `CameraMotionController` shape with normalized pan/tilt in `-1..1` and zoom in `0..1`. Absolute pan/tilt/zoom is supported. Relative motion remains intentionally disabled until hardware position readback is normalized and validated.
+
+Example:
+
+```python
+from forge_puppeteer.cameras import CameraMotionPosition
+from forge_puppeteer.obsbot import ObsbotSdkPTZController
+
+camera = ObsbotSdkPTZController(device="/dev/video0")
+camera.connect()
+camera.move_absolute(CameraMotionPosition(pan=0.25, tilt=-0.1, zoom=0.2))
+camera.disconnect()
+```
+
+Set `FORGE_PUPPETEER_OBSBOT_HELPER` if the helper executable is installed somewhere else. The adapter is explicit and never activates real camera motion merely by importing Forge Puppeteer.
+
 ## Real integrations
 
 When a real robot, camera, or capture stack is added, keep the hardware-specific implementation behind the existing semantic/capture interfaces and test the mapping independently. Real integrations should expose readiness and supported capabilities, preserve calibration/range validation, reject unsupported requests clearly, and provide a safe stop/failure path.
