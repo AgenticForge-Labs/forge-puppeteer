@@ -1,0 +1,18 @@
+{
+  "backend": "soarm101_broker",
+  "device": "soarm101",
+  "instance_id": "sim-arm",
+  "name": "SO-ARM101 simulated broker through Puppeteer MCP",
+  "simulation_only": true,
+  "broker_url": "http://127.0.0.1:8765",
+  "broker_token_env": "SOARM101_BROKER_TOKEN",
+  "allowed_tools": [
+    "robot_health",
+    "robot_capabilities",
+    "robot_state",
+    "list_assets",
+    "stop"
+  ],
+  "action_journal": null,
+  "ownership_db": null
+}
