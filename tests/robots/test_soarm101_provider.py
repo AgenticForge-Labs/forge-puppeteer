@@ -279,3 +279,60 @@ async def test_replay_without_terminal_success_stays_unconfirmed():
                            "compatibility": "unchecked", "compatibility_detail": ""}]
     with pytest.raises(RuntimeError, match="broker_completion_unconfirmed"):
         await provider.execute(request)
+
+
+async def test_camera_image_digest_is_checked_before_puppeteer_mcp_can_expose_pixels():
+    import base64
+    import hashlib
+
+    broker = FakeBroker()
+    broker.visible.add("capture_camera")
+    expected = b"synthetic-test-only-jpeg"
+    encoded = base64.b64encode(expected).decode("ascii")
+    digest = hashlib.sha256(expected).hexdigest()
+    altered = False
+
+    async def capture(name, arguments):
+        nonlocal altered
+        broker.calls.append((name, arguments))
+        return SimpleNamespace(is_error=False, structured_content={
+            "request_id": "camera-request-1",
+            "result": {
+                "name": "overhead", "sha256": "0" * 64 if altered else digest,
+                "image_base64": encoded, "width": 10, "height": 10,
+                "source_path": "/private/camera",
+            },
+        })
+
+    broker.call_tool = capture
+    provider = SOARM101Provider(
+        "arm", broker, allowed_tools=frozenset(broker.visible),
+    )
+    meta, image = await provider.capture_camera("overhead")
+    assert image == encoded
+    assert meta == {
+        "name": "overhead", "sha256": digest,
+        "width": 10, "height": 10, "request_id": "camera-request-1",
+    }
+    assert "source_path" not in meta
+    assert broker.calls[-1] == ("capture_camera", {"camera": "overhead"})
+    altered = True
+    with pytest.raises(RuntimeError, match="digest_mismatch"):
+        await provider.capture_camera("overhead")
+
+
+async def test_signed_joint_moves_and_native_gripper_sleepup_use_broker_only():
+    broker = FakeBroker()
+    broker.visible.update({"jog_joint", "move_gripper", "sleep_up"})
+    provider = SOARM101Provider("arm", broker, allowed_tools=frozenset(broker.visible))
+    assert await provider.permitted("move_gripper")
+    with pytest.raises(ValueError):
+        await provider.jog_joint(joint="shoulder_pan", delta_deg=3)
+    await provider.jog_joint(joint="shoulder_pan", delta_deg=-0.5)
+    await provider.move_gripper("open", gripper_speed_raw=100)
+    await provider.sleep_up()
+    assert broker.calls == [
+        ("jog_joint", {"joint": "shoulder_pan", "delta_deg": -0.5}),
+        ("move_gripper", {"target": "open", "gripper_speed_raw": 100}),
+        ("sleep_up", {}),
+    ]
