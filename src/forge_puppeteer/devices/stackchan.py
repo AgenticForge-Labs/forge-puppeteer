@@ -108,7 +108,8 @@ class StackChanProvider:
                     partial(self._connector, port, timeout=timeout)
                 )
             else:
-                *_, external, _play, client_type = _sdk()
+                sdk = _sdk()
+                external, client_type = sdk[4], sdk[6]
 
                 def open_usb():
                     client = client_type.open(port)
@@ -305,7 +306,10 @@ class StackChanProvider:
         robot = self._connected()
         prepared = await _call(self._prepare, request)
         firmware = await _call(self._invoke, robot, robot.discover)
-        state = await _call(self._invoke, robot, robot.state)
+        state = (
+            await _call(self._invoke, robot, robot.state)
+            if request.operation != "neohex" else {}
+        )
         steps = (
             prepared.steps if request.operation == "play_asset" else
             () if request.operation == "neohex" else (prepared,)
@@ -386,12 +390,17 @@ class StackChanProvider:
             elif request.operation == "face":
                 events = await _call(
                     self._invoke, robot, robot.update_face, prepared.update,
-                    expected_generation=generation,
+                    _generation=generation,
                 )
-            else:
+            elif request.operation == "lights":
                 events = await _call(
                     self._invoke, robot, robot.update_lights, prepared.update,
-                    expected_generation=generation,
+                    _generation=generation,
+                )
+            else:
+                # The SDK remains authoritative for NeoHEX state and STOP.
+                events = await _call(
+                    self._invoke, robot, robot.update_neohex, prepared,
                 )
             if not events or events[-1].event != "completed":
                 raise RuntimeError("firmware completion not confirmed")
