@@ -119,7 +119,8 @@ StackChan implementation, only after dependency A:
    not simulate safety-rated hardware STOP. Reconnect must not
    silently resume a lost motion or duplicate a submitted action.
 5. **Assets and native media.** Reuse SDK asset revisions and
-   validated `play_asset` for face/head/lights and NeoHEX,
+   validated `play_asset` for face/head/built-in lights. NeoHEX
+   updates remain a separately validated SDK operation,
    preserving partial-keyframe rejection and host schedule
    provenance. Keep voices/personality and choreography above
    the SDK in Puppeteer. Avoid new agent-triggered firmware
