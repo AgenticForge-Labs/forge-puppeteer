@@ -27,9 +27,6 @@ class FakeRobot:
     def _generation(self):
         return self.generation, self.event
 
-    def _generation(self):
-        return self.generation, self.event
-
     def discover(self):
         return {
             "protocol_version": "1.0",
