@@ -21,6 +21,13 @@ from urllib.parse import urlsplit
 import anyio
 
 
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    """Never forward broker Authorization outside the selected local origin."""
+
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
 class BrokerHTTPError(RuntimeError):
     """A sanitized broker transport/contract failure."""
 
@@ -94,8 +101,11 @@ class SOARM101BrokerHTTP:
                 "Content-Type": "application/json",
             },
         )
+        # Avoid environment HTTP proxies and redirects: neither may receive
+        # the broker bearer token or change which process we contact.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirects())
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout_s) as response:
+            with opener.open(request, timeout=self._timeout_s) as response:
                 # Maximum includes large camera frames while preventing
                 # unbounded tool content from entering the MCP process.
                 data = response.read(16 * 1024 * 1024 + 1)
