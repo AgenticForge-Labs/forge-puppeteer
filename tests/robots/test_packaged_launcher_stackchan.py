@@ -138,3 +138,37 @@ async def test_packaged_provider_uses_fake_transport_and_closes_session(monkeypa
     assert robot.calls == [("stop", None)]
     with pytest.raises(RuntimeError, match="not active"):
         await provider.describe()
+
+
+def test_read_only_stackchan_config_requires_no_motion_declaration(monkeypatch):
+    import importlib.metadata
+
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "0.3.0")
+    read_only = config(
+        physical_authority=None,
+        allowed_tools=["device_info", "device_state", "list_assets", "action_lookup"],
+    )
+    provider = StackChanSDKProvider(read_only)
+    assert provider.grants == frozenset(read_only.allowed_tools)
+    with pytest.raises(ValueError, match="physical_authority"):
+        StackChanSDKProvider(config(
+            physical_authority=None,
+            allowed_tools=["device_info", "device_stop"],
+        ))
+    with pytest.raises(ValueError, match="physical_authority"):
+        StackChanSDKProvider(config(
+            physical_authority=None,
+            allowed_tools=["device_info", "neohex_update"],
+        ))
+
+
+def test_neohex_requires_explicit_known_tool_grant(monkeypatch):
+    import importlib.metadata
+
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "0.3.0")
+    provider = StackChanSDKProvider(config(allowed_tools=[
+        "device_info", "device_state", "neohex_update", "device_stop",
+    ]))
+    assert "neohex_update" in provider.grants
+    with pytest.raises(ValueError, match="unsupported StackChan"):
+        StackChanSDKProvider(config(allowed_tools=["arbitrary_serial_write"]))
