@@ -94,10 +94,9 @@ class SOARM101Provider:
         self.instance_id, self.session = instance_id, session
         self.allowed_tools = allowed_tools
         self.simulation_only = simulation_only
-        self._simulation_verified = False
 
     async def _verify_simulation(self) -> None:
-        if not self.simulation_only or self._simulation_verified:
+        if not self.simulation_only:
             return
         if "robot_state" not in self.allowed_tools or "robot_state" not in await self._visible():
             raise PermissionError("simulation broker state is unavailable")
@@ -106,7 +105,6 @@ class SOARM101Provider:
         evidence = result.get("broker_session") if isinstance(result, Mapping) else None
         if not isinstance(evidence, Mapping) or evidence.get("mode") != "simulation_actions":
             raise PermissionError("configured simulation broker did not prove simulation_actions mode")
-        self._simulation_verified = True
 
     async def _visible(self) -> frozenset[str]:
         response = await self.session.list_tools()
