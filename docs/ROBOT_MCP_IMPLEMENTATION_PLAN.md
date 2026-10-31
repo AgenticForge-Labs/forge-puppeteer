@@ -1,5 +1,16 @@
 # Robot SDK and deterministic MCP implementation plan
 
+> **Current ordered MCP consolidation:** The
+> [SO-ARM101-first, StackChan-second plan](ROBOT_SDK_MCP_CONSOLIDATION.md)
+> supersedes any suggestion that the SDK itself should own a long-term
+> SO-ARM101 MCP server. Puppeteer owns MCP presentation. The SDK owns
+> the trusted broker and all physical/simulation validation. Direct
+> SO-ARM broker transport is in development; SDK MCP removal and
+> StackChan adapter changes are **not yet complete**. Do not begin
+> StackChan refactoring or new motion hardware tests until the SO-ARM
+> adapter parity gate is met.
+
+
 Status: implementation in progress; no milestone is complete. The progress below
 records software evidence only. This work has caused no physical robot actions;
 physical operation and firmware flashing are not authorized by this plan. Each
