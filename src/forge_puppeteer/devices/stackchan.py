@@ -24,6 +24,7 @@ def _sdk():
         from stackchan_control.external_control import CAPABILITIES, ExternalControl
         from stackchan_control.playback import play_asset
         from stackchan_control.routed_serial import RoutedSerialClient
+        from stackchan_control.neohex import NeoHexFrame
     except ImportError as exc:
         raise RuntimeError(
             "Install a compatible stackchan-control SDK with serial support "
@@ -37,7 +38,26 @@ def _sdk():
         ExternalControl,
         play_asset,
         RoutedSerialClient,
+        NeoHexFrame,
     )
+
+# Puppet defines the publicly named MCP tools; the SDK remains authoritative
+# for the implementation, firmware-advertised controls and device limits.
+_NATIVE_TO_TOOL = {
+    "head": "head_move",
+    "face": "face_update",
+    "lights": "lights_update",
+    "neohex": "neohex_update",
+    "play_asset": "play_asset",
+}
+_CAPABILITY_TO_OPERATION = {
+    "motion.update.position_only": "head",
+    "avatar.update": "face",
+    "lights.update": "lights",
+    "external_lights.update": "neohex",
+}
+
+
 
 
 async def _call(fn, *args, **kwargs):
@@ -156,14 +176,20 @@ class StackChanProvider:
             return True
         if self._robot is None:
             return False
-        if tool in {"device_stop", "action_cancel", "device_state"}:
+        if tool in {"device_stop", "action_cancel"}:
+            # Stop remains attemptable even if discovery is unavailable.
             return True
+        if tool == "device_state":
+            robot = self._connected()
+            firmware = await _call(self._invoke, robot, robot.discover)
+            return "system.state" in firmware.get("capabilities", ())
         if tool == "play_asset":
             return self.asset_directory is not None
         required = {
             "head_move": "motion.update.position_only",
             "face_update": "avatar.update",
             "lights_update": "lights.update",
+            "neohex_update": "external_lights.update",
         }
         if tool not in required:
             return False
@@ -187,28 +213,38 @@ class StackChanProvider:
             if "system.state" in firmware["capabilities"]
             else None
         )
-        capabilities = _sdk()[3]
-        mapping = {
-            "avatar.update": "face",
-            "motion.update.position_only": "head",
-            "lights.update": "lights",
+        # Native schemas describe firmware wire keys (e.g. yawServo), whereas
+        # MCP receives reviewed adapter keys (yaw). Advertise the *actual*
+        # tool argument schemas while preserving SDK-owned descriptions,
+        # effects, limits and resource identities.
+        from ..mcp.stackchan import (
+            FaceParameters, HeadParameters, LightParameters, NeoHexParameters,
+        )
+
+        model_for = {
+            "head": HeadParameters,
+            "face": FaceParameters,
+            "lights": LightParameters,
+            "neohex": NeoHexParameters,
         }
+        capabilities = _sdk()[3]
         controls = []
-        for key, operation in mapping.items():
-            if key in firmware["capabilities"]:
-                item = capabilities[key].to_dict()
-                controls.append(
-                    ControlDescriptor(
-                        id=operation,
-                        description=item["description"],
-                        effect=item["effect"],
-                        parameters_schema=item["parameters_schema"],
-                        resources=tuple(item["resources"]),
-                        concurrency_constraints=("stackchan.serialized",),
-                    )
-                )
-        operations = [c.id for c in controls]
-        if self.asset_directory is not None and state is not None:
+        for native_id, operation in _CAPABILITY_TO_OPERATION.items():
+            if (native_id not in firmware["capabilities"]
+                    or _NATIVE_TO_TOOL[operation] not in self._allowed_tools):
+                continue
+            native = capabilities[native_id]
+            controls.append(ControlDescriptor(
+                id=operation,
+                description=native.description,
+                effect=native.effect,
+                parameters_schema=model_for[operation].model_json_schema(),
+                resources=native.resources,
+                concurrency_constraints=("stackchan.serialized",),
+            ))
+        operations = [control.id for control in controls]
+        if ("play_asset" in self._allowed_tools and self.asset_directory is not None
+                and state is not None):
             operations.append("play_asset")
         return DeviceDescriptor(
             id=self.instance_id,
@@ -229,6 +265,10 @@ class StackChanProvider:
         if request.performer_id != self.instance_id:
             raise ValueError("performer mismatch")
         step, _, validate_asset, *_ = _sdk()
+        if request.operation not in _NATIVE_TO_TOOL:
+            raise ValueError("unsupported operation")
+        if _NATIVE_TO_TOOL[request.operation] not in self._allowed_tools:
+            raise PermissionError("StackChan operation not in operator grants")
         if request.operation == "play_asset":
             if request.parameters or not request.asset_id or not request.asset_revision:
                 raise ValueError(
@@ -244,8 +284,15 @@ class StackChanProvider:
             return asset
         if request.asset_id is not None or request.asset_revision is not None:
             raise ValueError("native operation cannot specify an asset")
-        if request.operation not in ("head", "face", "lights"):
-            raise ValueError("unsupported operation")
+        if request.operation == "neohex":
+            _, _, _, _, _, _, _, neohex = _sdk()
+            params = request.parameters
+            if set(params) != {"pixels", "brightness"}:
+                raise ValueError("NeoHEX requires exactly pixels and brightness")
+            pixels = params["pixels"]
+            if not isinstance(pixels, (list, tuple)):
+                raise ValueError("NeoHEX pixels must be an array")
+            return neohex(tuple(pixels), params["brightness"])
         return step(
             {
                 "at_s": 0,
@@ -259,7 +306,14 @@ class StackChanProvider:
         prepared = await _call(self._prepare, request)
         firmware = await _call(self._invoke, robot, robot.discover)
         state = await _call(self._invoke, robot, robot.state)
-        steps = prepared.steps if request.operation == "play_asset" else (prepared,)
+        steps = (
+            prepared.steps if request.operation == "play_asset" else
+            () if request.operation == "neohex" else (prepared,)
+        )
+        if request.operation == "neohex" and (
+            "external_lights.update" not in firmware["capabilities"]
+        ):
+            raise ValueError("NeoHEX unavailable in firmware")
         required = {
             "head": "motion.update.position_only",
             "face": "avatar.update",
@@ -294,16 +348,22 @@ class StackChanProvider:
                 "head": ("head.pose",),
                 "face": ("face",),
                 "lights": ("lights.builtin",),
+                "neohex": ("lights.neohex",),
             }[request.operation]
         return tuple(sorted({"stackchan.serialized", *resources}))
 
     async def execute(self, request: ActionRequest) -> Completion:
         # Recheck for direct callers as well as the runtime's second validation.
         robot = self._connected()
-        generation = robot.action_generation()
+        # Use the native SDK's stop generation, not a synthetic broker clock.
+        # This invalidates preparation if a stop occurred while awaiting
+        # firmware discovery or operator action validation.
+        generation = (await _call(self._invoke, robot, robot._generation))[0]
         await self.validate(request)
         if self._connected() is not robot:
             raise RuntimeError("StackChan connection changed during preparation")
+        if (await _call(self._invoke, robot, robot._generation))[0] != generation:
+            raise RuntimeError("StackChan action invalidated by stop")
         prepared = await _call(self._prepare, request)
         if request.operation == "play_asset":
             results = await _call(
@@ -312,7 +372,6 @@ class StackChanProvider:
                 _sdk()[5],
                 robot, prepared,
                 expected_revision=request.asset_revision,
-                expected_generation=generation,
             )
             if len(results) != len(prepared.steps) or any(
                 not r.events or r.events[-1].event != "completed" for r in results
@@ -322,7 +381,7 @@ class StackChanProvider:
             if request.operation == "head":
                 events = await _call(
                     self._invoke, robot, robot.move_head, prepared.update,
-                    expected_generation=generation,
+                    _generation=generation,
                 )
             elif request.operation == "face":
                 events = await _call(
