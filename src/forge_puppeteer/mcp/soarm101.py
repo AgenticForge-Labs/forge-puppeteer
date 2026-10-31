@@ -24,6 +24,8 @@ class PoseParameters(_Parameters):
     name: str = Field(min_length=1)
     speed_deg_s: float | None = Field(default=None, gt=0)
     acceleration_deg_s2: float | None = Field(default=None, gt=0)
+    gripper_speed_raw: int | None = Field(default=None, ge=0)
+    gripper_acceleration_raw: int | None = Field(default=None, ge=0)
 
 
 class CartesianParameters(_Parameters):
