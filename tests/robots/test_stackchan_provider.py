@@ -312,3 +312,67 @@ async def test_real_sdk_asset_player_accepts_puppeteer_broker_call(tmp_path):
     assert "not measured" in result.evidence
     assert [name for name, _ in fake.calls] == ["face"]
     await provider.close()
+
+
+async def test_transport_unknown_outcome_is_never_retried_by_adapter():
+    from stackchan_control.routed_serial import UnknownOutcome
+
+    fake = Fake()
+    provider = StackChanProvider(
+        "robot", connector=lambda *a, **k: (Client(), fake),
+        allowed_tools=ALL_TOOLS,
+    )
+    await provider.connect("fake")
+
+    def lost_face(update, *, _generation=None):
+        fake.calls.append(("submitted", update))
+        raise UnknownOutcome("fixture lost connection after submission")
+
+    fake.update_face = lost_face
+    with pytest.raises(UnknownOutcome):
+        await provider.execute(request("face", {"mouth": {"size": 2}}))
+    assert [entry[0] for entry in fake.calls] == ["submitted"]
+    await provider.close()
+
+
+async def test_stop_during_asset_preflight_does_not_launch_playback(tmp_path):
+    (tmp_path / "pose.json").write_text(
+        '{"schema_version":1,"id":"face","kind":"pose","steps":'
+        '[{"at_s":0,"operation":"face","parameters":{"mouth":{"size":2}}}]}'
+    )
+    fake = Fake()
+    provider = StackChanProvider(
+        "robot", asset_directory=tmp_path,
+        connector=lambda *a, **k: (Client(), fake),
+        allowed_tools=ALL_TOOLS,
+    )
+    (asset,) = await provider.list_assets()
+    await provider.connect("fake")
+    started, release = anyio.Event(), anyio.Event()
+    original_validate = provider.validate
+
+    async def pausing_validate(action):
+        await original_validate(action)
+        started.set()
+        await release.wait()
+
+    provider.validate = pausing_validate
+    result = []
+
+    async def run_playback():
+        try:
+            await provider.execute(request(
+                "play_asset", asset_id=asset.id, asset_revision=asset.revision,
+            ))
+        except RuntimeError as exc:
+            result.append(str(exc))
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(run_playback)
+        await started.wait()
+        assert (await provider.stop()).confirmed
+        release.set()
+    assert len(result) == 1
+    assert "invalidated by stop" in result[0]
+    assert all(entry[0] != "face" for entry in fake.calls)
+    await provider.close()
