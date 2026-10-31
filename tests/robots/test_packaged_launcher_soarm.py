@@ -240,3 +240,22 @@ async def test_packaged_launcher_to_real_sdk_broker_in_simulation(tmp_path):
             with anyio.fail_after(5):
                 await broker.wait()
         broker_log.close()
+
+
+def test_observation_only_mcp_needs_no_physical_motion_grant():
+    config = ServerConfig(
+        backend="soarm101_broker", device="soarm101", instance_id="observe",
+        simulation_only=False, physical_authority=None,
+        broker_url="http://127.0.0.1:8765",
+        allowed_tools=["robot_health", "robot_capabilities", "robot_state",
+                       "capture_camera"],
+    )
+    provider = BrokerProvider(config)
+    assert provider.config.physical_authority is None
+    config.allowed_tools.append("jog_joint")
+    with pytest.raises(ValueError, match="physical_authority"):
+        BrokerProvider(config)
+    config.allowed_tools.remove("jog_joint")
+    config.allowed_tools.append("stop")
+    with pytest.raises(ValueError, match="physical_authority"):
+        BrokerProvider(config)

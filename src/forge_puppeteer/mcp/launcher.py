@@ -259,7 +259,15 @@ class BrokerProvider:
             if config.physical_authority is not None:
                 raise ValueError("simulation_only cannot declare physical_authority")
         elif config.physical_authority != "I_AUTHORIZE_BROKER_CONTROL":
-            raise ValueError("SO-ARM deployment requires explicit physical_authority declaration")
+            # Read-only camera/state inspections are allowed without a
+            # human-issued motion grant. Both the operator's selected tool
+            # subset and the SDK broker must continue to reject actions.
+            observation_tools = frozenset({
+                "robot_health", "robot_capabilities", "robot_state",
+                "capture_camera", "list_assets",
+            })
+            if set(config.allowed_tools) - observation_tools:
+                raise ValueError("SO-ARM deployment requires explicit physical_authority declaration")
         if config.simulation_only and "robot_state" not in config.allowed_tools:
             raise ValueError("simulation_only requires robot_state for broker mode verification")
         if config.allow_openshell_host and not (
