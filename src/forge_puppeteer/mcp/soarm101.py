@@ -11,6 +11,8 @@ from ..execution import ActionRequest
 from .server import Gateway
 from .soarm_guidance import GUIDANCE_RESOURCES, task_prompt
 
+from mcp.types import ToolAnnotations
+
 if TYPE_CHECKING:
     from mcp.server import MCPServer
     from ..devices.soarm101 import SOARM101Provider
@@ -60,6 +62,7 @@ class ReplayParameters(_Parameters):
 def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
     """Expose only fixed broker operations; operation names are never caller-selected."""
     provider = cast("SOARM101Provider", gateway.provider)
+    read_only = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
 
     @server.tool()
     async def go_pose(
@@ -168,7 +171,7 @@ def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
             asset_revision=parameters.revision,
         ))
 
-    @server.tool()
+    @server.tool(annotations=read_only)
     async def robot_health() -> dict[str, object]:
         """Read authenticated SO-ARM broker health; this does not arm the robot."""
         from mcp.server.mcpserver.exceptions import ToolError
@@ -178,7 +181,7 @@ def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
         except Exception:
             raise ToolError("broker_read_failed") from None
 
-    @server.tool()
+    @server.tool(annotations=read_only)
     async def robot_capabilities() -> dict[str, object]:
         """Read live bounded capabilities, calibration and authority evidence."""
         from mcp.server.mcpserver.exceptions import ToolError
@@ -188,7 +191,7 @@ def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
         except Exception:
             raise ToolError("broker_read_failed") from None
 
-    @server.tool()
+    @server.tool(annotations=read_only)
     async def robot_state() -> dict[str, object]:
         """Read fresh broker state rather than infer motion success."""
         from mcp.server.mcpserver.exceptions import ToolError
@@ -198,7 +201,7 @@ def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
         except Exception:
             raise ToolError("broker_read_failed") from None
 
-    @server.tool()
+    @server.tool(annotations=read_only, structured_output=False)
     async def capture_camera(camera: Literal["overhead", "wrist"]):
         """Return verified broker JPEG pixels and separate non-sensitive metadata."""
         from mcp.server.mcpserver.exceptions import ToolError
