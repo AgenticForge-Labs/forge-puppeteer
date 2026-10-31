@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -13,6 +13,7 @@ from .soarm_guidance import GUIDANCE_RESOURCES, task_prompt
 
 if TYPE_CHECKING:
     from mcp.server import MCPServer
+    from ..devices.soarm101 import SOARM101Provider
 
 
 class _Parameters(BaseModel):
@@ -56,6 +57,7 @@ class ReplayParameters(_Parameters):
 
 def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
     """Expose only fixed broker operations; operation names are never caller-selected."""
+    provider = cast("SOARM101Provider", gateway.provider)
 
     @server.tool()
     async def go_pose(
@@ -163,7 +165,7 @@ def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
         from mcp.server.mcpserver.exceptions import ToolError
         await gateway.check("robot_health")
         try:
-            return await gateway.provider._call("robot_health")
+            return await provider._call("robot_health")
         except Exception:
             raise ToolError("broker_read_failed") from None
 
@@ -173,7 +175,7 @@ def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
         from mcp.server.mcpserver.exceptions import ToolError
         await gateway.check("robot_capabilities")
         try:
-            return await gateway.provider._call("robot_capabilities")
+            return await provider._call("robot_capabilities")
         except Exception:
             raise ToolError("broker_read_failed") from None
 
@@ -183,7 +185,7 @@ def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
         from mcp.server.mcpserver.exceptions import ToolError
         await gateway.check("robot_state")
         try:
-            return await gateway.provider.state()
+            return await provider.state()
         except Exception:
             raise ToolError("broker_read_failed") from None
 
@@ -195,7 +197,7 @@ def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
 
         await gateway.check("capture_camera")
         try:
-            metadata, image = await gateway.provider.capture_camera(camera)
+            metadata, image = await provider.capture_camera(camera)
         except Exception:
             raise ToolError("broker_camera_unavailable_or_unverified") from None
         return [
