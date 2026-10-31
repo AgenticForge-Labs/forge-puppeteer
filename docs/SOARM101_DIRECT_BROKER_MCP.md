@@ -24,7 +24,7 @@ SOARM101 native motion SDK, calibrated backend or simulation
 ```
 
 There is no SDK MCP subprocess in the **new direct transport**. The
-`BrokerHTTPClient` interface reads the SDK's
+`SOARM101BrokerHTTP` interface reads the SDK's
 `BROKER_CAPABILITY_ROUTES` rather than defining a second authoritative
 route map. The SO-ARM101 Motion SDK remains independently usable
 without Puppeteer. Puppeteer MCP-only operation does not need Platform,
@@ -52,6 +52,16 @@ Configure the trusted environment in the **Puppeteer process**:
 forge-puppeteer-mcp --config examples/robots/soarm101/direct-broker-simulation.json
 ```
 
+Install both the standalone SO-ARM101 SDK wheel and
+`forge-puppeteer[mcp]` in the same Python environment. The native SDK
+works without Puppeteer; Puppeteer works without Platform or Studio.
+The optional script
+`scripts/soarm101-wheel-smoke.sh` builds **both** wheels into an
+isolated environment, installs the SDK without its `[mcp]` extra,
+and exercises replay and MCP stdio against a separately spawned
+SDK **simulation broker**. The SDK-owned `soarm101-mcp` executable
+must not appear anywhere in the new wheel test's process chain.
+
 The example does not start a broker, connect a robot, arm torque, create
 an operator lease, or assert camera availability. Its `simulation_only`
 mode requires fresh broker state proving `simulation_actions` before
@@ -78,6 +88,17 @@ to operate physical hardware, and the sample contains no real secrets.
 - Broker grants are filtered in the Puppeteer server at registration
   and checked again against live `GET /v1/profile` before any
   broker operation; SDK also enforces its own profile/lease limits.
+- Simulation mode is checked **on each action validation**, rather
+  than cached from initial connection. STOP/HOLD requires explicit
+  broker-confirmed stop, not merely a status label.
+- The direct transport cannot follow HTTP redirects or environment
+  proxies, both of which could leak the broker bearer token.
+- This is a **new** MCP action lifecycle interface: compared with
+  SDK `soarm101-mcp`, motion calls take Puppeteer's
+  `action_id`, `caller_id`, `session_id` and typed parameters.
+  Tool *capability* parity does not mean byte-for-byte argument-schema
+  compatibility. External agent configurations require a planned
+  migration to these tool signatures.
 
 The direct HTTP client intentionally returns a small compatibility
 object matching the previous internal broker-session methods. It is
