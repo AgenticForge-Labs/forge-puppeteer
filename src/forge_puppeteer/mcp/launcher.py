@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,11 @@ class ServerConfig(BaseModel):
     # declaration. The downstream broker remains the actual authority gate.
     physical_authority: str | None = None
     simulation_only: bool = False
+    # New canonical client: direct to the SDK-owned authenticated broker.
+    # No bearer tokens are accepted in JSON; load them from trusted env.
+    broker_url: str | None = None
+    broker_token_env: str = "SOARM101_BROKER_TOKEN"
+    # Legacy SDK-owned MCP subprocess retained ONLY until installed-wheel parity.
     broker_command: str | None = None
     broker_args: list[str] = Field(default_factory=list)
     broker_env: dict[str, str] = Field(default_factory=dict)
@@ -244,7 +250,7 @@ class ReachySDKProvider:
 
 
 class BrokerProvider:
-    """SO-ARM adapter whose only device connection is an operator broker MCP."""
+    """SO-ARM adapter delegates only to the SDK trusted broker, never motors."""
 
     def __init__(self, config: ServerConfig):
         if config.simulation_only:
@@ -254,8 +260,12 @@ class BrokerProvider:
             raise ValueError("SO-ARM deployment requires explicit physical_authority declaration")
         if config.simulation_only and "robot_state" not in config.allowed_tools:
             raise ValueError("simulation_only requires robot_state for broker mode verification")
-        if not config.broker_command:
-            raise ValueError("SO-ARM broker backend requires broker_command")
+        if bool(config.broker_command) == bool(config.broker_url):
+            raise ValueError("configure exactly one SO-ARM broker transport")
+        if config.broker_url and config.broker_env:
+            raise ValueError("direct SO-ARM broker URL must not carry inline credentials")
+        if not config.broker_token_env.isidentifier():
+            raise ValueError("invalid broker token environment variable name")
         from ..devices.soarm101 import SOARM101Provider
         self.config = config
         self.grants = frozenset(config.allowed_tools)
@@ -264,6 +274,25 @@ class BrokerProvider:
 
     @asynccontextmanager
     async def connected(self):
+        if self.config.broker_url is not None:
+            from ..devices.soarm101_broker_http import SOARM101BrokerHTTP
+
+            # Token remains in the trusted Puppeteer process, not an agent
+            # tool payload, operator JSON file or nested MCP subprocess.
+            token = os.environ.get(self.config.broker_token_env, "")
+            client = SOARM101BrokerHTTP(self.config.broker_url, token)
+            self._adapter = self._adapter_type(
+                self.config.instance_id, client,
+                allowed_tools=self.grants,
+                simulation_only=self.config.simulation_only,
+            )
+            try:
+                yield
+            finally:
+                self._adapter = None
+            return
+        # Migration-only legacy source MCP; remove once the SDK OpenShell
+        # and installed-wheel canary use the direct HTTP broker client.
         try:
             from mcp import ClientSession, StdioServerParameters
             from mcp.client.stdio import stdio_client
