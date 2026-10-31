@@ -24,8 +24,8 @@ class FakeRobot:
         self.generation = 0
         self.event = threading.Event()
 
-    def action_generation(self):
-        return self.generation
+    def _generation(self):
+        return self.generation, self.event
 
     def _generation(self):
         return self.generation, self.event
@@ -39,20 +39,25 @@ class FakeRobot:
                 "avatar.update",
                 "motion.update.position_only",
                 "lights.update",
+                "external_lights.update",
             ],
         }
 
     def state(self):
         return {"native_angle_limits_tenths": {"yaw": [-500, 500], "pitch": [30, 870]}}
 
-    def _apply(self, _update, *, expected_generation=None):
-        if expected_generation != self.generation:
+    def _apply(self, _update, *, _generation=None):
+        if _generation != self.generation:
             raise RuntimeError("invalidated by stop")
         return (SimpleNamespace(event="completed"),)
 
     update_face = _apply
     move_head = _apply
     update_lights = _apply
+
+    def update_neohex(self, frame):
+        assert len(frame.pixels) == 37
+        return (SimpleNamespace(event="completed"),)
 
     def stop(self):
         self.generation += 1
@@ -70,6 +75,7 @@ def main():
             "head_move",
             "face_update",
             "lights_update",
+            "neohex_update",
             "play_asset",
             "device_stop",
             "action_lookup",
