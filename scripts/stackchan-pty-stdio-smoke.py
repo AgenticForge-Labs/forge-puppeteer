@@ -15,7 +15,7 @@ from mcp.client.stdio import stdio_client
 
 CAPABILITIES = [
     "avatar.update", "motion.update.position_only", "lights.update",
-    "system.state", "system.stop",
+    "external_lights.update", "system.state", "system.stop",
 ]
 STATE = {"native_angle_limits_tenths": {"yaw": [-500, 500], "pitch": [30, 870]}}
 
@@ -90,7 +90,8 @@ async def main():
                 "port": port,
                 "sdk_version": "0.3.0",
                 "allowed_tools": ["device_info", "device_state", "action_lookup",
-                                  "face_update", "head_move", "lights_update", "device_stop"],
+                                  "face_update", "head_move", "lights_update",
+                                  "neohex_update", "device_stop"],
             }))
             params = StdioServerParameters(
                 command="forge-puppeteer-mcp", args=["--config", str(config_path)],
@@ -103,11 +104,11 @@ async def main():
                 await session.initialize()
                 available = {tool.name for tool in (await session.list_tools()).tools}
                 assert {"device_info", "device_state", "face_update", "head_move",
-                        "lights_update", "device_stop"} <= available
+                        "lights_update", "neohex_update", "device_stop"} <= available
                 info = (await session.call_tool("device_info", {})).structured_content
                 assert info["id"] == "installed-wheel-stackchan"
                 assert info["connected"] and info["ready"]
-                assert {"face", "head", "lights"} <= set(info["supported_operations"])
+                assert {"face", "head", "lights", "neohex"} <= set(info["supported_operations"])
                 args = {
                     "action_id": "pty-face-update", "caller_id": "offline-smoke",
                     "session_id": "pty-smoke", "parameters": {"mouth": {"size": 4}},
@@ -135,6 +136,13 @@ async def main():
                     "session_id": "pty-smoke",
                     "parameters": {"yaw": {"angle": 100, "speed": 20}},
                 }, "completed")
+                await submit_and_wait("neohex_update", {
+                    "action_id": "pty-neohex", "caller_id": "offline-smoke",
+                    "session_id": "pty-smoke",
+                    "parameters": {
+                        "pixels": ["#00ff33"] * 37, "brightness": 8,
+                    },
+                }, "completed")
                 failed = await submit_and_wait("lights_update", {
                     "action_id": "pty-lights-failure", "caller_id": "offline-smoke",
                     "session_id": "pty-smoke",
@@ -146,10 +154,12 @@ async def main():
                 stopped = (await session.call_tool("device_stop", {})).structured_content
                 assert stopped["confirmed"] is True, stopped
             methods = [command["method"] for command in firmware.commands]
-            assert {"avatar.update", "motion.update", "lights.update"} <= set(methods), methods
+            assert {"avatar.update", "motion.update", "lights.update",
+                    "external_lights.update"} <= set(methods), methods
             assert "system.stop" in methods, methods
             for command in firmware.commands:
-                if command["method"] in {"avatar.update", "motion.update", "lights.update", "system.stop"}:
+                if command["method"] in {"avatar.update", "motion.update", "lights.update", "external_lights.update",
+                                      "system.stop"}:
                     ordered = [name for ident, name in firmware.events if ident == command["id"]]
                     terminal = "failed" if command["method"] == "lights.update" else "completed"
                     assert ordered == ["accepted", "progress", terminal], (command, ordered)
