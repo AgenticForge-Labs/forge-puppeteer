@@ -40,6 +40,8 @@ class CartesianParameters(_Parameters):
 class JointParameters(_Parameters):
     joint: Literal["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
     delta_deg: float = Field(ge=-2, le=2)
+    speed_deg_s: float | None = Field(default=None, gt=0)
+    acceleration_deg_s2: float | None = Field(default=None, gt=0)
 
     @field_validator("delta_deg")
     @classmethod
@@ -47,8 +49,6 @@ class JointParameters(_Parameters):
         if value == 0:
             raise ValueError("joint delta must not be zero")
         return value
-    speed_deg_s: float | None = Field(default=None, gt=0)
-    acceleration_deg_s2: float | None = Field(default=None, gt=0)
 
 
 class ReplayParameters(_Parameters):
