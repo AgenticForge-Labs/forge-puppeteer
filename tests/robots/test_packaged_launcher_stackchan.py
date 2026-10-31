@@ -22,8 +22,8 @@ class FakeRobot:
     def state(self):
         return {"native_angle_limits_tenths": {"yaw": [-500, 500], "pitch": [30, 870]}}
 
-    def action_generation(self):
-        return self.generation
+    def _generation(self):
+        return self.generation, None
 
     def update_face(self, update, **kwargs):
         self.calls.append(("face", update))
