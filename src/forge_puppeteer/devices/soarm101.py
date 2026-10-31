@@ -14,7 +14,7 @@ import re
 from collections.abc import Mapping
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..execution import ActionRequest, Completion, StopResult
 from ..robot_contracts import AssetDescriptor, ControlDescriptor, DeviceDescriptor
@@ -50,7 +50,14 @@ class SleepArgs(_Args):
 
 class JointJogArgs(_Args):
     joint: Literal["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
-    delta_deg: float = Field(gt=0, le=2)
+    delta_deg: float = Field(ge=-2, le=2)
+
+    @field_validator("delta_deg")
+    @classmethod
+    def nonzero_delta(cls, value: float) -> float:
+        if value == 0:
+            raise ValueError("joint delta must not be zero")
+        return value
     speed_deg_s: float | None = Field(default=None, gt=0)
     acceleration_deg_s2: float | None = Field(default=None, gt=0)
 
