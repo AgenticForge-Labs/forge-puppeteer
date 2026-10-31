@@ -336,3 +336,19 @@ async def test_signed_joint_moves_and_native_gripper_sleepup_use_broker_only():
         ("move_gripper", {"target": "open", "gripper_speed_raw": 100}),
         ("sleep_up", {}),
     ]
+
+
+async def test_stop_status_label_without_holding_does_not_release_motion_quarantine():
+    broker = FakeBroker()
+
+    async def weak_stop(name, arguments):
+        broker.calls.append((name, arguments))
+        return SimpleNamespace(is_error=False, structured_content={
+            "result": {"status": "stopped", "completed": True, "holding": False},
+        })
+
+    broker.call_tool = weak_stop
+    provider = SOARM101Provider("arm", broker, allowed_tools=frozenset(broker.visible))
+    result = await provider.stop()
+    assert result.confirmed is False
+    assert "stopped" in result.evidence
