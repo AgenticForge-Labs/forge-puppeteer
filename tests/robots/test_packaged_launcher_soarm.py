@@ -88,7 +88,7 @@ async def test_packaged_launcher_delegates_only_to_configured_fake_broker(tmp_pa
 
 @pytest.mark.anyio
 async def test_packaged_launcher_to_real_sdk_broker_in_simulation(tmp_path):
-    """Exercise Forge -> SDK MCP stdio -> SDK simulation broker; never hardware."""
+    """Exercise Forge MCP -> SDK simulation broker directly; never hardware."""
     forge_root = Path(__file__).resolve().parents[2]
     sdk_root = forge_root.parent / "soarm101-motion-sdk"
     if not (sdk_root / "src/soarm101_motion/broker.py").is_file():
@@ -145,18 +145,15 @@ async def test_packaged_launcher_to_real_sdk_broker_in_simulation(tmp_path):
 
         child_env = os.environ.copy()
         child_env["PYTHONPATH"] = os.pathsep.join((str(forge_root / "src"), str(sdk_root / "src")))
-        broker_child_env = {
-            **child_env,
-            "SOARM101_BROKER_URL": f"http://127.0.0.1:{port}",
-            "SOARM101_BROKER_TOKEN": token,
-        }
+        # Trusted Puppeteer launcher receives only its own broker credential.
+        # The value must not enter the JSON operator config or any agent tool.
+        child_env["SOARM101_BROKER_TOKEN"] = token
         config_path = tmp_path / "simulation-server.json"
         config_path.write_text(json.dumps({
             "backend": "soarm101_broker", "device": "soarm101", "instance_id": "sim-arm",
             "simulation_only": True,
-            "broker_command": str(sdk_python),
-            "broker_args": ["-m", "soarm101_motion.mcp_server"],
-            "broker_env": broker_child_env,
+            "broker_url": f"http://127.0.0.1:{port}",
+            "broker_token_env": "SOARM101_BROKER_TOKEN",
             "allowed_tools": ["robot_health", "robot_capabilities", "robot_state", "jog_joint",
                               "list_assets", "replay_sequence", "stop"],
         }))
