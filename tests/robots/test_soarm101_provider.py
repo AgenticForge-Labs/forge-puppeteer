@@ -352,3 +352,33 @@ async def test_stop_status_label_without_holding_does_not_release_motion_quarant
     result = await provider.stop()
     assert result.confirmed is False
     assert "stopped" in result.evidence
+
+
+async def test_simulation_mode_cannot_be_cached_across_broker_restart():
+    broker = FakeBroker()
+    current_mode = "simulation_actions"
+
+    async def dynamic_broker(name, arguments):
+        broker.calls.append((name, arguments))
+        if name == "robot_state":
+            result = {"broker_session": {"mode": current_mode, "id": "session-rotated"}}
+        elif name == "robot_capabilities":
+            result = {"authority": {"armed": False}}
+        else:
+            result = {"completed": True}
+        return SimpleNamespace(is_error=False, structured_content={"result": result})
+
+    broker.call_tool = dynamic_broker
+    provider = SOARM101Provider(
+        "arm", broker, allowed_tools=frozenset(broker.visible),
+        simulation_only=True,
+    )
+    await provider.describe()
+    current_mode = "physical"
+    action = ActionRequest(
+        id="restart-guard", performer_id="arm", caller_id="agent",
+        session_id="session", operation="go_pose", parameters={"name": "ready"},
+    )
+    with pytest.raises(PermissionError, match="did not prove simulation_actions"):
+        await provider.validate(action)
+    assert not any(name == "go_pose" for name, _ in broker.calls)
