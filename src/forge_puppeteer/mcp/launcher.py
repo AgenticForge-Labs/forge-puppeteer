@@ -19,6 +19,7 @@ from ..execution import ActionRequest, Completion, ExecutionRuntime, StopResult
 from ..robot_contracts import AssetDescriptor, ControlDescriptor, DeviceDescriptor
 from ..runtime import PerformanceStage
 from .server import create_server
+from .soarm_guidance import SERVER_INSTRUCTIONS
 
 
 class ServerConfig(BaseModel):
@@ -414,12 +415,7 @@ def serve(config_path: str | Path) -> None:
     create_server(
         runtime, provider, config.instance_id, register,
         name=config.name, enabled_tools=enabled_tools,
-        instructions=(
-            __import__(
-                "forge_puppeteer.mcp.soarm_guidance",
-                fromlist=["SERVER_INSTRUCTIONS"],
-            ).SERVER_INSTRUCTIONS if config.device == "soarm101" else None
-        ),
+        instructions=SERVER_INSTRUCTIONS if config.device == "soarm101" else None,
     ).run(transport="stdio")
 
 
