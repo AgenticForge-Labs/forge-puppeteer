@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "performer": "reachy",
+  "packs": [
+    {
+      "id": "offline-hello",
+      "description": "Exercise the packaged MCP client against the explicit fake provider.",
+      "cues": [
+        {
+          "at": 0.0,
+          "operation": "play_move",
+          "asset_id": "reachy:hello",
+          "asset_revision": "sha256:forge-puppeteer-fake-v1",
+          "parameters": {"sound": false}
+        }
+      ]
+    }
+  ]
+}

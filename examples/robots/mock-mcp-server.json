@@ -1,0 +1,16 @@
+{
+  "backend": "fake",
+  "device": "stackchan",
+  "instance_id": "stackchan-mock",
+  "name": "StackChan mock",
+  "allowed_tools": [
+    "device_info",
+    "device_state",
+    "list_assets",
+    "action_lookup",
+    "control_acquire",
+    "control_release",
+    "face_update"
+  ],
+  "assets": ["face-neutral"]
+}

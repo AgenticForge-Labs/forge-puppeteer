@@ -1,0 +1,31 @@
+{
+  "devices": [
+    {
+      "id": "stackchan-fixture", "provider": "stackchan", "connected": false, "ready": false,
+      "controls": [
+        {"id": "stackchan.face", "description": "Face features", "effect": "visual", "resources": ["face.eyes", "face.mouth"], "parameters_schema": {"type": "object", "properties": {"eyes": {"type": "object"}}}},
+        {"id": "stackchan.head", "description": "Head targets", "effect": "motion", "resources": ["head.pose"], "unit": "tenths of a degree", "parameters_schema": {"type": "object", "properties": {"yaw": {"type": "integer"}, "pitch": {"type": "integer"}}}},
+        {"id": "stackchan.lights", "description": "Lights", "effect": "light", "resources": ["lights.builtin"], "parameters_schema": {"type": "object", "properties": {"color": {"type": "string"}}}}
+      ]
+    },
+    {
+      "id": "reachy-fixture", "provider": "reachy", "connected": false, "ready": false,
+      "controls": [
+        {"id": "reachy.head", "description": "Head pose", "effect": "motion", "resources": ["head.pose"], "parameters_schema": {"type": "object", "properties": {"pose": {"type": "array"}}}},
+        {"id": "reachy.antennas", "description": "Antenna targets", "effect": "motion", "resources": ["antennas.left", "antennas.right"], "unit": "rad", "parameters_schema": {"type": "object", "properties": {"left": {"type": "number"}, "right": {"type": "number"}}}}
+      ]
+    },
+    {
+      "id": "soarm-fixture", "provider": "soarm101", "connected": false, "ready": false,
+      "controls": [
+        {"id": "soarm.joints", "description": "Joint targets", "effect": "motion", "resources": ["arm.motion"], "parameters_schema": {"type": "object", "properties": {"joints": {"type": "object"}}}},
+        {"id": "soarm.gripper", "description": "Gripper target", "effect": "motion", "resources": ["gripper"], "parameters_schema": {"type": "object", "properties": {"position": {"type": "number"}}}}
+      ]
+    }
+  ],
+  "assets": [
+    {"id": "stackchan/example-pose", "kind": "pose", "source": "fixture", "revision": "fixture-v1", "resources": ["head.pose"]},
+    {"id": "reachy/example-recording", "kind": "recording", "source": "fixture", "revision": "fixture-v1", "resources": ["head.pose", "antennas.left", "antennas.right"]},
+    {"id": "soarm/example-sequence", "kind": "sequence", "source": "fixture", "revision": "fixture-v1", "resources": ["arm.motion", "gripper"]}
+  ]
+}

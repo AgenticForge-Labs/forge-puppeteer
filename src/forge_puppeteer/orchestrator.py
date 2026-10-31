@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 from pathlib import Path
+
 from .contracts import PhysicalShotRequest, PhysicalTake
-from .stage import Stage
 from .performers import Performer
+from .stage import Stage
+
 
 class Puppeteer:
     """Coordinates semantic performer behavior with a separately owned physical Stage."""

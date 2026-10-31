@@ -1,0 +1,17 @@
+{
+  "contract_version": "forge_puppeteer_request_v1",
+  "production_id": "offline-studios-example",
+  "episode_id": "episode-01",
+  "shot_id": "shot-reachy-hello",
+  "duration_seconds": 1.0,
+  "visual": "A Reachy Mini performs the operator-selected hello recording.",
+  "performance_intent": {"behavior_pack_id": "offline-hello", "source": "operator-resolved"},
+  "metadata": {
+    "executor": "forge-puppeteer-mcp",
+    "performer_instance": "reachy-offline-example",
+    "behavior_pack": "examples/robots/reachy/behavior-packs.mock.json",
+    "behavior_pack_revision": "sha256:b00e4ba19de87212313a5b75845471694d0fdb2a460b90ec55c9021fc3399b0d",
+    "catalog_asset_id": "reachy:hello",
+    "catalog_asset_revision": "sha256:forge-puppeteer-fake-v1"
+  }
+}

@@ -1,6 +1,9 @@
 from __future__ import annotations
+
 from typing import Protocol
+
 from .contracts import PhysicalShotRequest
+
 
 class Performer(Protocol):
     name: str

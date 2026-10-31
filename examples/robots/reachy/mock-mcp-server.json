@@ -1,0 +1,16 @@
+{
+  "backend": "fake",
+  "device": "reachy",
+  "instance_id": "reachy-offline-example",
+  "name": "Reachy offline example (fake)",
+  "allowed_tools": [
+    "device_info",
+    "device_state",
+    "list_assets",
+    "action_lookup",
+    "control_acquire",
+    "control_release",
+    "play_move"
+  ],
+  "assets": ["hello"]
+}

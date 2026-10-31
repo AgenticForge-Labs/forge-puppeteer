@@ -1,0 +1,8 @@
+{
+  "contract_version": "forge_puppeteer_request_v1",
+  "production_id": "package-smoke",
+  "episode_id": "offline",
+  "shot_id": "mock-only",
+  "duration_seconds": 1.0,
+  "visual": "Offline wheel installation smoke"
+}

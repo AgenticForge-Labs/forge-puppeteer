@@ -1,6 +1,9 @@
 from __future__ import annotations
-from pydantic import BaseModel,ConfigDict,Field,field_validator
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
 from .actions import PerformanceAction
+
 
 class Cue(BaseModel):
     model_config=ConfigDict(extra='forbid',frozen=True)

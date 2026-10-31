@@ -1,6 +1,7 @@
 from forge_puppeteer import PhysicalShotRequest, Puppeteer
-from forge_puppeteer.stage import MockStage
 from forge_puppeteer.performers import MockPerformer
+from forge_puppeteer.stage import MockStage
+
 
 def test_mock_execution(tmp_path):
     r=PhysicalShotRequest(production_id='p',episode_id='e',shot_id='s',duration_seconds=1,visual='wave')

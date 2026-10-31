@@ -1,15 +1,27 @@
 from __future__ import annotations
+
+import inspect
 import time
 from collections.abc import AsyncIterator
-from contextlib import AsyncExitStack,asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from typing import Protocol
+
 import anyio
-from .actions import Capability,SpeakAction,StopAction,WaitAction,required_capability
+import anyio.lowlevel
+
+from .actions import (
+    Capability,
+    SpeakAction,
+    StopAction,
+    WaitAction,
+    required_capability,
+)
 from .embodiments import Embodiment
-from .events import EventEmitter,EventType,PerformanceEvent
-from .performance import Cue,Performance
+from .events import EventEmitter, EventType, PerformanceEvent
+from .performance import Cue, Performance
 from .resources import ActionResource
+
 
 class Clock(Protocol):
     def now(self)->float: ...
@@ -26,10 +38,10 @@ class FakeClock:
     def now(self): return self._time
     async def sleep(self,seconds):
         if seconds<0: raise ValueError('seconds must be non-negative')
-        self.requested_sleeps.append(seconds); await anyio.sleep(0)
+        self.requested_sleeps.append(seconds); await anyio.lowlevel.checkpoint()
     async def sleep_until(self,target):
-        if target>=self._time: self._time=target
-        await anyio.sleep(0)
+        self._time = max(target, self._time)
+        await anyio.lowlevel.checkpoint()
 
 class VoiceProvider(Protocol):
     async def speak(self,text:str,**kwargs)->None: ...
@@ -70,8 +82,13 @@ class PerformanceStage:
                 async with self._claim_resources(character,cue):
                     if isinstance(cue.action,SpeakAction):
                         if character.voice is None: raise ValueError(f'{character.name} has no voice provider')
+                        speech_started=self.clock.now()
                         await self.emitter.emit(PerformanceEvent(type=EventType.SPEECH_STARTED,timestamp=self.clock.now(),performance=performance_name,character=character.id,action='speak',detail=cue.action.text))
-                        await character.voice.speak(cue.action.text,audio_uri=cue.action.audio_uri,model_alias=cue.action.model_alias,voice=cue.action.voice,response_format=cue.action.response_format,speed=cue.action.speed)
+                        await self._speak(character.voice, cue.action)
+                        # Provider playback may return before a sample's authored duration;
+                        # hold the voice resource until its timing window has elapsed.
+                        if cue.action.sample_duration is not None:
+                            await self.clock.sleep_until(speech_started+cue.action.sample_duration)
                         await self.emitter.emit(PerformanceEvent(type=EventType.SPEECH_FINISHED,timestamp=self.clock.now(),performance=performance_name,character=character.id,action='speak',detail=cue.action.text))
                     else: await character.embodiment.execute(cue.action)
         except anyio.get_cancelled_exc_class(): raise
@@ -85,6 +102,28 @@ class PerformanceStage:
             for resource in sorted(resources,key=lambda x:x.value):
                 lock=self._resource_locks.setdefault((character.id,resource),anyio.Lock()); await stack.enter_async_context(lock)
             yield
+
+    @staticmethod
+    async def _speak(provider: VoiceProvider, action: SpeakAction) -> None:
+        """Pass supported options, retaining compatibility with text-only providers."""
+        options = {
+            "audio_uri": action.audio_uri,
+            "model_alias": action.model_alias,
+            "voice": action.voice,
+            "voice_alias": action.voice_alias,
+            "output_device": action.output_device,
+            "response_format": action.response_format,
+            "speed": action.speed,
+        }
+        try:
+            parameters = inspect.signature(provider.speak).parameters.values()
+        except (TypeError, ValueError):
+            parameters = ()
+        accepts_kwargs = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters)
+        accepted = {p.name for p in parameters}
+        if not accepts_kwargs:
+            options = {name: value for name, value in options.items() if name in accepted}
+        await provider.speak(action.text, **options)
     async def stop_character(self,character_id):
         c=self.get(character_id)
         async with anyio.create_task_group() as tg:

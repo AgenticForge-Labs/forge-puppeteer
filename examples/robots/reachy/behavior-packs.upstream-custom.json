@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "performer": "reachy",
+  "packs": [
+    {
+      "id": "upstream-curious",
+      "description": "Use an upstream Reachy community move from the locked emotions dataset.",
+      "cues": [
+        {
+          "at": 0.0,
+          "operation": "play_move",
+          "asset_id": "reachy/curious1",
+          "asset_revision": "sha256:replace-with-upstream-staged-catalog-revision",
+          "parameters": {"sound": false}
+        }
+      ]
+    },
+    {
+      "id": "custom-wave",
+      "description": "Use a separately operator-staged custom Reachy recording.",
+      "cues": [
+        {
+          "at": 0.0,
+          "operation": "play_move",
+          "asset_id": "reachy/custom-wave",
+          "asset_revision": "sha256:replace-with-custom-staged-catalog-revision",
+          "parameters": {"sound": false}
+        }
+      ]
+    }
+  ]
+}

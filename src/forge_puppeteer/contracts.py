@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 from typing import Any, Literal
 from uuid import uuid4
+
 from pydantic import BaseModel, ConfigDict, Field
+
 
 class PhysicalShotRequest(BaseModel):
     model_config = ConfigDict(extra='allow')

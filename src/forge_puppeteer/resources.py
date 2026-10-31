@@ -1,5 +1,15 @@
 from enum import StrEnum
-from .actions import ExpressionAction,GestureAction,GripAction,LookAtAction,MoveAction,PerformanceAction,SpeakAction
+
+from .actions import (
+    ExpressionAction,
+    GestureAction,
+    GripAction,
+    LookAtAction,
+    MoveAction,
+    PerformanceAction,
+    SpeakAction,
+)
+
 
 class ActionResource(StrEnum):
     MOTION='motion'; GAZE='gaze'; EXPRESSION='expression'; VOICE='voice'; GRIPPER='gripper'

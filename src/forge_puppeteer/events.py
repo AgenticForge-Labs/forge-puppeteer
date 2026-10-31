@@ -1,12 +1,15 @@
 from __future__ import annotations
+
 import inspect
-from collections.abc import AsyncIterator,Awaitable,Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import StrEnum
+
 import anyio
 from anyio.streams.memory import MemoryObjectSendStream
-from pydantic import BaseModel,ConfigDict
+from pydantic import BaseModel, ConfigDict
+
 
 class EventType(StrEnum):
     PERFORMANCE_STARTED='performance_started'; PERFORMANCE_COMPLETED='performance_completed'; PERFORMANCE_FAILED='performance_failed'; PERFORMANCE_CANCELLED='performance_cancelled'; PERFORMANCE_FINALIZED='performance_finalized'; ACTION_STARTED='action_started'; ACTION_COMPLETED='action_completed'; ACTION_FAILED='action_failed'; SPEECH_STARTED='speech_started'; SPEECH_FINISHED='speech_finished'; SAFETY_STOP='safety_stop'
@@ -35,14 +38,15 @@ class EventEmitter:
         try: self._send_stream.send_nowait(event)
         except anyio.WouldBlock: self._dropped_events+=1
     @asynccontextmanager
-    async def run(self)->AsyncIterator['EventEmitter']:
+    async def run(self)->AsyncIterator[EventEmitter]:
         if self._running: raise RuntimeError('EventEmitter is already running')
         send,recv=anyio.create_memory_object_stream[PerformanceEvent](self._max_buffer_size); self._send_stream=send; self._running=True; body_error=None
         try:
             async with anyio.create_task_group() as tg:
                 tg.start_soon(self._consume,recv)
                 try: yield self
-                except BaseException as exc: body_error=exc
+                except BaseException as exc:  # noqa: BLE001 -- preserve cancellation and all body failures across task-group shutdown.
+                    body_error=exc
                 finally:
                     with anyio.CancelScope(shield=True): await send.aclose()
         finally: self._send_stream=None; self._running=False
@@ -54,7 +58,8 @@ class EventEmitter:
     async def _dispatch(self,event):
         for listener in tuple(self._telemetry_listeners):
             try: await self._invoke(listener,event)
-            except Exception as exc: self._listener_errors.append(ListenerError(event,repr(listener),exc))
+            except Exception as exc:  # noqa: BLE001 -- telemetry is best-effort and must not break event delivery.
+                self._listener_errors.append(ListenerError(event,repr(listener),exc))
     @staticmethod
     async def _invoke(listener,event):
         result=listener(event)

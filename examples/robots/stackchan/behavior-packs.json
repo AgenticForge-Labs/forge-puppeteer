@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "performer": "stackchan",
+  "packs": [
+    {
+      "id": "greeting",
+      "description": "A short greeting using only native head, face, and light controls.",
+      "cues": [
+        {"at": 0.0, "operation": "head_move", "parameters": {"yaw": {"angle": 120, "speed": 250}}},
+        {"at": 0.15, "operation": "face_update", "parameters": {"left_eye": {"weight": 70}, "right_eye": {"weight": 70}, "mouth": {"weight": 35}}},
+        {"at": 0.2, "operation": "lights_update", "parameters": {"left_color": "#44aaff", "right_color": "#44aaff", "left_duration": 0.5, "right_duration": 0.5}}
+      ]
+    },
+    {
+      "id": "settle",
+      "description": "Return to a neutral face and centered head with lights off.",
+      "cues": [
+        {"at": 0.0, "operation": "head_move", "parameters": {"yaw": {"angle": 0, "speed": 180}, "pitch": {"angle": 0, "speed": 180}}},
+        {"at": 0.1, "operation": "face_update", "parameters": {"left_eye": {"weight": 0}, "right_eye": {"weight": 0}, "mouth": {"weight": 0}}},
+        {"at": 0.1, "operation": "lights_update", "parameters": {"left_color": "#000000", "right_color": "#000000", "left_duration": 0.2, "right_duration": 0.2}}
+      ]
+    }
+  ]
+}

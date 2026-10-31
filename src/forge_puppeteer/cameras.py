@@ -1,10 +1,12 @@
 from __future__ import annotations
+
 import json
-from collections.abc import Iterable,Iterator
-from dataclasses import dataclass,field
+from collections.abc import Iterable, Iterator
+from dataclasses import dataclass, field
 from math import isfinite
 from pathlib import Path
-from typing import Protocol,runtime_checkable
+from typing import Protocol, runtime_checkable
+
 
 @dataclass(frozen=True,slots=True)
 class CameraCapabilities:
@@ -40,14 +42,15 @@ class CameraCollection:
             for cid in dict.fromkeys(camera_ids): self.get(cid).open(); opened.append(cid)
         except Exception as error:
             try: self.close(reversed(opened))
-            except Exception as cleanup: error.add_note(f'Camera cleanup failed: {cleanup!r}')
+            except Exception as cleanup:  # noqa: BLE001 -- every close failure must be attached without masking the open failure.
+                error.add_note(f'Camera cleanup failed: {cleanup!r}')
             raise
         return tuple(opened)
     def close(self,camera_ids:Iterable[str]):
         first=None
         for cid in camera_ids:
             try: self.get(cid).close()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 -- attempt every close and re-raise the first driver failure.
                 if first is None: first=exc
         if first: raise first
     def open_all(self): return self.open(self._cameras)
