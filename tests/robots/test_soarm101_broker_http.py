@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import sys
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import ModuleType
 
 import pytest
@@ -142,3 +145,86 @@ def test_direct_broker_forbids_credential_in_operator_config():
     config.broker_command = "soarm101-mcp"
     with pytest.raises(ValueError, match="exactly one"):
         BrokerProvider(config)
+
+
+@pytest.mark.anyio
+async def test_real_loopback_http_profile_and_command_never_use_sdk_mcp(
+    sdk_policy, monkeypatch,
+):
+    """Real HTTP transport fixture; never connects a robot or SDK MCP server."""
+    requests: list[tuple[str, str, str]] = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(("GET", self.path, self.headers.get("Authorization", "")))
+            if self.path == "/v1/profile":
+                body = {"ok": True, "result": {"tools": ["robot_capabilities", "go_pose", "stop"]}}
+            else:
+                body = {"ok": True, "result": {"authority": {"armed": False}}}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(body).encode("utf-8"))
+
+        def do_POST(self):
+            requests.append(("POST", self.path, self.headers.get("Authorization", "")))
+            assert self.path == "/v1/go-pose"
+            size = int(self.headers.get("Content-Length", "0"))
+            assert json.loads(self.rfile.read(size)) == {"name": "ready"}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok": true, "result": {"completed": true}}')
+
+        def log_message(self, *_args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+        monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+        client = SOARM101BrokerHTTP(f"http://127.0.0.1:{server.server_port}", "fixture-token")
+        response = await client.call_tool("go_pose", {"name": "ready"})
+        assert response.structured_content["result"] == {"completed": True}
+        assert [(m, p) for m, p, _ in requests] == [
+            ("GET", "/v1/profile"), ("POST", "/v1/go-pose"),
+        ]
+        assert all(authorization == "Bearer fixture-token" for _, _, authorization in requests)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.anyio
+async def test_redirect_never_forwards_broker_credential(sdk_policy):
+    """One local redirect must be treated as an error, not an MCP result."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    received: list[str] = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            received.append(self.path)
+            if self.path == "/v1/profile":
+                self.send_response(307)
+                self.send_header("Location", "http://127.0.0.1:1/untrusted")
+                self.end_headers()
+            else:
+                raise AssertionError("redirect must not be followed")
+
+        def log_message(self, *_args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = SOARM101BrokerHTTP(f"http://127.0.0.1:{server.server_port}", "fixture-token")
+        with pytest.raises(BrokerHTTPError, match="broker_connection_unavailable"):
+            await client.list_tools()
+        assert received == ["/v1/profile"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
