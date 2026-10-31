@@ -16,8 +16,6 @@ import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from types import SimpleNamespace
-from typing import Any
 from urllib.parse import urlsplit
 
 import anyio
@@ -125,7 +123,8 @@ class SOARM101BrokerHTTP:
     async def list_tools(self) -> BrokerToolList:
         # Recheck the *live broker profile*, not an operator's stale cache.
         result = (await self._request("GET", "/v1/profile"))["result"]
-        assert isinstance(result, dict)
+        if not isinstance(result, dict):
+            raise BrokerHTTPError("invalid_broker_capability_profile")
         names = result.get("tools")
         if (
             not isinstance(names, list)
