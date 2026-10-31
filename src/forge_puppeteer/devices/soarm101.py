@@ -280,10 +280,12 @@ class SOARM101Provider:
         body = response.get("result", response)
         if not isinstance(body, Mapping):
             return StopResult(False, "invalid_broker_stop_response")
+        # A status label or accepted command is not measured HOLD evidence.
+        # The SDK's explicit confirmation or completed-and-holding contract
+        # is necessary before ExecutionRuntime may release unknown-motion quarantine.
         confirmed = (
             body.get("confirmed") is True
-            or body.get("status") == "stopped"
-            or body.get("completed") is True and body.get("holding") is True
+            or (body.get("completed") is True and body.get("holding") is True)
         )
         evidence = body.get("evidence") or body.get("completion_evidence") or body.get("status")
         if evidence is None and confirmed:
