@@ -147,7 +147,7 @@ class SOARM101Provider:
             raise TypeError("invalid_broker_capabilities")
         tools = tuple(sorted(self.allowed_tools & await self._visible()))
         controls = tuple(ControlDescriptor(id=name, description=f"SO-ARM broker {name}",
-            effect="stop" if name == "stop" else "read" if name in {"robot_health", "robot_state", "robot_capabilities", "list_assets"} else "motion",
+            effect="stop" if name == "stop" else "read" if name in {"robot_health", "robot_state", "robot_capabilities", "list_assets", "capture_camera"} else "motion",
             parameters_schema={"type": "object"}, resources=("arm.motion",) if name in {
                 "go_pose", "jog_joint", "jog_cartesian", "move_gripper", "sleep", "sleep_up",
                 "replay_recording",
