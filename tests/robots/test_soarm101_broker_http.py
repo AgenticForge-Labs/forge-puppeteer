@@ -14,7 +14,7 @@ from forge_puppeteer.devices.soarm101_broker_http import (
     BrokerHTTPError,
     SOARM101BrokerHTTP,
 )
-from forge_puppeteer.mcp.launcher import BrokerProvider, ServerConfig
+from forge_puppeteer.mcp.launcher import BrokerProvider, ServerConfig, _soarm_startup_grants
 
 
 @pytest.fixture
@@ -228,3 +228,16 @@ async def test_redirect_never_forwards_broker_credential(sdk_policy):
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_tool_discovery_intersects_operator_and_live_broker_profile(fake_http, monkeypatch):
+    monkeypatch.setenv("SOARM101_BROKER_TOKEN", "fixture")
+    config = ServerConfig(
+        backend="soarm101_broker", device="soarm101", instance_id="arm",
+        simulation_only=True, broker_url="http://127.0.0.1:8765",
+        allowed_tools=["robot_capabilities", "robot_state", "go_pose", "capture_camera"],
+    )
+    assert _soarm_startup_grants(config) == frozenset({
+        "robot_capabilities", "robot_state", "go_pose",
+    })
+    assert fake_http[-1][1] == "/v1/profile"
