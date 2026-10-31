@@ -14,3 +14,6 @@ outputs/
 
 # Local uv resolver state for this library package; not a source artifact.
 uv.lock
+
+# Generated distribution artifacts.
+build/

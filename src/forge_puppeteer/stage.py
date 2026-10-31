@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 from pathlib import Path
 from typing import Protocol
+
 from .contracts import PhysicalShotRequest
+
 
 class Stage(Protocol):
     name: str

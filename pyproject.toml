@@ -11,10 +11,13 @@ requires-python = ">=3.11"
 dependencies = ["pydantic>=2.7", "anyio>=4.4", "PyYAML>=6.0"]
 
 [project.optional-dependencies]
+mcp = ["mcp>=2,<3", "jsonschema>=4.22"]
+reachy = ["reachy-mini==1.10.0rc5"]
 dev = ["pytest>=8", "pytest-anyio>=0.0.0", "ruff>=0.6"]
 
 [project.scripts]
 forge-puppeteer = "forge_puppeteer.cli:main"
+forge-puppeteer-mcp = "forge_puppeteer.mcp.launcher:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "performer": "soarm101",
+  "packs": [
+    {
+      "id": "sleep",
+      "description": "Request the broker's predefined Sleep pose.",
+      "cues": [
+        {"at": 0.0, "operation": "sleep"}
+      ]
+    },
+    {
+      "id": "inspection-recording",
+      "description": "Replay one operator-approved recording at a bounded speed.",
+      "cues": [
+        {
+          "at": 0.0,
+          "operation": "replay_recording",
+          "asset_id": "soarm101/recording/replace-with-approved-id",
+          "asset_revision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "parameters": {"speed_scale": 0.5}
+        }
+      ]
+    }
+  ]
+}

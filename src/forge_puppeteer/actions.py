@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 from enum import StrEnum
-from typing import Annotated,Any,Literal,TypeAlias
-from pydantic import BaseModel,ConfigDict,Field
+from typing import Annotated, Any, Literal, TypeAlias
+
+from pydantic import BaseModel, ConfigDict, Field
+
 
 class Capability(StrEnum):
     GESTURE='gesture'; EXPRESSION='expression'; LOOK_AT='look_at'; SPEECH='speech'; MOVE='move'; GRIP='grip'
@@ -18,7 +21,7 @@ class MoveAction(ActionBase):
 class GripAction(ActionBase):
     type:Literal['grip']='grip'; state:Literal['open','close','hold']; parameters:dict[str,Any]=Field(default_factory=dict)
 class SpeakAction(ActionBase):
-    type:Literal['speak']='speak'; text:str=Field(min_length=1); audio_uri:str|None=None; model_alias:str|None=None; voice:str|None=None; response_format:Literal['mp3','opus','aac','flac','wav','pcm']|None=None; speed:float|None=Field(default=None,gt=0,le=4)
+    type:Literal['speak']='speak'; text:str=Field(min_length=1); audio_uri:str|None=None; model_alias:str|None=None; voice:str|None=None; voice_alias:str|None=Field(default=None,min_length=1,max_length=128); sample_duration:float|None=Field(default=None,ge=0,le=300,allow_inf_nan=False); output_device:str|None=Field(default=None,min_length=1,max_length=128); response_format:Literal['mp3','opus','aac','flac','wav','pcm']|None=None; speed:float|None=Field(default=None,gt=0,le=4,allow_inf_nan=False)
 class WaitAction(ActionBase): type:Literal['wait']='wait'; seconds:float=Field(ge=0)
 class StopAction(ActionBase): type:Literal['stop']='stop'
 

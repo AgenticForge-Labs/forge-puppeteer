@@ -1,0 +1,8 @@
+{
+  "name": "mock_robot_performance",
+  "cues": [
+    {"at": 0.0, "character": "stackchan", "action": {"type": "expression", "name": "neutral"}},
+    {"at": 0.5, "character": "reachy", "action": {"type": "gesture", "name": "look"}},
+    {"at": 1.0, "character": "arm", "action": {"type": "wait", "seconds": 0.1}}
+  ]
+}

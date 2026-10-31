@@ -1,11 +1,15 @@
 from __future__ import annotations
-from collections.abc import Mapping,Sequence
-from dataclasses import dataclass,field
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from functools import partial
-from typing import Any,Protocol
+from typing import Any, Protocol
+
 import anyio
-from .actions import Capability,GestureAction,PerformanceAction,StopAction
-from .resources import ActionResource,default_action_resources
+
+from .actions import Capability, GestureAction, PerformanceAction, StopAction
+from .resources import ActionResource, default_action_resources
+
 
 class Embodiment(Protocol):
     @property
@@ -36,7 +40,7 @@ class SOARM101Embodiment:
     def resources_for(self,action): return frozenset({ActionResource.MOTION}) if isinstance(action,GestureAction) else default_action_resources(action)
     async def execute(self,action):
         if isinstance(action,StopAction): await self.stop(); return
-        if not isinstance(action,GestureAction): raise ValueError(f'SO-ARM101 does not support {action.type!r}')
+        if not isinstance(action,GestureAction): raise TypeError(f'SO-ARM101 does not support {action.type!r}')
         try: waypoints=self._gestures[action.name]
         except KeyError as exc: raise ValueError(f'unknown SO-ARM101 gesture: {action.name}') from exc
         try:

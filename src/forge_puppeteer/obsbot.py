@@ -7,7 +7,12 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .cameras import AxisRange, CameraMotionCapabilities, CameraMotionLimits, CameraMotionPosition
+from .cameras import (
+    AxisRange,
+    CameraMotionCapabilities,
+    CameraMotionLimits,
+    CameraMotionPosition,
+)
 
 
 class ObsbotSdkPTZController:
@@ -109,7 +114,7 @@ class ObsbotSdkPTZController:
             return
         try:
             self._request("QUIT", process=process)
-        except Exception:
+        except Exception:  # noqa: BLE001 -- any helper protocol failure requires terminating the child process.
             process.terminate()
         finally:
             try:

@@ -1,6 +1,9 @@
 from __future__ import annotations
+
 from pathlib import Path
+
 from .contracts import PhysicalShotRequest, PhysicalTake
+
 
 def load_request(path: str|Path) -> PhysicalShotRequest:
     return PhysicalShotRequest.model_validate_json(Path(path).read_text())
