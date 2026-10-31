@@ -1,4 +1,4 @@
-"""Installed-wheel Forge -> SO-ARM MCP -> authenticated SDK simulation smoke."""
+"""Installed-wheel Forge Puppeteer MCP -> SDK authenticated simulation broker smoke."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ async def _terminal(session: ClientSession, action_id: str) -> dict:
 async def _recording_replay_in_fresh_session(directory: Path, asset_id: str,
                                              revision: str, token: str,
                                              broker_env: dict[str, str]) -> None:
-    """Exercise recording replay through a new SDK simulation broker process."""
+    """Exercise recording replay via Puppeteer MCP and a new SDK simulation broker."""
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
@@ -97,17 +97,16 @@ async def _recording_replay_in_fresh_session(directory: Path, asset_id: str,
             config.write_text(json.dumps({
                 "backend": "soarm101_broker", "device": "soarm101",
                 "instance_id": "fresh-recording-sim", "simulation_only": True,
-                "broker_command": sys.executable,
-                "broker_args": ["-I", "-m", "soarm101_motion.mcp_server"],
-                "broker_env": {**broker_env,
-                               "SOARM101_BROKER_URL": f"http://127.0.0.1:{port}"},
+                "broker_url": f"http://127.0.0.1:{port}",
+                "broker_token_env": "SOARM101_BROKER_TOKEN",
                 "allowed_tools": ["robot_health", "robot_capabilities", "robot_state",
                                   "list_assets", "replay_recording", "stop"],
             }))
             parameters = StdioServerParameters(
                 command=str(Path(sys.executable).with_name("forge-puppeteer-mcp")),
                 args=["--config", str(config)],
-                env={**os.environ, "PYTHONNOUSERSITE": "1"},
+                env={**os.environ, "PYTHONNOUSERSITE": "1",
+                     "SOARM101_BROKER_TOKEN": token},
             )
             async with (stdio_client(parameters) as (reader, writer),
                         ClientSession(reader, writer) as session):
@@ -140,7 +139,7 @@ async def _recording_replay_in_fresh_session(directory: Path, asset_id: str,
 
                 client_config = ClientServerConfig(
                     command=str(Path(sys.executable).with_name("forge-puppeteer-mcp")),
-                    args=("--config", str(config)), env={"PYTHONNOUSERSITE": "1"},
+                    args=("--config", str(config)), env={"PYTHONNOUSERSITE": "1", "SOARM101_BROKER_TOKEN": token},
                     simulation_only=True,
                 )
                 pack_revision = write_pack("sha256:" + "0" * 64)
@@ -270,10 +269,8 @@ async def main() -> None:
                 config.write_text(json.dumps({
                     "backend": "soarm101_broker", "device": "soarm101",
                     "instance_id": "installed-wheel-sim", "simulation_only": True,
-                    "broker_command": sys.executable,
-                    "broker_args": ["-I", "-m", "soarm101_motion.mcp_server"],
-                    "broker_env": {**broker_env,
-                                   "SOARM101_BROKER_URL": f"http://127.0.0.1:{port}"},
+                    "broker_url": f"http://127.0.0.1:{port}",
+                    "broker_token_env": "SOARM101_BROKER_TOKEN",
                     "allowed_tools": ["robot_health", "robot_capabilities", "robot_state",
                                       "jog_joint", "list_assets", "replay_recording",
                                       "replay_sequence", "stop"],
@@ -281,7 +278,8 @@ async def main() -> None:
                 parameters = StdioServerParameters(
                     command=str(Path(sys.executable).with_name("forge-puppeteer-mcp")),
                     args=["--config", str(config)],
-                    env={**os.environ, "PYTHONNOUSERSITE": "1"},
+                    env={**os.environ, "PYTHONNOUSERSITE": "1",
+                     "SOARM101_BROKER_TOKEN": token},
                 )
                 async with (stdio_client(parameters) as (reader, writer),
                             ClientSession(reader, writer) as session):
@@ -300,11 +298,11 @@ async def main() -> None:
                     _heartbeat(f"http://127.0.0.1:{port}/v1/supervisor/heartbeat", token)
 
                     # Exercise the public MCPClient -> installed Forge launcher
-                    # -> installed SDK MCP server -> authenticated SDK broker.
+                    # -> authenticated SDK broker directly (no nested SDK MCP).
                     client_config = ClientServerConfig(
                         command=str(Path(sys.executable).with_name("forge-puppeteer-mcp")),
                         args=("--config", str(config)),
-                        env={"PYTHONNOUSERSITE": "1"},
+                        env={"PYTHONNOUSERSITE": "1", "SOARM101_BROKER_TOKEN": token},
                         simulation_only=True,
                     )
                     pack_path = directory / "sequence-pack.json"
