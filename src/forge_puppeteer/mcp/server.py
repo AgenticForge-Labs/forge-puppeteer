@@ -76,6 +76,7 @@ def create_server(
     *,
     name: str = "Forge Puppeteer",
     enabled_tools: frozenset[str] | None = None,
+    instructions: str | None = None,
 ) -> MCPServer:
     """Build a server. Register the provider with runtime before calling this.
 
@@ -106,7 +107,7 @@ def create_server(
             # cancellation handlers persist unknown outcomes before SQLite closes.
             runtime.close()
 
-    server = MCPServer(name, lifespan=lifespan)
+    server = MCPServer(name, lifespan=lifespan, instructions=instructions)
 
     async def checked(tool: str, call: Callable[[], Awaitable[object]]) -> object:
         await gateway.check(tool)
