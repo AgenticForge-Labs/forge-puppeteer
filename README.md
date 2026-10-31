@@ -65,6 +65,27 @@ Then we'll map these behaviors to each of our three robots and demonstrate **one
 
 See the [Conversational Embodiment Roadmap](docs/CONVERSATIONAL_EMBODIMENT_ROADMAP.md) for the minimal plan, explicit boundaries, and next working session.
 
+## Robot SDK → MCP consolidation (in progress)
+
+The [ordered robot integration plan](docs/ROBOT_SDK_MCP_CONSOLIDATION.md)
+keeps SDKs independently usable while moving all robot-facing MCP
+interfaces into **Forge Puppeteer**. SO-ARM101 migration comes first:
+Puppeteer now has a development direct-authenticated-broker transport
+(`broker_url` + trusted token env), avoiding a nested SDK MCP
+subprocess for that configuration. Its camera, native controls and
+MCP guidance parity are being assembled in the same PR. The original
+`soarm101-mcp`/OpenShell client remains for migration compatibility
+until clean installed-wheel and SDK-simulation validation passes.
+Nothing here enables physical robot operation or removes SDK safety.
+
+**StackChan implementation is deliberately sequenced after SO-ARM101
+adapter completion.** The StackChan SDK already contains validated
+native capability schemas, serial command routing, display/head/NeoHEX
+controls and stopped-host playback; next work is agreement on
+permission/capability mapping, host-loss handling, stop/outcome
+evidence and a reusable, native-SDK-backed Puppeteer MCP.
+No StackChan code is changed by the plan.
+
 ## Try it without hardware
 
 Requires Python 3.11 or newer. From a local checkout:

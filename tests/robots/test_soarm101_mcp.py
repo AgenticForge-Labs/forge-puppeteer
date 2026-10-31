@@ -32,6 +32,13 @@ async def test_soarm101_stdio_discovery_actions_denial_and_stop():
         names = {tool.name for tool in (await session.list_tools()).tools}
         assert {"device_info", "device_state", "list_assets", "go_pose",
                 "jog_cartesian", "sleep", "device_stop"} <= names
+        # MCP resource/prompt parity has moved from the SDK into Puppeteer.
+        resource_uris = {str(item.uri) for item in (await session.list_resources()).resources}
+        assert "soarm101://guidance/core" in resource_uris
+        assert "soarm101://guidance/vision" in resource_uris
+        assert "operate_robot_task" in {
+            item.name for item in (await session.list_prompts()).prompts
+        }
         info = (await session.call_tool("device_info", {})).structured_content
         assert info["provider"] == "soarm101" and info["ready"] is True
         submitted = await session.call_tool("go_pose", {
