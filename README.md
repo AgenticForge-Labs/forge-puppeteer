@@ -1,140 +1,129 @@
 # Forge Puppeteer
 
-Robot-performance and physical-stage execution for AgenticForge productions.
+### Give any AI agent a physical presence.
 
-Forge Puppeteer is intentionally useful on its own. It consumes a semantic shot request, coordinates performers, and works with a **Stage** abstraction for cameras/capture and the physical production environment. It does not need Forge Worlds or Forge Studios to run.
+**One language for expression. Many robots. Live conversations and scripted performances.**
 
-The conceptual split remains explicit:
+Forge Puppeteer helps AI agents **listen, acknowledge, speak, gesture, and perform** through physical devices. It is a model-agnostic robot-performance layer with a standard [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) interface, explicit hardware adapters, and a deterministic execution runtime.
 
-- **Puppeteer** handles performer semantics, timing, coordination, and performance state.
-- **Stage** handles capture/environment concerns such as cameras, sets, lighting interfaces, and calibration state.
+An agent might acknowledge a person giving a new task, a character might gesture during a conversation, or Forge Studios might choreograph a scene across several performers. **Different directors. The same expressive vocabulary and execution foundation.**
 
-## Install and smoke test
+Puppeteer does not replace the conversation app, agent brain, or robotic manipulation controller. It gives those systems a common way to request and coordinate *physical expression*.
 
-```bash
-python -m pip install -e '.[dev]'
-forge-puppeteer validate --request request.json
-forge-puppeteer execute --request request.json --stage mock --out take.json
-```
+## What could this feel like?
 
-## Explicit configured provider actions
+- **An approachable working robot:** You describe a new lab task. The robot turns toward you if its motion controller permits it, indicates that it is listening, and acknowledges the instruction without pretending the task is already done.
+- **An expressive conversational character:** An existing voice agent drives gaze, gestures, face displays, lights, or sound behaviors using the robot's supported capabilities.
+- **One scene, three performers:** Reachy Mini, StackChan, and SO-ARM101 follow the same authored *semantic* performance, each rendering only the motions its hardware and authority permit.
+- **A physical Studio production:** Preauthored dialogue and timed cues become validated, traceable actions rather than unstructured device commands.
 
-The legacy `validate` and `execute` commands retain their shot/Stage mock
-behavior. To submit one typed device action through the same configured
-provider adapter and `ExecutionRuntime` used by MCP, opt in with
-`forge-puppeteer provider-action --provider-config operator.json --action
-action.json`. The action JSON is an `ActionRequest` with operator-matching
-performer ID, caller/session IDs, an allowlisted operation, and typed parameters.
-The Python equivalent is `execute_configured_action(config_path, request)` in
-`forge_puppeteer.operator`. The configured backend lifecycle, runtime
-validation, ownership, and stop/quarantine rules remain in force. This path
-does not translate legacy shot requests into device actions.
+The first two examples describe the product direction; a universal conversational state interface and coordinated three-performer demo are **next steps**, not shipped features. The underlying typed MCP and scripted execution foundations already exist.
 
-The `mcp` extra installs the MCP v2 server dependency and
-`forge-puppeteer-mcp` stdio entrypoint (`pip install '.[mcp]'`). The launcher
-requires trusted operator JSON selecting a mock backend and one device's fixed
-tool allowlist; see [`docs/ROBOT_DEPLOYMENT.md`](docs/ROBOT_DEPLOYMENT.md).
-The default install and `.[dev]` do not install robot SDKs or open hardware.
-There are intentionally no StackChan or Reachy extras: the StackChan SDK wheel
-is installed separately by the operator, and Reachy deployment must pin its SDK
-together with a staged motion snapshot. Avoid installing an SDK from a mutable
-checkout as a deployment dependency. See
-[`docs/ROBOT_DEPLOYMENT.md`](docs/ROBOT_DEPLOYMENT.md) for current boundaries,
-asset staging and offline package smoke instructions.
-
-To build fresh Puppeteer and StackChan SDK wheels, stage runtime dependencies,
-and install them offline in a temporary clean environment, run:
-
-```bash
-bash scripts/offline-package-smoke.sh
-```
-
-The staging phase downloads dependencies unless an offline wheelhouse is passed
-as the script's first argument. Installation from the staged wheelhouse is
-always offline. It validates and executes the mock request, exercises all three
-mock-backed device profiles over MCP stdio, and tests the installed StackChan
-SDK launcher through a fake serial PTY plus MCP stdio. The PTY protocol emulator
-is software evidence only: it does not validate firmware, USB enumeration,
-physical movement, or settling. No real hardware is opened.
-
-A request uses the stable `forge_puppeteer_request_v1` contract. Forge Studios can dispatch this contract for shots whose `execution_route` is `puppeteer` or `hybrid`.
-
-The built-in command-line execution path intentionally uses mock implementations. Device-specific integrations remain explicit adapters rather than being activated implicitly.
-
-## Manual and agentic use
-
-Manual testing and agentic orchestration use the same semantic action/performance primitives. The expected development progression is:
+## How it fits together
 
 ```text
-manual semantic action/cue
--> reusable tested adapter primitive
--> timed performance
--> Stage/Puppeteer orchestration
--> optional Director/agent dispatch under explicit policy
+     Conversation / working agent       Forge Studios / scripted director
+             (live events)                    (authored cues)
+                     \                          /
+                      \                        /
+                      Semantic performance intent
+                                  |
+                       Forge Puppeteer
+                 MCP tools · behavior packs · timing
+                ownership · action records · recovery
+                                  |
+                   Explicit robot/provider adapters
+                                  |
+                 Reachy Mini · StackChan · SO-ARM101
 ```
 
-Do not create a second autonomous implementation beside the manual one. See `AGENTS.md` for the repository's manual, assisted, agentic, and physical-safety operating rules.
+**The agent decides what to communicate. Puppeteer translates that into approved behaviors. Device controllers retain authority over what can physically happen.**
 
-## Consolidated runtime
+### Built today
 
-The migration now includes the durable concepts from the old Puppeteer/Studio repositories:
+- Packaged **MCP stdio servers** with typed discovery, action, control, cancellation, and stop tools.
+- Explicit profiles for **Reachy Mini**, **StackChan**, and **SO-ARM101**: fake providers for offline development, a staged Reachy catalog and opt-in pinned SDK provider, a StackChan SDK provider, and SO-ARM101 broker delegation.
+- **Deterministic scripts and behavior packs** with pinned assets, preflight validation, dependencies, timing policies, action results, and optional local speech cues.
+- A shared **ExecutionRuntime** with resource coordination, ownership checks, action journaling, restart reconciliation, and conservative handling of unknown outcomes.
+- Mock Stage execution, provider-neutral voice abstractions, camera abstractions, and an **OBSBOT Tiny 2 / Tiny 2 Lite** PTZ adapter.
+- An **opt-in Forge Studios behavior-pack handoff** and offline integration examples.
 
-- semantic action and capability models;
-- resource-domain coordination for overlapping actions;
-- timed performance/cue models;
-- event hooks and telemetry surfaces;
-- `PerformanceStage` for performer cue execution, kept distinct from capture/environment `Stage`;
-- embodiment protocols plus deterministic mock support;
-- an SO-ARM101 embodiment boundary that accepts the external motion SDK rather than copying it into this repository;
-- provider-neutral voice abstractions;
-- camera abstractions, camera collections, normalized pan/tilt/zoom concepts, and calibration/preset persistence.
+These are software capabilities. Mock, simulated, and fake-SDK test results do **not** establish safe real-hardware operation or hard-real-time synchronization.
 
-Concrete vendor/device SDKs remain external dependencies behind these interfaces.
+### Coming next: conversational embodiment
 
-## OBSBOT pan/tilt/zoom camera control
+We are keeping the first vocabulary intentionally small:
 
-The proven OBSBOT Tiny 2 / Tiny 2 Lite SDK control path from `robo-studio` has been migrated into Forge Puppeteer's Stage/camera layer.
+| Semantic behavior | Intended meaning |
+| --- | --- |
+| **Listening** | Attend to a speaker without interfering with current work |
+| **Speaking** | Pair an existing conversation or voice stream with appropriate expression |
+| **Idle** | Provide bounded, low-priority natural presence when not engaged |
+| **Acknowledge** | Show that a message was received or understood, not that work is complete |
 
-Install the native helper on Ubuntu:
+Then we'll map these behaviors to each of our three robots and demonstrate **one shared performance across Reachy Mini, StackChan, and SO-ARM101** with per-performer timing and result records. The initial demonstration will use fake-backed MCP servers; hardware tests require separate qualification.
+
+See the [Conversational Embodiment Roadmap](docs/CONVERSATIONAL_EMBODIMENT_ROADMAP.md) for the minimal plan, explicit boundaries, and next working session.
+
+## Try it without hardware
+
+Requires Python 3.11 or newer. From a local checkout:
 
 ```bash
-cd ~/code/forge-puppeteer
-bash scripts/install-obsbot-sdk-helper.sh
+git clone https://github.com/AgenticForge-Labs/forge-puppeteer.git
+cd forge-puppeteer
+python -m pip install -e '.[mcp,dev]'
+
+# Validate and run a mock physical shot
+forge-puppeteer validate --request examples/robots/package-smoke-request.json
+forge-puppeteer execute \
+  --request examples/robots/package-smoke-request.json \
+  --stage mock --out /tmp/forge-puppeteer-take.json
+
+# Run a packaged-MCP-style, fake Reachy behavior handoff
+python scripts/downstream-integration-smoke.py
 ```
 
-The installer downloads the OBSBOT Linux SDK headers and `libdev.so` used by the existing working controller into:
+Or launch a fake StackChan MCP server for an MCP stdio client:
 
-```text
-~/.local/share/forge-puppeteer/obsbot-sdk/v1.0.2/
+```bash
+forge-puppeteer-mcp --config examples/robots/mock-mcp-server.json
 ```
 
-and builds:
+The MCP server speaks **stdio**, so an MCP client must start/connect to the process; it is not an interactive shell. All these examples use mock or fake behavior. For clean-wheel integration testing, run `bash scripts/offline-package-smoke.sh` (dependency staging may access the package index unless you provide a complete wheelhouse).
 
-```text
-~/.local/bin/forge-puppeteer-obsbot-helper
+## Build on it
+
+Use the same runtime for a configured single device action from Python or CLI:
+
+```bash
+forge-puppeteer provider-action \
+  --provider-config operator.json --action action.json
 ```
 
-The Python adapter is `forge_puppeteer.obsbot.ObsbotSdkPTZController`. It implements the generic `CameraMotionController` shape with normalized pan/tilt in `-1..1` and zoom in `0..1`. Absolute pan/tilt/zoom is supported. Relative motion remains intentionally disabled until hardware position readback is normalized and validated.
+The `operator.json` file and typed `ActionRequest` must be operator-authored and valid; this is **not** a way to pass arbitrary agent-generated hardware instructions. See [Robot Deployment](docs/ROBOT_DEPLOYMENT.md) for profiles, authority gates, exact SDK versions, device constraints, and package-smoke instructions.
 
-Example:
+Explore:
 
-```python
-from forge_puppeteer.cameras import CameraMotionPosition
-from forge_puppeteer.obsbot import ObsbotSdkPTZController
+- [Robot deployment and safety boundaries](docs/ROBOT_DEPLOYMENT.md)
+- [MCP implementation plan and detailed validation](docs/ROBOT_MCP_IMPLEMENTATION_PLAN.md)
+- [Robot contracts and capability models](docs/ROBOT_CONTRACTS.md)
+- [Forge Studios and Reachy handoff examples](docs/DOWNSTREAM_INTEGRATIONS.md)
+- [Example behavior packs: Reachy](examples/robots/reachy/), [StackChan](examples/robots/stackchan/), [SO-ARM101](examples/robots/soarm101/)
+- [Consolidation from older Puppeteer/Studio repositories](docs/MIGRATION.md)
 
-camera = ObsbotSdkPTZController(device="/dev/video0")
-camera.connect()
-camera.move_absolute(CameraMotionPosition(pan=0.25, tilt=-0.1, zoom=0.2))
-camera.disconnect()
-```
+## Scripted performance and physical production
 
-Set `FORGE_PUPPETEER_OBSBOT_HELPER` if the helper executable is installed somewhere else. The adapter is explicit and never activates real camera motion merely by importing Forge Puppeteer.
+Forge Puppeteer remains useful even without a conversational agent. It accepts a stable `forge_puppeteer_request_v1` semantic shot contract, coordinates performers, and separates performance from **Stage** capture and environment concerns. Forge Studios has an opt-in behavior-pack bridge, but its normal episode flow does not automatically control a physical robot.
 
-## Real integrations
+An OBSBOT PTZ integration is available at `forge_puppeteer.obsbot.ObsbotSdkPTZController`. On Ubuntu, `bash scripts/install-obsbot-sdk-helper.sh` installs the native helper. Absolute normalized pan/tilt/zoom commands are supported; relative movement remains disabled pending validated position readback. No real camera is opened simply by importing Puppeteer.
 
-When a real robot, camera, or capture stack is added, keep the hardware-specific implementation behind the existing semantic/capture interfaces and test the mapping independently. Real integrations should expose readiness and supported capabilities, preserve calibration/range validation, reject unsupported requests clearly, and provide a safe stop/failure path.
+## Safe collaboration, not competing robot controllers
 
-## Legacy mapping
+Physical expression and physical work often share resources. Puppeteer must respect active manipulation controllers, explicit ownership, resource limits, and a device's stop behavior. It may request an attention gesture; it must not steal a working arm or assume that an SDK acknowledgment means a robot has safely stopped.
 
-This repository consolidates the durable physical-production behavior from `robo-puppeteer` and the Stage/camera/capture portions of `robo-studio`. Stage remains a first-class concept inside this repository rather than a separate repository. See `docs/MIGRATION.md` for the detailed transfer matrix and external-adapter boundaries.
-#
+Rich **shifting and shared autonomy** across humans, agents, and controllers is a wider ecosystem design goal. Puppeteer should expose portable behaviors and honest capability/authority feedback, while more complex autonomy orchestration can remain in AgenticForge Engine/Platform. Hardware and safety controllers must continue independently enforcing motion and safety constraints.
+
+**Current status:** Active development (`0.1.0` package metadata), with tested software integrations and further physical qualification required. No published package release is assumed by these instructions.
+
+**License:** This public repository does not currently include a license file. Public visibility alone does not grant general reuse or redistribution rights; a license decision is still needed before describing the project as open source.
