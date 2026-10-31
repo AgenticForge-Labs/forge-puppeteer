@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..execution import ActionRequest
 from .server import Gateway
@@ -39,6 +39,15 @@ class FaceParameters(_Parameters):
     left_eye: FaceFeature | None = None
     right_eye: FaceFeature | None = None
     mouth: FaceFeature | None = None
+
+
+Color = Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$")]
+
+
+class NeoHexParameters(_Parameters):
+    # Matches the native SDK's NeoHexFrame contract (no raw serial passthrough).
+    pixels: list[Color] = Field(min_length=37, max_length=37)
+    brightness: int = Field(strict=True, ge=0, le=32)
 
 
 class LightParameters(_Parameters):
@@ -99,6 +108,20 @@ def register_stackchan_tools(server: MCPServer, gateway: Gateway) -> None:
                 session_id=session_id,
                 operation="lights",
                 parameters=parameters.model_dump(exclude_none=True),
+            ),
+        )
+
+    @server.tool()
+    async def neohex_update(
+        action_id: str, caller_id: str, session_id: str, parameters: NeoHexParameters
+    ) -> dict[str, object]:
+        """Update a single 37-pixel NeoHEX through StackChan's typed SDK facade."""
+        return await gateway.submit(
+            "neohex_update",
+            ActionRequest(
+                id=action_id, performer_id=gateway.performer_id,
+                caller_id=caller_id, session_id=session_id,
+                operation="neohex", parameters=parameters.model_dump(),
             ),
         )
 
