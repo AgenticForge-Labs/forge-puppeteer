@@ -151,6 +151,32 @@ checks, **repair this branch before superseding the old MCP server**.
 The SDK MCP files, entrypoint and `[mcp]` extra must remain until
 the dependent SDK cleanup PR is accepted.
 
+## Isolated OpenShell client-only MCP handoff
+
+The next SDK cleanup delegates **client packaging** to
+`forge_puppeteer.mcp.openshell_bundle`. This module exports:
+`client_files`, `agent_config`, `config_file` and `skill_text`.
+It stages the installed Puppeteer Python package plus **only the
+SDK's pure-stdlib broker `capability_profile.py`** inside the OpenShell
+sandbox, not the SDK motor controller, calibration or physical broker.
+
+The one-run agent configuration invokes the same canonical
+`forge_puppeteer.mcp.launcher`, not another standalone MCP facade.
+The broker URL is exactly `http://host.openshell.internal:<pinned-port>`;
+an explicit `allow_openshell_host` flag permits that one hostname only,
+and the host OpenShell network policy still restricts the port and
+HTTP routes. Redirects and environment HTTP proxy forwarding stay
+disabled. SDK native Python/CLI/GUI/broker do not need Puppeteer; only
+the optional SDK `agent sandbox --interface mcp` mode needs both
+packages available on the trusted host.
+
+Runtime Docker images must provide `mcp>=2,<3`,
+`pydantic>=2.7`, `anyio>=4.4`, `PyYAML>=6`, and
+`jsonschema>=4.22` in the isolated MCP venv.
+No source checkout, motor SDK or host supervisor token is installed
+in that sandbox. This has **not** been qualified with real OpenShell
+or actual model image inspection yet; keep physical runs disabled.
+
 ## Deferred StackChan phase
 
 See [StackChan plan](ROBOT_SDK_MCP_CONSOLIDATION.md).
