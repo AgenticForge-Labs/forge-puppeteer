@@ -377,6 +377,28 @@ class StackChanSDKProvider:
         return getattr(adapter, name)
 
 
+def _soarm_startup_grants(config: ServerConfig) -> frozenset[str]:
+    """Intersect operator configuration with the trusted broker's current profile.
+
+    A later broker revocation must still be checked at each call. This
+    startup snapshot is tool discovery, not motion authorization.
+    """
+    if config.backend != "soarm101_broker" or config.broker_url is None:
+        return frozenset(config.allowed_tools)
+    import anyio
+
+    from ..devices.soarm101_broker_http import SOARM101BrokerHTTP
+
+    client = SOARM101BrokerHTTP(
+        config.broker_url, os.environ.get(config.broker_token_env, ""),
+    )
+    visible = frozenset(tool.name for tool in anyio.run(client.list_tools).tools)
+    grants = frozenset(config.allowed_tools) & visible
+    if config.simulation_only and "robot_state" not in grants:
+        raise PermissionError("simulation broker state is not visible")
+    return grants
+
+
 def serve(config_path: str | Path) -> None:
     config = load_config(config_path)
     if config.backend not in {"fake", "reachy_catalog", "reachy_sdk", "soarm101_broker", "stackchan_sdk"}:
@@ -391,26 +413,27 @@ def serve(config_path: str | Path) -> None:
     provider, runtime = create_execution(config)
     module = __import__(f"forge_puppeteer.mcp.{config.device}", fromlist=[tool_registrations[config.device]])
     register = getattr(module, tool_registrations[config.device])
-    enabled_tools = frozenset(config.allowed_tools)
+    effective_grants = _soarm_startup_grants(config)
+    enabled_tools = effective_grants
     if config.backend in {"soarm101_broker", "stackchan_sdk", "reachy_sdk"}:
         # Config grants name broker operations. The facade's discovery/lifecycle
         # tools are enabled only when their corresponding broker capability is.
         mapping = {"robot_capabilities": "device_info", "robot_state": "device_state",
             "stop": "device_stop", "robot_capabilities_lookup": "action_lookup"}
         if config.backend in {"stackchan_sdk", "reachy_sdk"}:
-            enabled_tools = frozenset(config.allowed_tools)
+            enabled_tools = frozenset(effective_grants)
         else:
             enabled_tools = frozenset(
                 {"control_acquire", "control_release"}
-                | {mapping[name] for name in config.allowed_tools if name in mapping}
-                | (set(config.allowed_tools) & {
+                | {mapping[name] for name in effective_grants if name in mapping}
+                | (set(effective_grants) & {
                     "list_assets", "robot_health", "robot_capabilities", "robot_state",
                     "capture_camera", "go_pose", "jog_joint", "jog_cartesian",
                     "move_gripper", "sleep", "sleep_up",
                 })
-                | (set(config.allowed_tools) & {"replay_recording", "replay_sequence"})
-                | ({"action_lookup"} if "robot_state" in config.allowed_tools else set())
-                | ({"action_cancel"} if "stop" in config.allowed_tools else set())
+                | (set(effective_grants) & {"replay_recording", "replay_sequence"})
+                | ({"action_lookup"} if "robot_state" in effective_grants else set())
+                | ({"action_cancel"} if "stop" in effective_grants else set())
             )
     create_server(
         runtime, provider, config.instance_id, register,
