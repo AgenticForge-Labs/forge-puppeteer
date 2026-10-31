@@ -402,7 +402,11 @@ def serve(config_path: str | Path) -> None:
             enabled_tools = frozenset(
                 {"control_acquire", "control_release"}
                 | {mapping[name] for name in config.allowed_tools if name in mapping}
-                | (set(config.allowed_tools) & {"list_assets", "go_pose", "jog_joint", "jog_cartesian", "sleep"})
+                | (set(config.allowed_tools) & {
+                    "list_assets", "robot_health", "robot_capabilities", "robot_state",
+                    "capture_camera", "go_pose", "jog_joint", "jog_cartesian",
+                    "move_gripper", "sleep", "sleep_up",
+                })
                 | (set(config.allowed_tools) & {"replay_recording", "replay_sequence"})
                 | ({"action_lookup"} if "robot_state" in config.allowed_tools else set())
                 | ({"action_cancel"} if "stop" in config.allowed_tools else set())
