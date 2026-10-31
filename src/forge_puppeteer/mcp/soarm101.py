@@ -11,7 +11,6 @@ from ..execution import ActionRequest
 from .server import Gateway
 from .soarm_guidance import GUIDANCE_RESOURCES, task_prompt
 
-from mcp.types import ToolAnnotations
 
 if TYPE_CHECKING:
     from mcp.server import MCPServer
@@ -61,6 +60,8 @@ class ReplayParameters(_Parameters):
 
 def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
     """Expose only fixed broker operations; operation names are never caller-selected."""
+    from mcp.types import ToolAnnotations
+
     provider = cast("SOARM101Provider", gateway.provider)
     read_only = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
 
