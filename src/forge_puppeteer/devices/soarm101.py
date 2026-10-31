@@ -6,6 +6,9 @@ never imports the SO-ARM SDK, opens a port, or creates an alternate controller.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import re
 from collections.abc import Mapping
@@ -52,6 +55,12 @@ class JointJogArgs(_Args):
     acceleration_deg_s2: float | None = Field(default=None, gt=0)
 
 
+class GripperArgs(_Args):
+    target: Literal["open", "close"]
+    gripper_speed_raw: int | None = Field(default=None, ge=0)
+    gripper_acceleration_raw: int | None = Field(default=None, ge=0)
+
+
 class ReplayArgs(_Args):
     asset_id: str = Field(min_length=1, max_length=256)
     revision: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
@@ -63,7 +72,8 @@ class SOARM101Provider:
 
     _TOOLS = frozenset({"robot_health", "robot_capabilities", "robot_state", "list_assets",
                         "replay_recording", "replay_sequence", "go_pose", "jog_joint",
-                        "jog_cartesian", "sleep", "stop"})
+                        "jog_cartesian", "move_gripper", "sleep", "sleep_up",
+                        "capture_camera", "stop"})
 
     def __init__(self, instance_id: str, session: BrokerSession, *, allowed_tools: frozenset[str],
                  simulation_only: bool = False):
@@ -132,7 +142,8 @@ class SOARM101Provider:
         controls = tuple(ControlDescriptor(id=name, description=f"SO-ARM broker {name}",
             effect="stop" if name == "stop" else "read" if name in {"robot_health", "robot_state", "robot_capabilities", "list_assets"} else "motion",
             parameters_schema={"type": "object"}, resources=("arm.motion",) if name in {
-                "go_pose", "jog_joint", "jog_cartesian", "sleep", "replay_recording",
+                "go_pose", "jog_joint", "jog_cartesian", "move_gripper", "sleep", "sleep_up",
+                "replay_recording",
                 "replay_sequence",
             } else ())
             for name in tools)
@@ -200,6 +211,45 @@ class SOARM101Provider:
     async def sleep(self) -> dict[str, object]:
         return await self._call("sleep")
 
+    async def sleep_up(self) -> dict[str, object]:
+        return await self._call("sleep_up")
+
+    async def move_gripper(
+        self, target: Literal["open", "close"],
+        *, gripper_speed_raw: int | None = None,
+        gripper_acceleration_raw: int | None = None,
+    ) -> dict[str, object]:
+        args = GripperArgs(
+            target=target, gripper_speed_raw=gripper_speed_raw,
+            gripper_acceleration_raw=gripper_acceleration_raw,
+        )
+        return await self._call("move_gripper", args.model_dump(exclude_none=True))
+
+    async def capture_camera(self, camera: Literal["overhead", "wrist"]) -> tuple[dict[str, object], str]:
+        """Verify the broker's original pixel SHA-256 before returning MCP image bytes."""
+        if camera not in {"overhead", "wrist"}:
+            raise ValueError("unknown camera")
+        response = await self._call("capture_camera", {"camera": camera})
+        result = response.get("result")
+        if not isinstance(result, Mapping):
+            raise RuntimeError("invalid_broker_camera_result")
+        encoded, claimed = result.get("image_base64"), result.get("sha256")
+        if not isinstance(encoded, str) or not isinstance(claimed, str) or not claimed:
+            raise RuntimeError("broker_camera_image_or_digest_missing")
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except (ValueError, base64.binascii.Error):
+            raise RuntimeError("invalid_broker_camera_image") from None
+        if not hmac.compare_digest(hashlib.sha256(raw).hexdigest(), claimed):
+            raise RuntimeError("broker_camera_digest_mismatch")
+        meta = {
+            key: result[key]
+            for key in ("name", "timestamp", "width", "height", "sha256")
+            if key in result
+        }
+        meta["request_id"] = response.get("request_id")
+        return meta, encoded
+
     async def jog_joint(self, *, joint: str, delta_deg: float,
                         speed_deg_s: float | None = None,
                         acceleration_deg_s2: float | None = None) -> dict[str, object]:
@@ -253,9 +303,12 @@ class SOARM101Provider:
         elif request.operation == "jog_cartesian":
             CartesianArgs.model_validate(request.parameters)
             tool = "jog_cartesian"
-        elif request.operation == "sleep":
+        elif request.operation in {"sleep", "sleep_up"}:
             SleepArgs.model_validate(request.parameters)
-            tool = "sleep"
+            tool = request.operation
+        elif request.operation == "move_gripper":
+            GripperArgs.model_validate(request.parameters)
+            tool = "move_gripper"
         elif request.operation == "jog_joint":
             JointJogArgs.model_validate(request.parameters)
             tool = "jog_joint"
@@ -265,8 +318,10 @@ class SOARM101Provider:
             raise PermissionError("broker_tool_unavailable")
 
     def resources_for(self, request: ActionRequest) -> tuple[str, ...]:
-        if request.operation not in {"go_pose", "jog_joint", "jog_cartesian", "sleep",
-                                     "replay_recording", "replay_sequence"}:
+        if request.operation not in {
+            "go_pose", "jog_joint", "jog_cartesian", "sleep", "sleep_up",
+            "move_gripper", "replay_recording", "replay_sequence",
+        }:
             raise ValueError("unsupported SO-ARM operation")
         return ("arm.motion",)
 
