@@ -43,6 +43,7 @@ class ServerConfig(BaseModel):
     # New canonical client: direct to the SDK-owned authenticated broker.
     # No bearer tokens are accepted in JSON; load them from trusted env.
     broker_url: str | None = None
+    allow_openshell_host: bool = False
     broker_token_env: str = "SOARM101_BROKER_TOKEN"
     # Legacy SDK-owned MCP subprocess retained ONLY until installed-wheel parity.
     broker_command: str | None = None
@@ -261,6 +262,11 @@ class BrokerProvider:
             raise ValueError("SO-ARM deployment requires explicit physical_authority declaration")
         if config.simulation_only and "robot_state" not in config.allowed_tools:
             raise ValueError("simulation_only requires robot_state for broker mode verification")
+        if config.allow_openshell_host and not (
+            config.broker_url and
+            config.broker_url.startswith("http://host.openshell.internal:")
+        ):
+            raise ValueError("OpenShell broker host opt-in requires its fixed hostname")
         if bool(config.broker_command) == bool(config.broker_url):
             raise ValueError("configure exactly one SO-ARM broker transport")
         if config.broker_url and config.broker_env:
@@ -281,7 +287,10 @@ class BrokerProvider:
             # Token remains in the trusted Puppeteer process, not an agent
             # tool payload, operator JSON file or nested MCP subprocess.
             token = os.environ.get(self.config.broker_token_env, "")
-            client = SOARM101BrokerHTTP(self.config.broker_url, token)
+            client = SOARM101BrokerHTTP(
+                self.config.broker_url, token,
+                allow_openshell_host=self.config.allow_openshell_host,
+            )
             self._adapter = self._adapter_type(
                 self.config.instance_id, client,
                 allowed_tools=self.grants,
@@ -391,6 +400,7 @@ def _soarm_startup_grants(config: ServerConfig) -> frozenset[str]:
 
     client = SOARM101BrokerHTTP(
         config.broker_url, os.environ.get(config.broker_token_env, ""),
+        allow_openshell_host=config.allow_openshell_host,
     )
     visible = frozenset(tool.name for tool in anyio.run(client.list_tools).tools)
     grants = frozenset(config.allowed_tools) & visible
