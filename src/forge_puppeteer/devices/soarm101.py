@@ -33,6 +33,8 @@ class PoseArgs(_Args):
     name: str = Field(min_length=1)
     speed_deg_s: float | None = Field(default=None, gt=0)
     acceleration_deg_s2: float | None = Field(default=None, gt=0)
+    gripper_speed_raw: int | None = Field(default=None, ge=0)
+    gripper_acceleration_raw: int | None = Field(default=None, ge=0)
 
 
 class CartesianArgs(_Args):
@@ -45,7 +47,10 @@ class CartesianArgs(_Args):
 
 
 class SleepArgs(_Args):
-    pass
+    speed_deg_s: float | None = Field(default=None, gt=0)
+    acceleration_deg_s2: float | None = Field(default=None, gt=0)
+    gripper_speed_raw: int | None = Field(default=None, ge=0)
+    gripper_acceleration_raw: int | None = Field(default=None, ge=0)
 
 
 class JointJogArgs(_Args):
@@ -202,9 +207,15 @@ class SOARM101Provider:
         return tuple(assets)
 
     async def go_pose(self, name: str, *, speed_deg_s: float | None = None,
-                      acceleration_deg_s2: float | None = None) -> dict[str, object]:
-        args = PoseArgs(name=name, speed_deg_s=speed_deg_s,
-                        acceleration_deg_s2=acceleration_deg_s2)
+                      acceleration_deg_s2: float | None = None,
+                      gripper_speed_raw: int | None = None,
+                      gripper_acceleration_raw: int | None = None) -> dict[str, object]:
+        args = PoseArgs(
+            name=name, speed_deg_s=speed_deg_s,
+            acceleration_deg_s2=acceleration_deg_s2,
+            gripper_speed_raw=gripper_speed_raw,
+            gripper_acceleration_raw=gripper_acceleration_raw,
+        )
         return await self._call("go_pose", args.model_dump(exclude_none=True))
 
     async def jog_cartesian(self, *, frame: Literal["world", "tool"], x_mm: float = 0,
