@@ -123,19 +123,26 @@ def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
 
     @server.tool()
     async def sleep(
-        action_id: str, caller_id: str, session_id: str
+        action_id: str, caller_id: str, session_id: str,
+        speed_deg_s: float | None = None,
+        acceleration_deg_s2: float | None = None,
+        gripper_speed_raw: int | None = None,
+        gripper_acceleration_raw: int | None = None,
     ) -> dict[str, object]:
         """Request the broker's saved Sleep pose through shared action ownership."""
-        return await gateway.submit(
-            "sleep",
-            ActionRequest(
-                id=action_id,
-                performer_id=gateway.performer_id,
-                caller_id=caller_id,
-                session_id=session_id,
-                operation="sleep",
-            ),
-        )
+        parameters = {
+            key: value for key, value in {
+                "speed_deg_s": speed_deg_s,
+                "acceleration_deg_s2": acceleration_deg_s2,
+                "gripper_speed_raw": gripper_speed_raw,
+                "gripper_acceleration_raw": gripper_acceleration_raw,
+            }.items() if value is not None
+        }
+        return await gateway.submit("sleep", ActionRequest(
+            id=action_id, performer_id=gateway.performer_id,
+            caller_id=caller_id, session_id=session_id,
+            operation="sleep", parameters=parameters,
+        ))
 
     @server.tool()
     async def replay_recording(
@@ -228,11 +235,23 @@ def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
     @server.tool()
     async def sleep_up(
         action_id: str, caller_id: str, session_id: str,
+        speed_deg_s: float | None = None,
+        acceleration_deg_s2: float | None = None,
+        gripper_speed_raw: int | None = None,
+        gripper_acceleration_raw: int | None = None,
     ) -> dict[str, object]:
         """Request the historical Sleep-up pose with broker safety checks."""
+        parameters = {
+            key: value for key, value in {
+                "speed_deg_s": speed_deg_s,
+                "acceleration_deg_s2": acceleration_deg_s2,
+                "gripper_speed_raw": gripper_speed_raw,
+                "gripper_acceleration_raw": gripper_acceleration_raw,
+            }.items() if value is not None
+        }
         return await gateway.submit("sleep_up", ActionRequest(
             id=action_id, performer_id=gateway.performer_id, caller_id=caller_id,
-            session_id=session_id, operation="sleep_up",
+            session_id=session_id, operation="sleep_up", parameters=parameters,
         ))
 
     # The SDK used to own these MCP semantic resources and the task prompt.
