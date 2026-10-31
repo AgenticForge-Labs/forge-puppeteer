@@ -1,0 +1,15 @@
+{
+  "backend": "stackchan_sdk",
+  "device": "stackchan",
+  "instance_id": "stackchan-main",
+  "name": "StackChan operator-authorized native MCP",
+  "port": "/dev/serial/by-id/REPLACE_WITH_OPERATOR_CHOSEN_PORT",
+  "sdk_version": "0.3.0",
+  "physical_authority": null,
+  "allowed_tools": [
+    "device_info",
+    "device_state",
+    "list_assets",
+    "action_lookup"
+  ]
+}
