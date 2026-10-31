@@ -339,7 +339,7 @@ class StackChanSDKProvider:
 
     _TOOLS = frozenset({
         "device_info", "device_state", "list_assets", "action_lookup",
-        "head_move", "face_update", "lights_update", "play_asset",
+        "head_move", "face_update", "lights_update", "neohex_update", "play_asset",
         "action_cancel", "device_stop",
     })
 
