@@ -58,11 +58,17 @@ class SOARM101BrokerHTTP:
         token: str,
         *,
         timeout_s: float = 120.0,
+        allow_openshell_host: bool = False,
     ) -> None:
         parsed = urlsplit(url)
+        allowed_hosts = {"127.0.0.1", "localhost", "::1"}
+        if allow_openshell_host:
+            # Only a deliberate client-only OpenShell sandbox may use this
+            # fixed host, under its separately enforced network path policy.
+            allowed_hosts.add("host.openshell.internal")
         if (
             parsed.scheme != "http"
-            or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or parsed.hostname not in allowed_hosts
             or parsed.port is None
             or parsed.username is not None
             or parsed.password is not None
