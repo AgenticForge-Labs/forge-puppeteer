@@ -15,6 +15,11 @@ from forge_puppeteer.mcp.launcher import BrokerProvider, ServerConfig
 
 
 @pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+@pytest.fixture
 def sdk_policy(monkeypatch: pytest.MonkeyPatch) -> None:
     # The authoritative registry lives in the separately installed SDK.
     # Stub its *import*, not a second route mapping in the production code.
