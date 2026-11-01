@@ -13,13 +13,28 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..execution import ActionRequest, Completion, ExecutionRuntime, StopResult
 from ..robot_contracts import AssetDescriptor, ControlDescriptor, DeviceDescriptor
 from ..runtime import PerformanceStage
 from .server import create_server
 from .soarm_guidance import SERVER_INSTRUCTIONS
+
+
+class ApprovedReachyMove(BaseModel):
+    """One exact staged asset and full-snapshot revision approved by its operator."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    asset_id: str = Field(min_length=1)
+    revision: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def validate_asset_id(self):
+        if not self.asset_id.startswith("reachy/") or self.asset_id == "reachy/":
+            raise ValueError("approved Reachy asset IDs must use the reachy/<asset> namespace")
+        return self
 
 
 class ServerConfig(BaseModel):
@@ -58,6 +73,40 @@ class ServerConfig(BaseModel):
     host: str | None = None
     connection_mode: str | None = None
     daemon_port: int | None = None
+    # Restricted Reachy mode exposes only exact operator-pinned recorded moves.
+    # It deliberately does not accept caller-selected native pose/joint targets.
+    restricted_actions: bool = False
+    approved_moves: list[ApprovedReachyMove] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_restricted_reachy_config(self):
+        if (self.restricted_actions or self.approved_moves) and self.backend != "reachy_sdk":
+            raise ValueError("restricted_actions and approved_moves are only valid for reachy_sdk")
+        if self.approved_moves and not self.restricted_actions:
+            raise ValueError("approved_moves requires restricted_actions=true")
+        if self.restricted_actions:
+            if not self.approved_moves:
+                raise ValueError("restricted Reachy mode requires at least one approved move pin")
+            required_tools = {"play_move", "list_assets", "action_lookup", "device_stop"}
+            missing_tools = required_tools - set(self.allowed_tools)
+            if missing_tools:
+                raise ValueError(
+                    "restricted Reachy mode requires allowed_tools: "
+                    + ", ".join(sorted(missing_tools))
+                )
+            if set(self.allowed_tools) & {"head_pose", "antenna_targets"}:
+                raise ValueError("restricted Reachy mode cannot enable arbitrary head_pose or antenna_targets")
+            for name, value in (
+                ("ownership_db", self.ownership_db),
+                ("action_journal", self.action_journal),
+            ):
+                if not value or not Path(value).is_absolute():
+                    raise ValueError(
+                        f"restricted Reachy mode requires an absolute {name} path shared by all server processes"
+                    )
+        if len({(move.asset_id, move.revision) for move in self.approved_moves}) != len(self.approved_moves):
+            raise ValueError("approved_moves contains duplicate asset pins")
+        return self
 
 
 class FakeProvider:
@@ -193,6 +242,8 @@ class ReachySDKProvider:
         unknown = set(config.allowed_tools) - self._TOOLS
         if unknown:
             raise ValueError(f"unsupported Reachy allowed_tools: {sorted(unknown)}")
+        if config.restricted_actions and set(config.allowed_tools) & {"head_pose", "antenna_targets"}:
+            raise ValueError("restricted Reachy mode cannot grant arbitrary native targets")
         if set(config.allowed_tools) & {"play_move", "head_pose", "antenna_targets", "action_cancel", "device_stop"} and config.physical_authority != "I_AUTHORIZE_REACHY_CONTROL":
             raise ValueError("Reachy motion tools require explicit physical authority")
         try:
@@ -206,6 +257,14 @@ class ReachySDKProvider:
 
         manifest = json.loads(Path(config.manifest).read_text(encoding="utf-8"))
         self.catalog = (catalog_factory or ReachyCatalog)(Path(config.asset_root), manifest)
+        self.approved_moves = frozenset(
+            (move.asset_id, move.revision) for move in config.approved_moves
+        )
+        if config.restricted_actions:
+            # Resolve pins before any SDK connection is opened. A typo, stale
+            # revision, or missing asset disables the deployment at startup.
+            for asset_id, revision in self.approved_moves:
+                self.catalog.get(asset_id, revision)
         self.config = config
         self.grants = frozenset(config.allowed_tools)
         self._provider_type = ReachyPlaybackProvider
@@ -232,7 +291,13 @@ class ReachySDKProvider:
         try:
             # Adapter initialization is expected to be local-only, but keep the
             # just-opened SDK connection covered if it ever raises.
-            self._adapter = self._provider_type(self.catalog, robot, motion_authorized=True)
+            self._adapter = self._provider_type(
+                self.catalog,
+                robot,
+                motion_authorized=True,
+                restricted_actions=self.config.restricted_actions,
+                approved_moves=self.approved_moves,
+            )
             yield
         finally:
             try:
