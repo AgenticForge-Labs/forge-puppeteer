@@ -86,7 +86,7 @@ async def test_packaged_launcher_action_journal_is_visible_after_restart(tmp_pat
 
     performed = await call("face_update", {
         "action_id": "durable-action", "caller_id": "operator", "session_id": "take",
-        "parameters": {"left_eye": {"x": 1}},
+        "parameters": {"left_eye": {"x": 1, "y": 0}},
     })
     assert not performed.is_error
     assert journal.is_file()
