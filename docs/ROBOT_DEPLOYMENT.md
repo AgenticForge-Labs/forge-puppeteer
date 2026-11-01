@@ -264,6 +264,58 @@ Example config for the operator-authorized SDK backend:
 Reachy playback, cancellation guarantees, and physical acceptance are not
 established by catalog loading.
 
+### Restricted, operator-approved Reachy moves
+
+For an agent-facing integration, prefer `restricted_actions` with exact staged
+asset pins. This mode exposes recorded playback only; it rejects arbitrary
+`head_pose` and `antenna_targets`, even if a caller attempts those tool names
+directly. The SDK adapter checks the asset ID and full catalog snapshot revision
+again at action validation, and startup resolves every configured pin before it
+opens the SDK client. Any staging change that changes the snapshot revision
+requires a new operator review and updated pins.
+
+Obtain the asset ID and revision from the Puppeteer `list_assets` result, review
+the move, then put only the approved pairs in the trusted server config:
+
+```json
+{
+  "backend": "reachy_sdk",
+  "device": "reachy",
+  "instance_id": "reachy",
+  "physical_authority": "I_AUTHORIZE_REACHY_CONTROL",
+  "sdk_version": "1.10.0rc5",
+  "host": "127.0.0.1",
+  "daemon_port": 8000,
+  "connection_mode": "localhost_only",
+  "asset_root": "/var/lib/forge-puppeteer/reachy/assets",
+  "manifest": "/var/lib/forge-puppeteer/reachy/manifest.json",
+  "ownership_db": "/var/lib/forge-puppeteer/reachy/ownership.sqlite3",
+  "action_journal": "/var/lib/forge-puppeteer/reachy/actions.sqlite3",
+  "restricted_actions": true,
+  "approved_moves": [
+    {"asset_id": "reachy/curious1", "revision": "sha256:<64 lowercase hex characters>"}
+  ],
+  "allowed_tools": [
+    "device_info", "device_state", "list_assets", "action_lookup",
+    "play_move", "device_stop"
+  ]
+}
+```
+
+The revision above is a placeholder and must be replaced with the exact value
+returned by the staged catalog. Restricted mode requires a nonempty, unique
+allowlist and all four tools: `play_move`, `list_assets`, `action_lookup`, and
+`device_stop`. The catalog response contains only the approved pins. It rejects
+`head_pose` or `antenna_targets` in `allowed_tools`.
+
+Each per-conversation stdio server process must use the same absolute
+`ownership_db` and `action_journal` paths on shared local storage. The ownership
+database atomically serializes actions across runtimes and keeps uncertain or
+crashed activity reserved. The action journal persists outcomes and restores
+unfinished actions as unknown after restart. Do not use per-session temporary
+files for these paths. This config is an operator policy boundary, not a
+substitute for attended robot readiness and physical safety checks.
+
 ## Local server configuration and authority
 
 MCP servers use stdio and should be launched only from trusted local
