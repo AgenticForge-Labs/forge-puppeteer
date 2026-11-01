@@ -59,6 +59,7 @@ async def test_packaged_launcher_action_journal_is_visible_after_restart(tmp_pat
     """The real stdio launcher restores completed action identity from SQLite."""
     from contextlib import AsyncExitStack
 
+    pytest.importorskip("mcp", reason="requires the optional Puppeteer MCP dependency")
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
@@ -118,6 +119,7 @@ def test_launcher_requires_explicit_authority_port_and_installed_exact_version(m
 async def test_packaged_provider_uses_fake_transport_and_closes_session(monkeypatch):
     import importlib.metadata
 
+    pytest.importorskip("stackchan_control", reason="requires the external StackChan SDK")
     monkeypatch.setattr(importlib.metadata, "version", lambda _name: "0.3.0")
     robot, client = FakeRobot(), FakeClient()
     opened = []
