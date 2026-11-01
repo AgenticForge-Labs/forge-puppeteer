@@ -43,6 +43,7 @@ async def test_stackchan_mcp_typed_operations_and_asset(tmp_path):
             "face_update",
             "lights_update",
             "play_asset",
+            "neohex_update",
             "device_stop",
         } <= tools
         assets = (await session.call_tool("list_assets", {})).structured_content[
@@ -70,6 +71,36 @@ async def test_stackchan_mcp_typed_operations_and_asset(tmp_path):
                     break
                 await anyio.sleep(0.01)
         assert action["state"] == "completed"
+        neohex = await session.call_tool(
+            "neohex_update",
+            {
+                "action_id": "neohex",
+                "caller_id": "c",
+                "session_id": "s",
+                "parameters": {
+                    "pixels": ["#00ff55"] * 37,
+                    "brightness": 12,
+                },
+            },
+        )
+        assert not neohex.is_error
+        with anyio.fail_after(2):
+            while True:
+                light_action = (
+                    await session.call_tool("action_lookup", {"action_id": "neohex"})
+                ).structured_content
+                if light_action["state"] in ("completed", "failed", "unknown"):
+                    break
+                await anyio.sleep(0.01)
+        assert light_action["state"] == "completed"
+        bad_neohex = await session.call_tool(
+            "neohex_update",
+            {
+                "action_id": "neohex-bad", "caller_id": "c", "session_id": "s",
+                "parameters": {"pixels": ["#ffffff"] * 36, "brightness": 12},
+            },
+        )
+        assert bad_neohex.is_error
         invalid = await session.call_tool(
             "face_update",
             {

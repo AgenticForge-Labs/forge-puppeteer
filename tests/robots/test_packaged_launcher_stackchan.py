@@ -22,8 +22,8 @@ class FakeRobot:
     def state(self):
         return {"native_angle_limits_tenths": {"yaw": [-500, 500], "pitch": [30, 870]}}
 
-    def action_generation(self):
-        return self.generation
+    def _generation(self):
+        return self.generation, None
 
     def update_face(self, update, **kwargs):
         self.calls.append(("face", update))
@@ -59,6 +59,7 @@ async def test_packaged_launcher_action_journal_is_visible_after_restart(tmp_pat
     """The real stdio launcher restores completed action identity from SQLite."""
     from contextlib import AsyncExitStack
 
+    pytest.importorskip("mcp", reason="requires the optional Puppeteer MCP dependency")
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
@@ -85,7 +86,7 @@ async def test_packaged_launcher_action_journal_is_visible_after_restart(tmp_pat
 
     performed = await call("face_update", {
         "action_id": "durable-action", "caller_id": "operator", "session_id": "take",
-        "parameters": {"left_eye": {"x": 1}},
+        "parameters": {"left_eye": {"x": 1, "y": 0}},
     })
     assert not performed.is_error
     assert journal.is_file()
@@ -118,6 +119,7 @@ def test_launcher_requires_explicit_authority_port_and_installed_exact_version(m
 async def test_packaged_provider_uses_fake_transport_and_closes_session(monkeypatch):
     import importlib.metadata
 
+    pytest.importorskip("stackchan_control", reason="requires the external StackChan SDK")
     monkeypatch.setattr(importlib.metadata, "version", lambda _name: "0.3.0")
     robot, client = FakeRobot(), FakeClient()
     opened = []
@@ -138,3 +140,37 @@ async def test_packaged_provider_uses_fake_transport_and_closes_session(monkeypa
     assert robot.calls == [("stop", None)]
     with pytest.raises(RuntimeError, match="not active"):
         await provider.describe()
+
+
+def test_read_only_stackchan_config_requires_no_motion_declaration(monkeypatch):
+    import importlib.metadata
+
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "0.3.0")
+    read_only = config(
+        physical_authority=None,
+        allowed_tools=["device_info", "device_state", "list_assets", "action_lookup"],
+    )
+    provider = StackChanSDKProvider(read_only)
+    assert provider.grants == frozenset(read_only.allowed_tools)
+    with pytest.raises(ValueError, match="physical_authority"):
+        StackChanSDKProvider(config(
+            physical_authority=None,
+            allowed_tools=["device_info", "device_stop"],
+        ))
+    with pytest.raises(ValueError, match="physical_authority"):
+        StackChanSDKProvider(config(
+            physical_authority=None,
+            allowed_tools=["device_info", "neohex_update"],
+        ))
+
+
+def test_neohex_requires_explicit_known_tool_grant(monkeypatch):
+    import importlib.metadata
+
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "0.3.0")
+    provider = StackChanSDKProvider(config(allowed_tools=[
+        "device_info", "device_state", "neohex_update", "device_stop",
+    ]))
+    assert "neohex_update" in provider.grants
+    with pytest.raises(ValueError, match="unsupported StackChan"):
+        StackChanSDKProvider(config(allowed_tools=["arbitrary_serial_write"]))

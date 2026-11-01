@@ -1,10 +1,13 @@
 # Ordered robot MCP consolidation: SO-ARM101 first, StackChan second
 
-**Status (2026-10-31):** Engineering plan. This file is a dependency
-contract, not proof that the SDK-owned MCP is already removed or that
-StackChan has been refactored. All three robot SDKs remain independently
-usable without AgenticForge Platform or Studio. MCP-only Puppeteer
-must itself work without either larger system.
+**Status (2026-10-31):** SO-ARM101 direct-broker Puppeteer MCP is
+merged, but its SDK cleanup PR #99 is awaiting local OpenShell
+acceptance. At the operator's direction an **independent draft**
+StackChan adapter improvement is underway in Puppeteer. It must not be
+merged or treated as hardware-qualified until the SO-ARM acceptance
+gate and StackChan simulation/installed-wheel tests pass. No firmware
+or physical robot has been changed. Each robot SDK remains usable
+without Platform, Studio or Puppeteer.
 
 ## Architecture and authority
 
@@ -116,7 +119,8 @@ StackChan implementation, only after dependency A:
    not simulate safety-rated hardware STOP. Reconnect must not
    silently resume a lost motion or duplicate a submitted action.
 5. **Assets and native media.** Reuse SDK asset revisions and
-   validated `play_asset` for face/head/lights and NeoHEX,
+   validated `play_asset` for face/head/built-in lights. NeoHEX
+   updates remain a separately validated SDK operation,
    preserving partial-keyframe rejection and host schedule
    provenance. Keep voices/personality and choreography above
    the SDK in Puppeteer. Avoid new agent-triggered firmware

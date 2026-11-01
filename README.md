@@ -78,13 +78,15 @@ MCP guidance parity are being assembled in the same PR. The original
 until clean installed-wheel and SDK-simulation validation passes.
 Nothing here enables physical robot operation or removes SDK safety.
 
-**StackChan implementation is deliberately sequenced after SO-ARM101
-adapter completion.** The StackChan SDK already contains validated
-native capability schemas, serial command routing, display/head/NeoHEX
-controls and stopped-host playback; next work is agreement on
-permission/capability mapping, host-loss handling, stop/outcome
-evidence and a reusable, native-SDK-backed Puppeteer MCP.
-No StackChan code is changed by the plan.
+**StackChan implementation has begun in a separate draft branch**, while
+SO-ARM101 SDK cleanup PR #99 awaits local OpenShell acceptance. The work
+is independent of the SO-ARM101 motion broker and does not modify its
+SDK. StackChan's native SDK remains independently usable; Puppeteer
+adds operator-granted MCP access using the *real* StackChan 0.3.0
+facade contract, live capability filtering, typed NeoHEX updates,
+replay revisions and common action/STOP handling. See the
+[StackChan MCP integration guide](docs/STACKCHAN_NATIVE_MCP.md).
+It remains unmerged and unqualified for physical hardware.
 
 ## Try it without hardware
 
