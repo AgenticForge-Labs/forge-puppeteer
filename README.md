@@ -17,7 +17,7 @@ Puppeteer does not replace the conversation app, agent brain, or robotic manipul
 - **One scene, three performers:** Reachy Mini, StackChan, and SO-ARM101 follow the same authored *semantic* performance, each rendering only the motions its hardware and authority permit.
 - **A physical Studio production:** Preauthored dialogue and timed cues become validated, traceable actions rather than unstructured device commands.
 
-The first two examples describe the product direction; a universal conversational state interface and coordinated three-performer demo are **next steps**, not shipped features. The underlying typed MCP and scripted execution foundations already exist.
+The first two examples describe the product direction. A small playback-driven talking/idle coordinator and three simulated performer tests are implemented **only on a stacked draft PR**, not yet merged or bound to physical robot drivers. The underlying typed MCP and scripted execution foundations already exist. See [Talking/idle MVP](docs/TALKING_IDLE_MVP.md).
 
 ## How it fits together
 
