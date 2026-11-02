@@ -1,7 +1,6 @@
 # Embodiment contract v1 — software-only reference integration
 
-**Status:** Proposed on `agent/embodiment-v1-fake-mcp`. This is **not** a
-physical SDK adapter and does **not** qualify any robot for movement.
+**Status (2026-11-02):** Fake-only `forge.embodiment.v1` MCP reference merged in PR #10. It is **not** a physical SDK adapter and does **not** qualify any robot for movement. The later PR #11 implements a separate, persona-independent `forge.behavior.v1` catalog and `ConversationEnsemble` in Python, not a live MCP or native robotics integration. See [Conversation behavior programs](CONVERSATION_BEHAVIOR_PROGRAMS.md).
 
 ## Architecture and authority
 
@@ -160,7 +159,7 @@ cancellation and hardware STOP remain device-specific future work.
 SO-ARM optional idle movement remains eligible for later approval but
 requires the SDK broker's calibrated constraints, operator authority,
 resource ownership and STOP. A simulation recording never authorizes
-physical replay. Reachy PRs #3 and #4 remain draft and stacked; no
+physical replay. Reachy PRs #3 and #4 were consolidated and merged through forge-reachy PR #5; no
 supported pinned playback callback is demonstrated. Next dependency is
 a separately merged Conversationalist reference adapter that emits
 observations with an **honest** timing source and uses this MCP facade,
