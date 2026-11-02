@@ -68,12 +68,16 @@ def author_soarm_reference_programs(
     # Entire periodic motion is intentionally represented as finite programs.
     # The SDK checks all interpolated physical targets as a whole.
     defs = {
-        "idle": tuple(
-            frame(
-                i * 0.5,
-                wrist_flex=idle_wrist_flex_amplitude_rad * math.sin(math.tau * i / 20),
-            ) for i in range(21)
-        ),  # 0.1 Hz sampled sine; model-space wrist only, not inferred +Z.
+        "idle": (
+            (frame(0.0), frame(0.5))
+            if idle_wrist_flex_amplitude_rad == 0
+            else tuple(
+                frame(
+                    i * 0.5,
+                    wrist_flex=idle_wrist_flex_amplitude_rad * math.sin(math.tau * i / 20),
+                ) for i in range(21)
+            )
+        ),  # Full 0.1 Hz wrist-flex cycle only when physically approved.
         "listening": (
             frame(0.0),
             frame(2.5, shoulder_lift=listen_shoulder_lift_rad,
