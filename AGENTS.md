@@ -136,3 +136,30 @@ Never commit credentials, Wi-Fi/device secrets, private network addresses, token
 - These are software-only packs until PR 4's reviewed ensemble launcher
   binds them to explicit SDK sessions. PR 5 adds Conversationalist as one
   optional caller; the Puppet SDK/runtime remains standalone.
+
+
+## Three-performer native ensemble (PR 4/5)
+
+- `mcp/ensemble_launcher.py` is the operator-configured standalone MCP
+  room owner. The existing `ConversationEnsemble` and `ExecutionRuntime`
+  are its only action/state/ownership path; do not add direct servo motion
+  or a parallel dispatcher. Reachy/StackChan SDK sessions are explicit.
+- `devices/soarm101_choreography.py` must receive one existing persistent
+  SDKAgentExecutor, its bound BrokerWatchdog and immutable ChoreographyPolicy.
+  The adapter may request ONLY exact operator-approved native programs.
+  It is **not** a new untrusted agent broker/MCP capability.
+- SO-ARM candidate idle/listen/talk/nod/shake definitions belong in
+  `conversation_soarm.py` as authored semantic content. SDK owns full
+  path validation, measured start, human lease, calibration, watchdog,
+  gripper-free trajectory execution, HOLD and STOP.
+- A *normal* semantic transition may wait up to the provider's bounded
+  completion grace before canceling a finite native segment; interrupt,
+  disconnect, heartbeat expiry and shutdown use immediate SDK STOP.
+  Never claim coroutine cancellation has stopped motors. If a device's
+  STOP terminalizes its session, return unavailability/quarantine and
+  require operator reconciliation; do not automatically rearm/reconnect.
+- The review-only generator must not emit authorization markers by default,
+  open ports, start robots or grant physical motion. All physical clearance,
+  sound timing and STOP drift checks remain for the final Codex handoff.
+- Only the *caller* defines current 4G persona and tool grants; Puppeteer
+  remains useful independently of Conversationalist or Platform.
