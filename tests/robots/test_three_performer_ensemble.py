@@ -170,7 +170,10 @@ def test_soarm_pack_is_pinned_and_persona_free(sdk):
     # ensemble attempts any hardware dispatch; error type remains visible.
     arm = sdk[0]._session
     for program in programs.values():
-        preflight_choreography(arm, program, provider.policy)
+        try:
+            preflight_choreography(arm, program, provider.policy)
+        except Exception as exc:
+            raise AssertionError(f"authored program {program.name} failed SDK preflight: {exc}") from exc
     assert pack.revision == pack.content_revision()
     assert "4g" not in pack.model_dump_json().lower()
     assert "yes" in pack.behaviors and "no" in pack.behaviors
