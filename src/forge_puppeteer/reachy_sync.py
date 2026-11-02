@@ -52,7 +52,7 @@ def recording_url(manifest: dict, filename: str) -> str:
 
 
 def _fetch_bytes(url: str) -> bytes:
-    with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310 - fixed host and pin
+    with urllib.request.urlopen(url, timeout=30) as response:  # fixed official host and commit
         data = response.read(MAX_SINGLE_FILE_BYTES + 1)
     if len(data) > MAX_SINGLE_FILE_BYTES:
         raise ValueError("Reachy dataset file exceeds download size bound")
