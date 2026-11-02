@@ -8,13 +8,14 @@ import pytest
 
 pytest.importorskip("soarm101_motion.choreography")
 
+from soarm101_motion.constants import ARM_JOINTS, HOME_JOINTS
+
 from forge_puppeteer.conversation_soarm import author_soarm_reference_programs
 from forge_puppeteer.mcp.ensemble_launcher import (
     EnsembleConfig,
     SOARMEnsembleConfig,
     soarm_native_binding,
 )
-from soarm101_motion.constants import ARM_JOINTS, HOME_JOINTS
 
 
 def config_data(tmp_path):
