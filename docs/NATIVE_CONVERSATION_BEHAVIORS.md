@@ -79,9 +79,7 @@ calibration input, not a universal physical "home" command. Native SDK
 completion does not prove actual physical settling. Its STOP remains
 unconfirmed for some operations, with enforced quarantine.
 
-For the future PR 4 launcher, resolve `available_recordings` by calling
-`ReachyCatalog.list_assets()` after it verifies the pinned install. Do not
-trust an agent-supplied inventory or dynamically enable a new SDK owner.
+For the future PR 4 launcher, use the provided **`reachy_pack_from_catalog`** helper. It accepts only a `ReachyCatalog`, resolves available names from its verified immutable snapshot, and checks each asset's catalog revision before constructing the versioned pack. Do not trust an agent-supplied inventory or dynamically enable a new SDK owner.
 
 ## StackChan: SDK-native expressions
 
