@@ -14,7 +14,12 @@ from forge_puppeteer.behavior_contract import (
     PerformerBehaviors,
 )
 from forge_puppeteer.conversation_ensemble import ConversationEnsemble
-from forge_puppeteer.execution import Completion, ExecutionError, ExecutionRuntime, StopResult
+from forge_puppeteer.execution import (
+    Completion,
+    ExecutionError,
+    ExecutionRuntime,
+    StopResult,
+)
 from forge_puppeteer.runtime import FakeClock, PerformanceStage
 
 REV = "sha256:" + "a" * 64
