@@ -30,6 +30,11 @@ from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS
 
 
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
 NEUTRAL_HEAD = [[1., 0., 0., 0.], [0., 1., 0., 0.],
                 [0., 0., 1., 0.], [0., 0., 0., 1.]]
 
@@ -38,6 +43,7 @@ class Move:
     def __init__(self, data, sound_path=None):
         self.description = data["description"]
         self.duration = data["duration"]
+        self.sound_path = sound_path
 
 
 class ReachyFake:
