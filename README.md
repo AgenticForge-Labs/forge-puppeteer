@@ -17,7 +17,7 @@ Puppeteer does not replace the conversation app, agent brain, or robotic manipul
 - **One scene, three performers:** Reachy Mini, StackChan, and SO-ARM101 follow the same authored *semantic* performance, each rendering only the motions its hardware and authority permit.
 - **A physical Studio production:** Preauthored dialogue and timed cues become validated, traceable actions rather than unstructured device commands.
 
-The playback-driven talking/idle fake-driver coordinator and **fake-only embodiment v1 MCP** discovery/presence/expression reference are already merged into `main`. PR #11 adds the shared, personality-independent `forge.behavior.v1` execution foundation; native robot behavior bindings and live ensemble MCP are subsequent dependent PRs. These software milestones do not qualify physical robot motion. See [Talking/idle MVP](docs/TALKING_IDLE_MVP.md) and [Embodiment v1](docs/EMBODIMENT_V1.md).
+The playback-driven talking/idle fake-driver coordinator and **fake-only embodiment v1 MCP** discovery/presence/expression reference are already merged into `main`. PR #11 merged the shared, personality-independent `forge.behavior.v1` execution foundation. PR #12 adds native Reachy/StackChan semantic behavior authoring and an immutable upstream recording installer; ensemble MCP and LiveKit integration remain dependent PRs. These software milestones do not qualify physical robot motion. See [Talking/idle MVP](docs/TALKING_IDLE_MVP.md) and [Embodiment v1](docs/EMBODIMENT_V1.md).
 
 ## How it fits together
 
@@ -69,6 +69,22 @@ Forge Puppeteer continues to work standalone via Python/MCP, independent of
 Conversationalist and the wider Platform. Future personas may customize
 expressive style and tool policy without moving those authorities into a
 device SDK.
+
+### Native Reachy and StackChan conversational behavior packs (PR 2/5)
+
+Two SDK-native, personality-neutral behavior pack authors are provided in
+`conversation_native.py` with `idle`, `listening`, `speaking`, `yes`,
+`no`, `acknowledge`, `neutral` and optional simple emotions. The Reachy
+native pack uses an explicit reviewed head transform and SHA-pinned recorded
+moves (yes1/no1); StackChan uses its existing head/face SDK operations and
+native tenths-of-degree limits. Their single-worker, serialized action path
+uses the existing `ExecutionRuntime` and physical authority.
+
+A separate `python -m forge_puppeteer.reachy_sync` installer stages the
+source-controlled Pollen Robotics dataset at an exact revision and verifies
+every downloaded byte. No Conversation App, extra LLM or robot-specific 4G
+persona is required for these patterns. See [Native conversational behaviors](docs/NATIVE_CONVERSATION_BEHAVIORS.md).
+No hardware movement is implied by installing the assets or running CI.
 
 ### Coming next: conversational embodiment
 
