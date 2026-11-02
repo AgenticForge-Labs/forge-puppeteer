@@ -150,8 +150,8 @@ def test_ordering_identity_and_heartbeats_never_repeat_native_movement():
                 await anyio.sleep(0.03)
                 initial = len(provider.calls)
                 assert (await ensemble.observe(event("room", 0, "idle")))["outcome"] == "duplicate"
-                assert (await ensemble.observe(event("room", 0, "speaking", event_id="conflict"))["outcome"] == "denied"
-                assert (await ensemble.observe(event("other-room", 1, "speaking"))["outcome"] == "denied"
+                assert (await ensemble.observe(event("room", 0, "speaking", event_id="conflict")))["outcome"] == "denied"
+                assert (await ensemble.observe(event("other-room", 1, "speaking")))["outcome"] == "denied"
                 assert (await ensemble.observe(event("room", 1, "idle")))["outcome"] == "accepted"
                 assert (await ensemble.observe(event("room", 0, "speaking")))["outcome"] == "stale"
                 await anyio.sleep(0.03)
