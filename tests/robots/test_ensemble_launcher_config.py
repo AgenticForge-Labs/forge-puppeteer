@@ -16,8 +16,8 @@ from forge_puppeteer.conversation_soarm import author_soarm_reference_programs
 from forge_puppeteer.mcp.ensemble_launcher import (
     EnsembleConfig,
     SOARMEnsembleConfig,
-    soarm_native_binding,
     build_ensemble,
+    soarm_native_binding,
 )
 
 
