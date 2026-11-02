@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 
+import anyio
 import pytest
 
 pytest.importorskip("soarm101_motion.choreography")
@@ -15,6 +17,7 @@ from forge_puppeteer.mcp.ensemble_launcher import (
     EnsembleConfig,
     SOARMEnsembleConfig,
     soarm_native_binding,
+    build_ensemble,
 )
 
 
@@ -134,3 +137,47 @@ def test_launcher_denies_two_physical_robots_claiming_same_serial_port(tmp_path)
     })
     with pytest.raises(ValueError, match="share one serial port"):
         EnsembleConfig.model_validate(data)
+
+
+@pytest.mark.anyio
+async def test_native_ensemble_launcher_opens_one_supervised_sdk_session(
+    tmp_path, monkeypatch,
+):
+    """Test actual launcher construction/SDK supervisor without USB or Reachy."""
+    import forge_puppeteer.mcp.ensemble_launcher as launcher
+
+    connections = []
+
+    class NoHardwareProvider:
+        def __init__(self, config):
+            self.config = config
+
+        @asynccontextmanager
+        async def connected(self):
+            connections.append((self.config.device, "open"))
+            try:
+                yield
+            finally:
+                connections.append((self.config.device, "closed"))
+
+    monkeypatch.setattr(launcher, "ReachySDKProvider", NoHardwareProvider)
+    monkeypatch.setattr(launcher, "StackChanSDKProvider", NoHardwareProvider)
+    cfg = EnsembleConfig.model_validate(config_data(tmp_path))
+    reachy, stackchan, arm, _pack, runtime, connected = build_ensemble(cfg)
+    assert reachy is not stackchan
+    try:
+        async with connected():
+            assert arm.executor.connection_count == 1
+            assert arm.executor._session is not None
+            assert arm.watchdog.status["state"] == "watching"
+            await anyio.to_thread.run_sync(arm.watchdog.heartbeat)
+            assert connections == [("reachy", "open"), ("stackchan", "open")]
+        assert connections[-2:] == [("stackchan", "closed"), ("reachy", "closed")]
+        assert arm.executor._session is None
+    finally:
+        runtime.close()
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
