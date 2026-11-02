@@ -31,13 +31,14 @@ operator-selected ESP32-S3 external-control firmware, protocol 1.0
 
 ## Implemented in the merged native MCP provider (PR #7)
 
-- **Actual SDK API reconciliation:** native `ExternalControl._generation()`
-  returns generation and stop event. Existing `update_face`,
-  `move_head` and `update_lights` accept `_generation=`, not
-  `expected_generation=`. Native `play_asset` requires pinned
-  `expected_revision` and uses its own generation fence; Puppeteer
-  no longer passes a nonexistent parameter to it. Do not mistake
-  fake-adapter compatibility for a working installed SDK integration.
+- **SDK public execution-generation contract:** the current SDK exposes
+  `execution_state().generation` and accepts `expected_generation=`
+  for guarded `update_face`, `move_head`, `update_lights`,
+  `update_neohex` and pinned `play_asset`. The earlier private
+  `_generation` method and legacy keyword remain compatibility details,
+  not Puppeteer's public dependency. Native playback requires an exact
+  `expected_revision`, and firmware events are not measured settling.
+  Integration tests use the actual current SDK package.
 - **Operator grants on every surface:** direct Python provider
   `validate` and `execute` now enforce the same pinned tool
   allowlist used by MCP. Read-only inspection may run without a
