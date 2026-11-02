@@ -218,12 +218,12 @@ async def test_complete_three_robot_runtime_and_yes_no(sdk, tmp_path):
             assert set(start["performers"]) == {"reachy", "stackchan", "soarm101"}
             await anyio.sleep(2.9)
             yes = await ensemble.express("yes", action_id="one-yes")
-            assert yes["outcome"] == "accepted"
+            assert yes["outcome"] == "accepted", yes
             await anyio.sleep(2.9)
             # A second named gesture uses independent native SDK motions for
             # all three; all are finite and return to neutral.
             no = await ensemble.express("no", action_id="one-no")
-            assert no["outcome"] == "accepted"
+            assert no["outcome"] == "accepted", no
             await anyio.sleep(2.9)
             end = await ensemble.observe(event(1, "disconnected"))
             assert end["outcome"] == "accepted"
