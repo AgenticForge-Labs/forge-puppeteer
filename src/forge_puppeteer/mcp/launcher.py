@@ -529,6 +529,7 @@ def serve(config_path: str | Path) -> None:
         runtime, provider, config.instance_id, register,
         name=config.name, enabled_tools=enabled_tools,
         instructions=SERVER_INSTRUCTIONS if config.device == "soarm101" else None,
+        enable_fake_embodiment=config.backend == "fake",
     ).run(transport="stdio")
 
 
