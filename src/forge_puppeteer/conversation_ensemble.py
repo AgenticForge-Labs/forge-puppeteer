@@ -8,14 +8,17 @@ actions. A denied/busy/uncertain device cannot be silently retried or replaced.
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Iterable
 
 import anyio
 
 from .behavior_contract import (
-    BehaviorPattern, EnsemblePresence, PerformerBehaviors, Presence,
+    BehaviorPattern,
+    EnsemblePresence,
+    PerformerBehaviors,
+    Presence,
 )
 from .execution import ActionRequest, ExecutionError, ExecutionRuntime
 from .robot_contracts import ActionState
@@ -276,7 +279,7 @@ class ConversationEnsemble:
                     "resource_busy", "not_authorized",
                 } else "blocked"
                 slot.evidence = exc.code
-            except Exception:
+            except Exception:  # noqa: BLE001 - unknown SDK outcome must quarantine
                 slot.status = "blocked"
                 slot.evidence = "behavior_execution_unknown"
             finally:
@@ -290,7 +293,7 @@ class ConversationEnsemble:
                             if not result.confirmed:
                                 slot.status = "blocked"
                                 slot.evidence = "device_stop_unconfirmed"
-                        except Exception:
+                        except Exception:  # noqa: BLE001 - STOP failures are uncertain
                             slot.status = "blocked"
                             slot.evidence = "device_stop_unknown"
                 if slot.status == "blocked":
