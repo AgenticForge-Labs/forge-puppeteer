@@ -245,3 +245,30 @@ def test_inactive_session_expires_and_stops_background_dispatch():
                 await anyio.sleep(0.3)
                 assert len(provider.calls) == count
     anyio.run(run)
+
+
+def test_owner_fence_is_acquired_and_released_at_room_boundaries():
+    async def run():
+        provider = FakeSDK()
+        runtime = ExecutionRuntime(PerformanceStage(FakeClock()))
+        runtime.register("soarm101", provider)
+        ensemble = ConversationEnsemble(runtime, [pack("soarm101")])
+        async with runtime.run():
+            async with ensemble.run():
+                await ensemble.observe(event("room", 0, "speaking"))
+                await anyio.sleep(0.03)
+                from forge_puppeteer.execution import ExecutionError
+                with pytest.raises(ExecutionError, match="ownership_busy"):
+                    runtime.acquire_control("soarm101", "manipulator", "job-a")
+                await ensemble.observe(event("room", 1, "disconnected"))
+                runtime.acquire_control("soarm101", "manipulator", "job-a")
+                runtime.release_control("soarm101", "manipulator", "job-a")
+    anyio.run(run)
+
+
+def test_mutating_a_frozen_pack_nested_payload_is_rejected_before_scheduling():
+    original = pack("reachy")
+    original.behaviors["speaking"].cues[0].parameters["speed"] = 100
+    runtime = ExecutionRuntime(PerformanceStage(FakeClock()))
+    with pytest.raises(ValueError, match="revision"):
+        ConversationEnsemble(runtime, [original])
