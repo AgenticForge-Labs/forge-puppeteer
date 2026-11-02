@@ -60,8 +60,8 @@ def once(operation):
 
 
 def pack(name):
-    return PerformerBehaviors(
-        performer_id=name, revision=REV,
+    return PerformerBehaviors.author(
+        performer_id=name,
         behaviors={
             "idle": loop("fake_idle"),
             "listening": loop("fake_listen"),
@@ -84,6 +84,11 @@ def test_behavior_contracts_are_persona_free_pinned_and_bounded():
     one = pack("reachy")
     assert one.schema == "forge.behavior.v1"
     assert "personality" not in one.model_dump()
+    assert one.revision == one.content_revision()
+    with pytest.raises(ValueError, match="revision"):
+        PerformerBehaviors(
+            performer_id="reachy", revision=REV, behaviors=one.behaviors
+        )
     with pytest.raises(ValueError):
         BehaviorCue(at_s=0, operation="play_move", asset_id="reachy/yes1")
     with pytest.raises(ValueError):
@@ -207,9 +212,10 @@ def test_expression_is_pinned_and_missing_mapping_is_not_substituted():
         runtime = ExecutionRuntime(PerformanceStage(FakeClock()))
         for name, provider in providers.items():
             runtime.register(name, provider)
-        missing = pack("stackchan").model_copy(update={
-            "behaviors": {k: v for k, v in pack("stackchan").behaviors.items() if k != "no"},
-        })
+        missing = PerformerBehaviors.author(
+            "stackchan",
+            {k: v for k, v in pack("stackchan").behaviors.items() if k != "no"},
+        )
         ensemble = ConversationEnsemble(runtime, [pack("reachy"), missing])
         async with runtime.run():
             async with ensemble.run():
