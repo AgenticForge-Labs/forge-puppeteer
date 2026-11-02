@@ -75,3 +75,16 @@ Both use common behaviors but may differ in how cues are selected, delayed, inte
 - Keep real-device movement opt-in, operator-configured and independently validated. E-stop/interlock/workspace limits remain with hardware and device controllers, not an LLM or a descriptive skill.
 
 Related: [README](../README.md) · [Robot MCP implementation plan](ROBOT_MCP_IMPLEMENTATION_PLAN.md) · [Deployment](ROBOT_DEPLOYMENT.md) · [Studios/Reachy handoffs](DOWNSTREAM_INTEGRATIONS.md)
+
+
+## PR 4/5 native three-performer integration (2026-11-02)
+
+Puppeteer PR #13 adds one operator-reviewed three-robot MCP room with
+native Reachy/StackChan providers and the SDK's trusted, separately
+authorized SO-ARM joint choreography. It uses PR #11's single
+`ConversationEnsemble` and execution journal. This is software
+integration, not physical qualification. The existing single-robot
+MCP tools remain available and are not duplicated as raw robot
+tools in the ensemble. See [Three native performers](THREE_ROBOT_ENSEMBLE.md).
+PR 5 connects the Conversationalist 4G voice/session signals to
+these semantic tools; the final physical Codex acceptance follows.
