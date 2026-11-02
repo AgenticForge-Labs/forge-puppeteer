@@ -57,9 +57,10 @@ start an SDK daemon, install an LLM or touch any conversational app. A separate
 `reachy_conversation_pack(performer_id, neutral_head=...,
 recording_revision=..., available_recordings=...)` creates:
 
-- `idle`: gentle bounded vertical breathing around an explicit,
-  operator-reviewed 4x4 neutral head transform. Default vertical amplitude
-  is **zero** until physical frame/clearance qualification.
+- `idle`: a 0.1 Hz, 20-sample/cycle bounded sinusoidal breathing pattern around an explicit,
+  operator-reviewed 4x4 neutral head transform. Native SDK interpolation
+  controls individual targets. Default vertical amplitude is **zero** until
+  physical frame/clearance qualification.
 - `listening`: gentle pitched head attention pose, finite native SDK target
   steps in a repeating behavior.
 - `speaking`: periodic small left/right head roll-like movement around
