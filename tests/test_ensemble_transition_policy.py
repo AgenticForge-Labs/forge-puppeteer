@@ -4,7 +4,10 @@ import anyio
 import pytest
 
 from forge_puppeteer.behavior_contract import (
-    BehaviorCue, BehaviorPattern, EnsemblePresence, PerformerBehaviors,
+    BehaviorCue,
+    BehaviorPattern,
+    EnsemblePresence,
+    PerformerBehaviors,
 )
 from forge_puppeteer.conversation_ensemble import ConversationEnsemble
 from forge_puppeteer.execution import Completion, ExecutionRuntime, StopResult
