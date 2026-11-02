@@ -170,7 +170,7 @@ def test_soarm_pack_is_pinned_and_persona_free(sdk):
     assert "4g" not in pack.model_dump_json().lower()
     assert "yes" in pack.behaviors and "no" in pack.behaviors
     assert pack.behaviors["idle"].mode == "loop"
-    assert pack.behaviors["idle"].period_s == 10.5
+    assert pack.behaviors["idle"].period_s == 1.0  # neutral-only default, no 10 s interruption
     assert pack.behaviors["yes"].cues[0].asset_id == "soarm101/choreography/yes"
     with pytest.raises(PermissionError, match="pin"):
         soarm_conversation_pack(
