@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Create a review-only three-robot SIMULATION ensemble configuration.
 
 Does not contact hardware, run SDK motion, arm a device, grant motion, open a
@@ -27,7 +26,7 @@ def author_config(
 ) -> dict[str, object]:
     neutral = json.loads(soarm_neutral_file.read_text(encoding="utf-8"))
     if not isinstance(neutral, list):
-        raise ValueError("SO-ARM neutral must be exactly five joint radians as a JSON list")
+        raise TypeError("SO-ARM neutral must be exactly five joint radians as a JSON list")
     programs = author_soarm_reference_programs(
         robot_id="so101", calibration_id="simulation", neutral_joints_rad=neutral
     )
