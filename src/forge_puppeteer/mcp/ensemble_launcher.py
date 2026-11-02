@@ -90,6 +90,7 @@ class EnsembleConfig(BaseModel):
     motion_authority: Literal["I_AUTHORIZE_ENSEMBLE_ROBOT_MOTION"]
     reachy: ServerConfig
     stackchan: ServerConfig
+    reachy_neutral_head: str
     soarm101: SOARMEnsembleConfig
     action_journal: str
     ownership_db: str
@@ -105,9 +106,9 @@ class EnsembleConfig(BaseModel):
         ids = (self.reachy.instance_id, self.stackchan.instance_id, self.soarm101.instance_id)
         if len(set(ids)) != 3:
             raise ValueError("three unique performer IDs required")
-        for value in (self.action_journal, self.ownership_db):
+        for value in (self.action_journal, self.ownership_db, self.reachy_neutral_head):
             if not value or not Path(value).is_absolute():
-                raise ValueError("action history and ownership files require absolute paths")
+                raise ValueError("action history, ownership and Reachy neutral pose require absolute paths")
         if self.reachy.restricted_actions:
             raise ValueError("head expression requires Reachy's normal native SDK mode")
         reachy_tools = {"head_pose", "play_move", "device_stop"}
