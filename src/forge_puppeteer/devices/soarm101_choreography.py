@@ -18,6 +18,11 @@ _RESOURCE = ("soarm101.motion",)
 
 
 class SOARMChoreographyProvider:
+    # An existing finite SDK trajectory may complete before a NORMAL presence
+    # change; a user interruption or watchdog expiry always stops immediately.
+    # Longer movements exceed this grace and still take terminal SDK STOP.
+    finish_before_interrupt_s = 3.5
+
     def __init__(self, executor, watchdog, policy, programs: Mapping[str, object]):
         from soarm101_motion.choreography import ChoreographyPolicy, JointChoreography
 
