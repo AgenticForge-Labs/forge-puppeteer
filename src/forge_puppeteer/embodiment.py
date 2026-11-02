@@ -113,7 +113,7 @@ class FakeEmbodiment:
                 "expressions": expressions,
                 "permissions": sorted(self.gateway.provider.grants),
                 "resources": {
-                    "expression": ["fake.performance"],
+                    "expression": [f"{self.gateway.provider.config.device}.fake"],
                     "coexistence": "finite_expression_only_while_idle",
                     "precedence": "listening_or_speaking_denies_new_expression",
                 },
@@ -138,7 +138,7 @@ class FakeEmbodiment:
                 "asset_id": asset.id, "revision": asset.revision,
                 "duration_s": asset.duration_s, "mode": "one_shot",
                 "capability": "simulated", "physical_qualification": "not_qualified",
-                "resources": ["fake.performance"],
+                "resources": [asset.id.split(":", 1)[0] + ".fake"],
             })
         return sorted(results, key=lambda item: (str(item["kind"]), str(item["name"])))
 
