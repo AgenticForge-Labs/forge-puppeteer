@@ -17,7 +17,7 @@ Puppeteer does not replace the conversation app, agent brain, or robotic manipul
 - **One scene, three performers:** Reachy Mini, StackChan, and SO-ARM101 follow the same authored *semantic* performance, each rendering only the motions its hardware and authority permit.
 - **A physical Studio production:** Preauthored dialogue and timed cues become validated, traceable actions rather than unstructured device commands.
 
-The playback-driven talking/idle fake-driver coordinator and **fake-only embodiment v1 MCP** discovery/presence/expression reference are already merged into `main`. PR #11 merged the shared, personality-independent `forge.behavior.v1` execution foundation. PR #12 adds native Reachy/StackChan semantic behavior authoring and an immutable upstream recording installer; ensemble MCP and LiveKit integration remain dependent PRs. These software milestones do not qualify physical robot motion. See [Talking/idle MVP](docs/TALKING_IDLE_MVP.md) and [Embodiment v1](docs/EMBODIMENT_V1.md).
+The playback-driven talking/idle fake-driver coordinator and **fake-only embodiment v1 MCP** discovery/presence/expression reference are already merged into `main`. PR #11 merged the shared, personality-independent `forge.behavior.v1` execution foundation. PR #12 merged native Reachy/StackChan semantic behavior authoring and a SHA-verified upstream recording installer. PR #13 integrates the three native SDKs behind one standalone ensemble MCP room; Conversationalist and live voice/audio synchronization remain later work. These software milestones do not qualify physical robot motion. See [Talking/idle MVP](docs/TALKING_IDLE_MVP.md) and [Embodiment v1](docs/EMBODIMENT_V1.md).
 
 ## How it fits together
 
@@ -85,6 +85,22 @@ source-controlled Pollen Robotics dataset at an exact revision and verifies
 every downloaded byte. No Conversation App, extra LLM or robot-specific 4G
 persona is required for these patterns. See [Native conversational behaviors](docs/NATIVE_CONVERSATION_BEHAVIORS.md).
 No hardware movement is implied by installing the assets or running CI.
+
+### Standalone three-robot conversation ensemble (PR 4/5)
+
+One `forge-puppeteer-ensemble` process can supervise Reachy Mini,
+StackChan and SO-ARM101 from the same semantic listening, speaking,
+idle, yes/no and acknowledgement cues. It reuses one
+`ExecutionRuntime` action journal and ownership boundary,
+the existing Reachy/StackChan native adapters, and operator-pinned
+SO-ARM101 SDK choreography with its own independent watchdog.
+
+The MCP room deliberately does **not** own an LLM, voice model,
+platform services or the current 4G personality; those remain
+Conversationalist concerns in PR 5. Physical SO-ARM execution is
+attended-experimental and requires a human lease, existing torque
+HOLD and an exact reviewed content revision allowlist. The default
+setup is simulation-only. See [Three native performers](docs/THREE_ROBOT_ENSEMBLE.md).
 
 ### Coming next: conversational embodiment
 
