@@ -94,7 +94,7 @@ def create_ensemble_server(
                 expression, action_id=action_id,
                 performer_ids=tuple(performer_ids) if performer_ids is not None else None,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - all provider failures map to a safe MCP error
             raise ToolError("invalid_or_unavailable_ensemble_expression") from None
 
     return server
