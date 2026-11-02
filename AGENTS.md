@@ -115,3 +115,24 @@ Never commit credentials, Wi-Fi/device secrets, private network addresses, token
 - The new foundation is software-only until the next PRs bind each robot's
   native SDK. Conversationalist remains an optional caller; standalone
   releases must not import it or AgenticForge Platform to run robots.
+
+
+## Native Reachy/StackChan expressive packs (PR 2)
+
+- `conversation_native.py` is the only owner of these named expressive
+  behaviors. Keep motion definitions out of the native SDK libraries and do
+  not copy the Reachy Conversation App's runtime/movement manager.
+- The Reachy dataset importer uses the source-controlled official manifest,
+  exact upstream commit and SHA-256 inventory. No auto-refresh and no
+  replacement of an installed snapshot; do not run a download at normal
+  robot startup. Associated recording audio is disabled by default.
+- Reachy's neutral head pose is operator-provided and reviewed; the default
+  vertical breathing amplitude is zero pending physical qualification. Do
+  not infer safe world +Z or physical settling from SDK completion.
+- StackChan's pose authoring uses tenths-of-degree native semantics and the
+  same existing provider/SDK STOP-generation contract. Never put pitch zero
+  into a native head pose. Live firmware limits and operator grants still
+  override the authoring envelope.
+- These are software-only packs until PR 4's reviewed ensemble launcher
+  binds them to explicit SDK sessions. PR 5 adds Conversationalist as one
+  optional caller; the Puppet SDK/runtime remains standalone.
