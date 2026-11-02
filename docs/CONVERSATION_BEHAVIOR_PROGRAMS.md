@@ -1,6 +1,6 @@
 # Conversation behavior programs — PR 1 of 5
 
-**Status:** Introduced on `agent/conversational-behavior-engine`; see the PR's merge status before treating this as current `main` behavior. Software-only foundation; native robots are **not** connected by this module.
+**Status:** PR #11 merged into `main` at `1c4ec2bc7cca14397bf55b6b806a2e01ab6d7118`. PR #12 adds Reachy/StackChan SDK-native behavior packs and an explicit pinned Reachy snapshot importer, but not yet a live ensemble launcher or Conversationalist connection. See [Native conversational behaviors](NATIVE_CONVERSATION_BEHAVIORS.md).
 
 ## Identity versus embodiment
 
