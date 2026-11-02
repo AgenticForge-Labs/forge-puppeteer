@@ -39,6 +39,9 @@ class Fake:
     def _generation(self):
         return self.generation, threading.Event()
 
+    def execution_state(self):
+        return SimpleNamespace(generation=self.generation)
+
     def discover(self):
         return {"capabilities": self.capabilities}
 
@@ -49,22 +52,22 @@ class Fake:
         self.calls.append((name, update))
         return (SimpleNamespace(event=self.terminal),)
 
-    def update_face(self, update, *, _generation=None):
-        if _generation != self.generation:
+    def update_face(self, update, *, expected_generation=None):
+        if expected_generation != self.generation:
             raise RuntimeError("action invalidated by stop")
         return self._event("face", update)
 
-    def move_head(self, update, *, _generation=None):
-        if _generation != self.generation:
+    def move_head(self, update, *, expected_generation=None):
+        if expected_generation != self.generation:
             raise RuntimeError("action invalidated by stop")
         return self._event("head", update)
 
-    def update_lights(self, update, *, _generation=None):
-        if _generation != self.generation:
+    def update_lights(self, update, *, expected_generation=None):
+        if expected_generation != self.generation:
             raise RuntimeError("action invalidated by stop")
         return self._event("lights", update)
 
-    def update_neohex(self, frame):
+    def update_neohex(self, frame, *, expected_generation=None):
         return self._event("neohex", frame)
 
     def stop(self):
@@ -208,7 +211,7 @@ async def test_close_rejects_abandoned_worker_until_it_really_finishes():
     entered, release = threading.Event(), threading.Event()
     scope = anyio.CancelScope()
 
-    def blocked_face(update, *, _generation=None):
+    def blocked_face(update, *, expected_generation=None):
         entered.set()
         assert release.wait(2)
         return (SimpleNamespace(event="completed"),)
@@ -324,7 +327,7 @@ async def test_transport_unknown_outcome_is_never_retried_by_adapter():
     )
     await provider.connect("fake")
 
-    def lost_face(update, *, _generation=None):
+    def lost_face(update, *, expected_generation=None):
         fake.calls.append(("submitted", update))
         raise UnknownOutcome("fixture lost connection after submission")
 
