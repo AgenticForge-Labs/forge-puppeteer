@@ -133,9 +133,10 @@ Never commit credentials, Wi-Fi/device secrets, private network addresses, token
   same existing provider/SDK STOP-generation contract. Never put pitch zero
   into a native head pose. Live firmware limits and operator grants still
   override the authoring envelope.
-- These are software-only packs until PR 4's reviewed ensemble launcher
-  binds them to explicit SDK sessions. PR 5 adds Conversationalist as one
-  optional caller; the Puppet SDK/runtime remains standalone.
+- PR 4 (Puppeteer PR #13) binds these software-only behavior packs to
+  explicit native SDK sessions through a three-performer MCP launcher.
+  No physical hardware operation is qualified by CI. PR 5 adds
+  Conversationalist as an optional caller; Puppeteer remains standalone.
 
 
 ## Three-performer native ensemble (PR 4/5)
