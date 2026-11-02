@@ -17,7 +17,7 @@ Puppeteer does not replace the conversation app, agent brain, or robotic manipul
 - **One scene, three performers:** Reachy Mini, StackChan, and SO-ARM101 follow the same authored *semantic* performance, each rendering only the motions its hardware and authority permit.
 - **A physical Studio production:** Preauthored dialogue and timed cues become validated, traceable actions rather than unstructured device commands.
 
-The first two examples describe the product direction. A small playback-driven talking/idle coordinator and three simulated performer tests are implemented **only on a stacked draft PR**, not yet merged or bound to physical robot drivers. The underlying typed MCP and scripted execution foundations already exist. See [Talking/idle MVP](docs/TALKING_IDLE_MVP.md).
+The playback-driven talking/idle coordinator and its fake-driver tests are merged on `main`. This branch additionally proposes **fake-only embodiment v1** MCP discovery, ordered presence and catalog expression requests for all three performer types. Neither milestone validates physical robot behavior. See [Talking/idle MVP](docs/TALKING_IDLE_MVP.md) and [Embodiment v1](docs/EMBODIMENT_V1.md).
 
 ## How it fits together
 
@@ -63,7 +63,7 @@ We are keeping the first vocabulary intentionally small:
 
 Then we'll map these behaviors to each of our three robots and demonstrate **one shared performance across Reachy Mini, StackChan, and SO-ARM101** with per-performer timing and result records. The initial demonstration will use fake-backed MCP servers; hardware tests require separate qualification.
 
-See the [Conversational Embodiment Roadmap](docs/CONVERSATIONAL_EMBODIMENT_ROADMAP.md) for the minimal plan, explicit boundaries, and next working session.
+See the [Conversational Embodiment Roadmap](docs/CONVERSATIONAL_EMBODIMENT_ROADMAP.md) and [fake-only Embodiment v1](docs/EMBODIMENT_V1.md) for the implemented foundations and explicit deferred physical work.
 
 ## Robot SDK → MCP consolidation (in progress)
 
@@ -78,15 +78,14 @@ MCP guidance parity are being assembled in the same PR. The original
 until clean installed-wheel and SDK-simulation validation passes.
 Nothing here enables physical robot operation or removes SDK safety.
 
-**StackChan implementation has begun in a separate draft branch**, while
-SO-ARM101 SDK cleanup PR #99 awaits local OpenShell acceptance. The work
+**StackChan's native MCP adapter is merged**; SO-ARM101 SDK MCP code has also been consolidated into Puppeteer. OpenShell/hardware acceptance is still outstanding. The work
 is independent of the SO-ARM101 motion broker and does not modify its
 SDK. StackChan's native SDK remains independently usable; Puppeteer
 adds operator-granted MCP access using the *real* StackChan 0.3.0
 facade contract, live capability filtering, typed NeoHEX updates,
 replay revisions and common action/STOP handling. See the
 [StackChan MCP integration guide](docs/STACKCHAN_NATIVE_MCP.md).
-It remains unmerged and unqualified for physical hardware.
+It remains unqualified for physical hardware.
 
 ## Try it without hardware
 
