@@ -50,6 +50,26 @@ The playback-driven talking/idle coordinator and its fake-driver tests are merge
 
 These are software capabilities. Mock, simulated, and fake-SDK test results do **not** establish safe real-hardware operation or hard-real-time synchronization.
 
+### New foundation: persona-independent conversational behavior programs (PR 1/5)
+
+A single conversation identity such as **4G** can be embodied by Reachy Mini,
+StackChan, SO-ARM101, or all three simultaneously. The LLM personality and its
+higher-level authorized tool grants belong to the conversational application,
+not to a robot-specific motion profile.
+
+The new `forge.behavior.v1` authoring contract and
+`ConversationEnsemble` coordinate procedural/recorded/finite/looped
+semantic behavior through the existing `ExecutionRuntime`, with ordered room
+events, session expiry, provider-owned motion validation and bounded stop
+handling. This is a **software-only PR 1 foundation**: it does not yet connect
+native robot expression loops, launch a live ensemble MCP deployment or alter
+Conversationalist. See [Conversation behavior programs](docs/CONVERSATION_BEHAVIOR_PROGRAMS.md).
+
+Forge Puppeteer continues to work standalone via Python/MCP, independent of
+Conversationalist and the wider Platform. Future personas may customize
+expressive style and tool policy without moving those authorities into a
+device SDK.
+
 ### Coming next: conversational embodiment
 
 We are keeping the first vocabulary intentionally small:
