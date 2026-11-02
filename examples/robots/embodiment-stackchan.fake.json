@@ -1,0 +1,21 @@
+{
+  "backend": "fake",
+  "device": "stackchan",
+  "instance_id": "stackchan-sim",
+  "name": "StackChan software embodiment",
+  "allowed_tools": [
+    "device_info",
+    "action_lookup",
+    "performer_discover",
+    "conversation_presence",
+    "expression_request"
+  ],
+  "assets": [
+    "emotion:curious",
+    "emotion:happy",
+    "emotion:concerned",
+    "emotion:neutral",
+    "dance:hello",
+    "gesture:acknowledge"
+  ]
+}
