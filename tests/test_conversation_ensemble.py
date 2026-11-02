@@ -14,9 +14,8 @@ from forge_puppeteer.behavior_contract import (
     PerformerBehaviors,
 )
 from forge_puppeteer.conversation_ensemble import ConversationEnsemble
-from forge_puppeteer.execution import Completion, ExecutionRuntime, StopResult
+from forge_puppeteer.execution import Completion, ExecutionError, ExecutionRuntime, StopResult
 from forge_puppeteer.runtime import FakeClock, PerformanceStage
-
 
 REV = "sha256:" + "a" * 64
 
@@ -253,7 +252,6 @@ def test_owner_fence_is_acquired_and_released_at_room_boundaries():
         async with runtime.run(), ensemble.run():
             await ensemble.observe(event("room", 0, "speaking"))
             await anyio.sleep(0.03)
-            from forge_puppeteer.execution import ExecutionError
             with pytest.raises(ExecutionError, match="ownership_busy"):
                 runtime.acquire_control("soarm101", "manipulator", "job-a")
             await ensemble.observe(event("room", 1, "disconnected"))
