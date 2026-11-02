@@ -80,7 +80,7 @@ async def test_explicit_interruption_never_waits_for_provider_grace():
     async with runtime.run(), ensemble.run():
         await ensemble.observe(event(0, "idle"))
         await anyio.sleep(0.03)
-        result = await ensemble.observe(event(1, "speaking", interrupted=True))
+        result = await ensemble.observe(event(1, "idle", interrupted=True))
         assert result["outcome"] == "accepted"
         assert native.stops >= 1
 
