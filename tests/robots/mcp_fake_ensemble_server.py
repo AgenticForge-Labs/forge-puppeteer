@@ -1,7 +1,9 @@
 """Offline real-stdio MCP three-performer fixture, NO hardware authority."""
 
 from forge_puppeteer.behavior_contract import (
-    BehaviorCue, BehaviorPattern, PerformerBehaviors,
+    BehaviorCue,
+    BehaviorPattern,
+    PerformerBehaviors,
 )
 from forge_puppeteer.conversation_ensemble import ConversationEnsemble
 from forge_puppeteer.execution import Completion, ExecutionRuntime, StopResult
