@@ -8,8 +8,8 @@ trusted policy. No profile grants authority merely by generating a hash.
 from __future__ import annotations
 
 import math
-from itertools import pairwise
 from collections.abc import Mapping, Sequence
+from itertools import pairwise
 
 from .behavior_contract import BehaviorCue, BehaviorPattern, PerformerBehaviors
 
