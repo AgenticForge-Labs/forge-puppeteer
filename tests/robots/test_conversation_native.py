@@ -40,7 +40,12 @@ def test_reachy_native_pack_uses_exact_sdk_ops_and_asset_pins():
     assert pack.behaviors["no"].cues[0].asset_id == "reachy/no1"
     assert pack.behaviors["speaking"].cues[0].operation == "head_pose"
     z = [cue.parameters["pose"][2][3] for cue in pack.behaviors["idle"].cues]
-    assert z == pytest.approx([0.004, -0.004, 0])
+    assert pack.behaviors["idle"].period_s == 10.0  # 0.1 Hz breathing
+    assert len(z) == 20
+    assert z[0] == pytest.approx(0)
+    assert max(z) == pytest.approx(0.004)
+    assert min(z) == pytest.approx(-0.004)
+    assert all(abs(v) <= 0.004 for v in z)
     # All recorded cues remain pinned; never inherit upstream random fallbacks.
     for pattern in pack.behaviors.values():
         for cue in pattern.cues:
