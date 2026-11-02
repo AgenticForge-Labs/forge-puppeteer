@@ -77,6 +77,7 @@ def create_server(
     name: str = "Forge Puppeteer",
     enabled_tools: frozenset[str] | None = None,
     instructions: str | None = None,
+    enable_fake_embodiment: bool = False,
 ) -> MCPServer:
     """Build a server. Register the provider with runtime before calling this.
 
@@ -207,6 +208,9 @@ def create_server(
         return {"configured": True, "enabled": control.enabled}
 
     register_tools(server, gateway)
+    if enable_fake_embodiment:
+        from ..embodiment import register_fake_embodiment_tools
+        register_fake_embodiment_tools(server, gateway)
     if enabled_tools is not None:
         # Startup allowlist is operator supplied, never derived from a caller payload.
         registered = {tool.name for tool in server._tool_manager.list_tools()}

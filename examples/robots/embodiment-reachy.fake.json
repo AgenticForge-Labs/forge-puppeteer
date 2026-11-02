@@ -1,0 +1,21 @@
+{
+  "backend": "fake",
+  "device": "reachy",
+  "instance_id": "reachy-sim",
+  "name": "Reachy software embodiment",
+  "allowed_tools": [
+    "device_info",
+    "action_lookup",
+    "performer_discover",
+    "conversation_presence",
+    "expression_request"
+  ],
+  "assets": [
+    "emotion:curious",
+    "emotion:happy",
+    "emotion:confused",
+    "emotion:neutral",
+    "dance:hello",
+    "gesture:acknowledge"
+  ]
+}

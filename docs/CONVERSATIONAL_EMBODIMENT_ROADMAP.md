@@ -2,7 +2,7 @@
 
 > **Goal:** Give an existing AI agent a natural physical presence through standard, discoverable MCP capabilities. Use the same performance primitives for live interaction and authored Forge Studios scripts.
 
-**Status:** The talking/idle subset has a software-only implementation on a stacked draft PR (not main). A physical StackChan/Reachy/SO-ARM behavior mapping, listening, emotions and actual playback integration remain separate work. See [Talking/idle MVP](TALKING_IDLE_MVP.md).
+**Status:** The talking/idle fake-driver subset is merged on main (PR #8). A fake-only v1 MCP interface for ordered listening/speaking/idle observations and expression requests is proposed in [Embodiment v1](EMBODIMENT_V1.md). Physical SDK binding, native emotion/dance mapping and actual verified playback integration remain separate work.
 
 ## Scope and boundaries
 

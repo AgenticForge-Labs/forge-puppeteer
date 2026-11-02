@@ -1,9 +1,9 @@
 # Conversational talking/idle MVP
 
-**Status:** Implementation in a stacked, unmerged draft PR based on
-`agent/stackchan-native-mcp-integration` (Puppeteer #7). This is NOT
-`main` behavior. There are no real-device drivers or playback-source hooks
-activated by this PR.
+**Status:** The talking/idle fake-driver coordinator is merged into
+`main` by Puppeteer PR #8 (2026-11-02). It has **no verified physical
+device-driver binding or playback-source hook**. See [Embodiment v1](EMBODIMENT_V1.md)
+for subsequent fake-only MCP presence and expression interfaces.
 
 ## Small shared contract
 
