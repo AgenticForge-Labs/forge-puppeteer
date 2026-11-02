@@ -52,7 +52,12 @@ class ConversationEnsemble:
     ):
         if not caller_id or not 1 <= presence_ttl_s <= 3600 or not 0.1 <= stop_timeout_s <= 60:
             raise ValueError("invalid conversation coordinator settings")
-        items = tuple(packs)
+        # Deep JSON revalidation catches mutated nested cue dictionaries and
+        # never trusts a caller-supplied revision without checking its bytes.
+        items = tuple(
+            PerformerBehaviors.model_validate_json(p.model_dump_json())
+            for p in packs
+        )
         if not items or len({p.performer_id for p in items}) != len(items):
             raise ValueError("one or more unique performer bindings are required")
         self.runtime = runtime
