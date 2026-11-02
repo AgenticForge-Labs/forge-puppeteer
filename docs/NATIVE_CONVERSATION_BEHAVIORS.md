@@ -32,10 +32,10 @@ installs that manifest (from a **trusted Git checkout**) into an otherwise
 unused local directory:
 
 ```bash
-mkdir -p /opt/agenticforge/puppeteer
+mkdir -p "$HOME/.local/share/forge-puppeteer"
 python -m forge_puppeteer.reachy_sync \
   --manifest examples/robots/reachy/emotions.manifest.json \
-  --target /opt/agenticforge/puppeteer/reachy-recordings
+  --target "$HOME/.local/share/forge-puppeteer/reachy-recordings"
 ```
 
 The downloader constructs only official HTTPS dataset URLs with the exact
