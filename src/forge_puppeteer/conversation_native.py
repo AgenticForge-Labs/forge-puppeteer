@@ -131,11 +131,16 @@ def reachy_conversation_pack(
         return _cue(at, "head_pose", pose=pose, duration_s=0.5)
 
     patterns: dict[str, BehaviorPattern] = {
-        "idle": _pattern((
-            head_cue(0.0, z=breath_amplitude_m),
-            head_cue(1.4, z=-breath_amplitude_m),
-            head_cue(2.8),
-        ), period_s=4.0),
+        # 0.1 Hz breathing from 20 monotonic samples per 10-second cycle.
+        # The native SDK interpolates each bounded target; Puppeteer owns the
+        # loop and never writes raw servo positions or bypasses SDK validation.
+        "idle": _pattern(tuple(
+            head_cue(
+                index * 0.5,
+                z=breath_amplitude_m * math.sin(2 * math.pi * index / 20),
+            )
+            for index in range(20)
+        ), period_s=10.0),
         "listening": _pattern((
             head_cue(0.0, pitch=0.02),
             head_cue(1.4, pitch=0.015),
