@@ -4,15 +4,12 @@ import hashlib
 import json
 from pathlib import Path
 
-import anyio
 import pytest
 
-from forge_puppeteer.behavior_contract import PerformerBehaviors
 from forge_puppeteer.conversation_native import (
     reachy_conversation_pack,
     stackchan_conversation_pack,
 )
-from forge_puppeteer.deployment import build_reachy_manifest
 from forge_puppeteer.reachy_sync import (
     OFFICIAL_REACHY_DATASET,
     recording_url,
