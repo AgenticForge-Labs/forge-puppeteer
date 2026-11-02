@@ -217,6 +217,8 @@ async def test_complete_three_robot_runtime_and_yes_no(sdk, tmp_path):
             assert start["outcome"] == "accepted"
             assert set(start["performers"]) == {"reachy", "stackchan", "soarm101"}
             await anyio.sleep(2.9)
+            arm_status = ensemble.snapshot()["performers"]["soarm101"]
+            assert arm_status["status"] not in {"blocked", "unavailable"}, arm_status
             yes = await ensemble.express("yes", action_id="one-yes")
             assert yes["outcome"] == "accepted", yes
             await anyio.sleep(2.9)
