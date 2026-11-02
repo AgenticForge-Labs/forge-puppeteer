@@ -12,15 +12,6 @@ import pytest
 pytest.importorskip("stackchan_control.assets")
 pytest.importorskip("soarm101_motion.choreography")
 
-from forge_puppeteer.behavior_contract import EnsemblePresence
-from forge_puppeteer.conversation_ensemble import ConversationEnsemble
-from forge_puppeteer.conversation_native import reachy_pack_from_catalog, stackchan_conversation_pack
-from forge_puppeteer.conversation_soarm import author_soarm_reference_programs, soarm_conversation_pack
-from forge_puppeteer.devices.reachy import ReachyCatalog, ReachyPlaybackProvider
-from forge_puppeteer.devices.soarm101_choreography import SOARMChoreographyProvider
-from forge_puppeteer.devices.stackchan import StackChanProvider
-from forge_puppeteer.execution import ActionRequest, ExecutionRuntime
-from forge_puppeteer.runtime import PerformanceStage
 from soarm101_motion.agent_control import AgentAuthorityStore
 from soarm101_motion.broker import AgentMotionRates
 from soarm101_motion.broker_sdk import SDKAgentExecutor
@@ -29,11 +20,21 @@ from soarm101_motion.choreography import ChoreographyPolicy, preflight_choreogra
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS
 
-
-@pytest.fixture
-def anyio_backend():
-    return "asyncio"
-
+from forge_puppeteer.behavior_contract import EnsemblePresence
+from forge_puppeteer.conversation_ensemble import ConversationEnsemble
+from forge_puppeteer.conversation_native import (
+    reachy_pack_from_catalog,
+    stackchan_conversation_pack,
+)
+from forge_puppeteer.conversation_soarm import (
+    author_soarm_reference_programs,
+    soarm_conversation_pack,
+)
+from forge_puppeteer.devices.reachy import ReachyCatalog, ReachyPlaybackProvider
+from forge_puppeteer.devices.soarm101_choreography import SOARMChoreographyProvider
+from forge_puppeteer.devices.stackchan import StackChanProvider
+from forge_puppeteer.execution import ActionRequest, ExecutionRuntime
+from forge_puppeteer.runtime import PerformanceStage
 
 NEUTRAL_HEAD = [[1., 0., 0., 0.], [0., 1., 0., 0.],
                 [0., 0., 1., 0.], [0., 0., 0., 1.]]
@@ -208,7 +209,7 @@ async def test_complete_three_robot_runtime_and_yes_no(sdk, tmp_path):
                                  "head_move", "device_stop", "action_lookup"}),
     )
     await stack_provider.connect("fake-port")
-    arm_provider, arm_pack, programs = arm_binding(sdk)
+    arm_provider, arm_pack, _programs = arm_binding(sdk)
     try:
         packs = (
             await reachy_pack_from_catalog("reachy", catalog, neutral_head=NEUTRAL_HEAD),
@@ -251,7 +252,7 @@ async def test_complete_three_robot_runtime_and_yes_no(sdk, tmp_path):
 
 @pytest.mark.anyio
 async def test_sdk_provider_rejects_unpinned_asset_without_motion(sdk):
-    provider, _, programs = arm_binding(sdk)
+    provider, _, _programs = arm_binding(sdk)
     bad = ActionRequest(
         id="bad", performer_id="soarm101", caller_id="conversation",
         session_id="session", operation="play_choreography",
