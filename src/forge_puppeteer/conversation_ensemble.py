@@ -32,6 +32,7 @@ class _Slot:
     evidence: str = "no native action dispatched"
     last_action_id: str | None = None
     pending: bool = False
+    action_done: anyio.Event = field(default_factory=anyio.Event)
     action_count: int = 0
 
 
@@ -98,7 +99,7 @@ class ConversationEnsemble:
                 # bounded SDK STOP for an in-flight action.
                 with anyio.CancelScope(shield=True):
                     async with self._lock:
-                        await self._stop_slots(tuple(self._slots))
+                        await self._stop_slots(tuple(self._slots), graceful=False)
                         self._release_owners()
                 self._tasks = None
                 tasks.cancel_scope.cancel()
@@ -153,7 +154,10 @@ class ConversationEnsemble:
             self._state = event.state
             transition = event.state != previous or event.interrupted
             if transition:
-                await self._stop_slots(tuple(self._slots))
+                await self._stop_slots(
+                    tuple(self._slots),
+                    graceful=event.state != "disconnected" and not event.interrupted,
+                )
             if event.state == "disconnected":
                 self._release_owners()
                 self._session = None
@@ -199,7 +203,7 @@ class ConversationEnsemble:
                 return {"outcome": "unsupported", "reason": "unmapped_expression", **self.snapshot()}
             if any(self.packs[n].behaviors[expression].mode != "once" for n in names):
                 return {"outcome": "denied", "reason": "expression_must_be_finite", **self.snapshot()}
-            await self._stop_slots(names)
+            await self._stop_slots(names, graceful=True)
             if any(n in self._blocked for n in names):
                 return {"outcome": "denied", "reason": "unconfirmed_prior_stop", **self.snapshot()}
             self._gesture_ids.add(action_id)
@@ -246,8 +250,22 @@ class ConversationEnsemble:
         self._slots[name] = slot
         self._tasks.start_soon(self._play, name, behavior, pattern, slot, action_id, resume)
 
-    async def _stop_slots(self, names: tuple[str, ...]):
+    async def _stop_slots(self, names: tuple[str, ...], *, graceful: bool = False):
         active = [(n, self._slots.pop(n)) for n in names if n in self._slots]
+        # On ordinary semantic transitions, an opt-in SDK can complete its
+        # already-admitted finite native segment before we cancel the *loop*.
+        # This must be time-bounded: a stuck SDK action still takes the
+        # authoritative STOP/HOLD path. Explicit interrupt, disconnect,
+        # heartbeat loss and process shutdown never wait for this grace.
+        if graceful:
+            for name, slot in active:
+                if not slot.pending:
+                    continue
+                provider = self.runtime._provider(name)
+                grace = getattr(provider, "finish_before_interrupt_s", 0.0)
+                if isinstance(grace, (int, float)) and 0 < grace <= 5.0:
+                    with anyio.move_on_after(grace):
+                        await slot.action_done.wait()
         for _, slot in active:
             slot.scope.cancel()
         for name, slot in active:
@@ -335,8 +353,10 @@ class ConversationEnsemble:
                 # was denied: another controller may own the robot.
                 await self.runtime.submit(request)
                 slot.pending = True
+                slot.action_done = anyio.Event()
                 record = await self.runtime.wait(request.id)
                 slot.pending = record.state == ActionState.UNKNOWN
+                slot.action_done.set()
                 slot.action_count += 1
                 if record.state != ActionState.COMPLETED:
                     slot.status = "blocked" if record.state == ActionState.UNKNOWN else "unavailable"
@@ -355,7 +375,7 @@ class ConversationEnsemble:
             async with self._lock:
                 if (self._session is not None and self._last_seen is not None
                         and anyio.current_time() - self._last_seen >= self.presence_ttl_s):
-                    await self._stop_slots(tuple(self._slots))
+                    await self._stop_slots(tuple(self._slots), graceful=False)
                     self._release_owners()
                     self._session = None
                     self._state = "disconnected"
