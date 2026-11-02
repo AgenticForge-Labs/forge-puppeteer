@@ -7,6 +7,8 @@ A behavior binding is *not* a hardware grant or a personality/tool policy.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Literal
 
 from pydantic import Field, JsonValue, model_validator
@@ -84,6 +86,25 @@ class PerformerBehaviors(ContractModel):
     revision: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     behaviors: dict[str, BehaviorPattern] = Field(min_length=1)
 
+    @classmethod
+    def author(cls, performer_id: str, behaviors: dict[str, BehaviorPattern]):
+        """Build a content-addressed pack without asking authors to invent hashes."""
+        body = {
+            "schema": BEHAVIOR_SCHEMA,
+            "performer_id": performer_id,
+            "behaviors": {name: pattern.model_dump(mode="json") for name, pattern in behaviors.items()},
+        }
+        revision = "sha256:" + hashlib.sha256(
+            json.dumps(body, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        ).hexdigest()
+        return cls(performer_id=performer_id, revision=revision, behaviors=behaviors)
+
+    def content_revision(self) -> str:
+        payload = self.model_dump(mode="json", exclude={"revision"})
+        return "sha256:" + hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        ).hexdigest()
+
     @model_validator(mode="after")
     def validate_bindings(self):
         if any(not name or len(name) > 64 for name in self.behaviors):
@@ -96,6 +117,8 @@ class PerformerBehaviors(ContractModel):
             pattern = self.behaviors.get(name)
             if pattern is not None and pattern.mode != "once":
                 raise ValueError(f"{name} must be a finite gesture")
+        if self.revision != self.content_revision():
+            raise ValueError("behavior pack SHA-256 revision does not match authored content")
         return self
 
 
