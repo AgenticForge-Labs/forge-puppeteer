@@ -17,7 +17,7 @@ Puppeteer does not replace the conversation app, agent brain, or robotic manipul
 - **One scene, three performers:** Reachy Mini, StackChan, and SO-ARM101 follow the same authored *semantic* performance, each rendering only the motions its hardware and authority permit.
 - **A physical Studio production:** Preauthored dialogue and timed cues become validated, traceable actions rather than unstructured device commands.
 
-The playback-driven talking/idle coordinator and its fake-driver tests are merged on `main`. This branch additionally proposes **fake-only embodiment v1** MCP discovery, ordered presence and catalog expression requests for all three performer types. Neither milestone validates physical robot behavior. See [Talking/idle MVP](docs/TALKING_IDLE_MVP.md) and [Embodiment v1](docs/EMBODIMENT_V1.md).
+The playback-driven talking/idle fake-driver coordinator and **fake-only embodiment v1 MCP** discovery/presence/expression reference are already merged into `main`. PR #11 adds the shared, personality-independent `forge.behavior.v1` execution foundation; native robot behavior bindings and live ensemble MCP are subsequent dependent PRs. These software milestones do not qualify physical robot motion. See [Talking/idle MVP](docs/TALKING_IDLE_MVP.md) and [Embodiment v1](docs/EMBODIMENT_V1.md).
 
 ## How it fits together
 
