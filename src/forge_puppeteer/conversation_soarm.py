@@ -8,6 +8,7 @@ trusted policy. No profile grants authority merely by generating a hash.
 from __future__ import annotations
 
 import math
+from itertools import pairwise
 from collections.abc import Mapping, Sequence
 
 from .behavior_contract import BehaviorCue, BehaviorPattern, PerformerBehaviors
@@ -122,7 +123,7 @@ def author_soarm_reference_programs(
         # gestures; longer 10 s idle is bounded by the 256-frame contract.
         total_duration = frames[-1].at_s
         sample_period_s = max(0.02, total_duration / 240.0)
-        for before, after in zip(frames, frames[1:]):
+        for before, after in pairwise(frames):
             duration = after.at_s - before.at_s
             steps = max(1, math.ceil(duration / sample_period_s))
             for i in range(1, steps + 1):
