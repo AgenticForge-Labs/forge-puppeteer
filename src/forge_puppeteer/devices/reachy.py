@@ -141,10 +141,16 @@ class ReachyPlaybackProvider:
         robot: Any,
         *,
         motion_authorized: bool = False,
+        restricted_actions: bool = False,
+        approved_moves: frozenset[tuple[str, str]] | None = None,
     ):
         self.catalog = catalog
         self.robot = robot
         self.motion_authorized = motion_authorized
+        self.restricted_actions = restricted_actions
+        self.approved_moves = frozenset(approved_moves or ())
+        if self.restricted_actions and not self.approved_moves:
+            raise ValueError("restricted Reachy actions require an exact approved move allowlist")
         self._lock = threading.Lock()
         self._active = False
         self._active_operation: str | None = None
@@ -153,25 +159,23 @@ class ReachyPlaybackProvider:
     async def describe(self) -> DeviceDescriptor:
         from ..robot_contracts import ControlDescriptor
 
-        return DeviceDescriptor(
-            id="reachy",
-            provider="reachy",
-            sdk_version=self.catalog.manifest["sdk_version"],
-            connected=True,
-            ready=True,
-            supported_operations=("list_assets", "play_move", "head_pose", "antenna_targets", "stop"),
-            controls=(ControlDescriptor(
-                id="reachy.play_move",
-                description="Play an exact recorded move",
-                effect="motion",
-                parameters_schema={
-                    "type": "object",
-                    "properties": {"sound": {"type": "boolean"}},
-                    "additionalProperties": False,
-                },
-                resources=_RESOURCES,
-                concurrency_constraints=("serialized across all Reachy motion",),
-            ), ControlDescriptor(
+        controls = [ControlDescriptor(
+            id="reachy.play_move",
+            description=("Play an operator-approved recorded move" if self.restricted_actions
+                         else "Play an exact recorded move"),
+            effect="motion",
+            parameters_schema={
+                "type": "object",
+                "properties": {"sound": {"type": "boolean"}},
+                "additionalProperties": False,
+            },
+            resources=_RESOURCES,
+            concurrency_constraints=("serialized across all Reachy motion",),
+        )]
+        operations = ["list_assets", "play_move", "stop"]
+        if not self.restricted_actions:
+            operations.extend(("head_pose", "antenna_targets"))
+            controls.extend((ControlDescriptor(
                 id="reachy.head_pose",
                 description="Move the head to a bounded rigid pose",
                 effect="motion",
@@ -195,7 +199,15 @@ class ReachyPlaybackProvider:
                 limits={"angle_abs_rad": _ANTENNA_ANGLE_LIMIT_RAD,
                         "duration_s": list(_NATIVE_DURATION_LIMIT_S)},
                 concurrency_constraints=("serialized across all Reachy motion",),
-            )),
+            )))
+        return DeviceDescriptor(
+            id="reachy",
+            provider="reachy",
+            sdk_version=self.catalog.manifest["sdk_version"],
+            connected=True,
+            ready=True,
+            supported_operations=tuple(operations),
+            controls=tuple(controls),
             feedback="commanded",
             authority={"motion": "granted" if self.motion_authorized else "denied"},
         )
@@ -213,10 +225,15 @@ class ReachyPlaybackProvider:
         """Explicit local tool grant, intersected with current motion authority."""
         known = {"device_info", "device_state", "list_assets", "action_lookup"}
         motion = {"play_move", "head_pose", "antenna_targets", "action_cancel", "device_stop"}
+        if self.restricted_actions and tool in {"head_pose", "antenna_targets"}:
+            return False
         return tool in known or (tool in motion and self.motion_authorized)
 
     async def list_assets(self) -> tuple[AssetDescriptor, ...]:
-        return await self.catalog.list_assets()
+        assets = await self.catalog.list_assets()
+        if not self.restricted_actions:
+            return assets
+        return tuple(asset for asset in assets if (asset.id, asset.revision) in self.approved_moves)
 
     def resources_for(self, request: ActionRequest) -> tuple[str, ...]:
         return _RESOURCES
@@ -228,6 +245,8 @@ class ReachyPlaybackProvider:
             raise PermissionError("Reachy motion authority is not granted")
         if self._quarantined:
             raise RuntimeError("Reachy provider is quarantined after an unconfirmed stop; restart only after operator verification")
+        if self.restricted_actions and request.operation != "play_move":
+            raise PermissionError("restricted Reachy mode allows only operator-approved recorded moves")
         if request.operation == "play_move":
             if set(request.parameters) - {"sound"} or (
                 "sound" in request.parameters and not isinstance(request.parameters["sound"], bool)
@@ -237,6 +256,8 @@ class ReachyPlaybackProvider:
                 raise ValueError("audio playback is disabled by the launcher media policy")
             if not request.asset_id or not request.asset_revision:
                 raise ValueError("play_move requires an exact asset ID and revision")
+            if self.restricted_actions and (request.asset_id, request.asset_revision) not in self.approved_moves:
+                raise PermissionError("Reachy move is not in the operator-approved asset allowlist")
             self.catalog.get(request.asset_id, request.asset_revision)
         else:
             self._validate_native(request)
