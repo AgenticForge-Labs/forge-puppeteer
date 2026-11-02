@@ -86,6 +86,22 @@ every downloaded byte. No Conversation App, extra LLM or robot-specific 4G
 persona is required for these patterns. See [Native conversational behaviors](docs/NATIVE_CONVERSATION_BEHAVIORS.md).
 No hardware movement is implied by installing the assets or running CI.
 
+### Standalone three-robot conversation ensemble (PR 4/5)
+
+One `forge-puppeteer-ensemble` process can supervise Reachy Mini,
+StackChan and SO-ARM101 from the same semantic listening, speaking,
+idle, yes/no and acknowledgement cues. It reuses one
+`ExecutionRuntime` action journal and ownership boundary,
+the existing Reachy/StackChan native adapters, and operator-pinned
+SO-ARM101 SDK choreography with its own independent watchdog.
+
+The MCP room deliberately does **not** own an LLM, voice model,
+platform services or the current 4G personality; those remain
+Conversationalist concerns in PR 5. Physical SO-ARM execution is
+attended-experimental and requires a human lease, existing torque
+HOLD and an exact reviewed content revision allowlist. The default
+setup is simulation-only. See [Three native performers](docs/THREE_ROBOT_ENSEMBLE.md).
+
 ### Coming next: conversational embodiment
 
 We are keeping the first vocabulary intentionally small:
