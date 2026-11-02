@@ -71,6 +71,7 @@ class FakeEmbodiment:
         self._state: PresenceState = "idle"
         self._last_at: float | None = None
         self._stale = False
+        self._requested: dict[str, ExpressionRequest] = {}
 
     def _expire(self) -> None:
         if self._last_at is not None and self._clock() - self._last_at >= self.ttl_s:
@@ -175,6 +176,10 @@ class FakeEmbodiment:
     async def express(self, request: ExpressionRequest) -> dict[str, object]:
         async with self._lock:
             self._expire()
+            prior = self._requested.get(request.action_id)
+            if prior is not None:
+                return {"outcome": "duplicate" if prior == request else "denied",
+                        "reason": "action_id_already_used", "action_id": request.action_id}
             if request.performer_id != self.gateway.performer_id:
                 return {"outcome": "denied", "reason": "unknown_performer"}
             if self._state in {"speaking", "listening"}:
@@ -192,6 +197,7 @@ class FakeEmbodiment:
                 return {"outcome": "denied", "reason": "stale_asset_revision"}
             # The actual runtime action may still be running. An accepted action
             # is never presented as physically completed, even in a fake run.
+            self._requested[request.action_id] = request
             try:
                 record = await self.gateway.submit(
                     "expression_request",
