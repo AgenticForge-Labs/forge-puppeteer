@@ -16,3 +16,4 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e '.[dev,mcp]'
       - run: pytest -q
+      - run: ruff check src/forge_puppeteer/behavior_contract.py src/forge_puppeteer/conversation_ensemble.py tests/test_conversation_ensemble.py
