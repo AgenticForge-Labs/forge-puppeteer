@@ -109,8 +109,32 @@ def author_soarm_reference_programs(
         ),
         "neutral": (frame(0.0), frame(0.5)),
     }
+    def smooth_segment(frames):
+        # Interpolate WITHIN the authored control points using a zero-slope
+        # cubic easing at each boundary. Straight line control points have
+        # acceleration discontinuities that the native SDK rightly rejects
+        # under the operator's 25 deg/s² envelope.
+        expanded = [frames[0]]
+        for before, after in zip(frames, frames[1:]):
+            duration = after.at_s - before.at_s
+            steps = max(1, math.ceil(duration / 0.1))
+            for i in range(1, steps + 1):
+                u = i / steps
+                eased = u * u * (3 - 2 * u)
+                expanded.append(JointFrame(
+                    before.at_s + duration * u,
+                    tuple(a + (b - a) * eased for a, b in zip(
+                        before.joints_rad, after.joints_rad, strict=True,
+                    )),
+                ))
+        if len(expanded) > 256:
+            raise ValueError("authored choreography exceeds native SDK frame ceiling")
+        return tuple(expanded)
+
     return {
-        name: JointChoreography.author(name, robot_id, calibration_id, frames)
+        name: JointChoreography.author(
+            name, robot_id, calibration_id, smooth_segment(frames),
+        )
         for name, frames in defs.items()
     }
 
