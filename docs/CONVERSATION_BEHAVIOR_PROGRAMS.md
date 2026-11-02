@@ -49,6 +49,8 @@ async with runtime.run():
         # Additional authorized conversation transitions or named expressions...
 ```
 
+Before a performer can run any automatic loop, the ensemble requests **exclusive performer ownership** through the existing `ExecutionRuntime.acquire_control` contract. An arm already owned by a manipulation controller is reported unavailable and is never interrupted or stopped. On clean disconnect/session expiry, acquired ownership is released after the previous pattern is stopped; a quarantined device retains its ownership fence pending deliberate operator reconciliation. This first implementation deliberately prefers exclusive ownership over unsafe resource-sharing. Fine-grained shared/shifting autonomy can be qualified later using the same runtime without a second motion authority.
+
 Each finite cue becomes an `ActionRequest` submitted through the **existing** `ExecutionRuntime.submit/wait`, preserving provider validation, resource locks, ownership checks, action journaling, provenance and STOP semantics. No second execution stack or device connection is created.
 
 - A new speaking/listening state cancels and joins its previous loops before starting replacements.
