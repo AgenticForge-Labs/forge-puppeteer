@@ -339,13 +339,20 @@ class StackChanSDKProvider:
 
     _TOOLS = frozenset({
         "device_info", "device_state", "list_assets", "action_lookup",
-        "head_move", "face_update", "lights_update", "play_asset",
+        "head_move", "face_update", "lights_update", "neohex_update", "play_asset",
         "action_cancel", "device_stop",
     })
 
     def __init__(self, config: ServerConfig, *, connector=None):
         if config.physical_authority != "I_AUTHORIZE_STACKCHAN_CONTROL":
-            raise ValueError("StackChan deployment requires explicit physical_authority declaration")
+            # Observation-only sessions may inspect a specifically selected
+            # USB device. They cannot submit face/light/head/asset actions or
+            # STOP without an explicit, trusted operator capability grant.
+            observation_tools = frozenset({
+                "device_info", "device_state", "list_assets", "action_lookup",
+            })
+            if set(config.allowed_tools) - observation_tools:
+                raise ValueError("StackChan deployment requires explicit physical_authority declaration")
         if not config.port:
             raise ValueError("StackChan SDK backend requires an explicit USB port")
         if not config.sdk_version:
