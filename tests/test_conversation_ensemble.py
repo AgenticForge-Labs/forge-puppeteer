@@ -8,7 +8,10 @@ import anyio
 import pytest
 
 from forge_puppeteer.behavior_contract import (
-    BehaviorCue, BehaviorPattern, EnsemblePresence, PerformerBehaviors,
+    BehaviorCue,
+    BehaviorPattern,
+    EnsemblePresence,
+    PerformerBehaviors,
 )
 from forge_puppeteer.conversation_ensemble import ConversationEnsemble
 from forge_puppeteer.execution import Completion, ExecutionRuntime, StopResult
@@ -115,26 +118,25 @@ def test_single_conversation_animates_three_performers_and_yes_no_resumes():
         for name, provider in providers.items():
             runtime.register(name, provider)
         ensemble = ConversationEnsemble(runtime, [pack(name) for name in providers])
-        async with runtime.run():
-            async with ensemble.run():
-                out = await ensemble.observe(event("room-a", 0, "idle"))
-                assert out["outcome"] == "accepted"
-                await anyio.sleep(0.025)
-                out = await ensemble.observe(event("room-a", 1, "listening"))
-                assert out["state"] == "listening"
-                await anyio.sleep(0.025)
-                out = await ensemble.observe(event("room-a", 2, "speaking"))
-                assert out["state"] == "speaking"
-                await anyio.sleep(0.025)
-                out = await ensemble.express("yes", action_id="yes-1")
-                assert out["outcome"] == "accepted"
-                await anyio.sleep(0.045)
-                out = await ensemble.express("no", action_id="no-1")
-                assert out["outcome"] == "accepted"
-                await anyio.sleep(0.045)
-                end = await ensemble.observe(event("room-a", 3, "disconnected"))
-                assert end["state"] == "disconnected"
-                assert end["session_id"] is None
+        async with runtime.run(), ensemble.run():
+            out = await ensemble.observe(event("room-a", 0, "idle"))
+            assert out["outcome"] == "accepted"
+            await anyio.sleep(0.025)
+            out = await ensemble.observe(event("room-a", 1, "listening"))
+            assert out["state"] == "listening"
+            await anyio.sleep(0.025)
+            out = await ensemble.observe(event("room-a", 2, "speaking"))
+            assert out["state"] == "speaking"
+            await anyio.sleep(0.025)
+            out = await ensemble.express("yes", action_id="yes-1")
+            assert out["outcome"] == "accepted"
+            await anyio.sleep(0.045)
+            out = await ensemble.express("no", action_id="no-1")
+            assert out["outcome"] == "accepted"
+            await anyio.sleep(0.045)
+            end = await ensemble.observe(event("room-a", 3, "disconnected"))
+            assert end["state"] == "disconnected"
+            assert end["session_id"] is None
         for provider in providers.values():
             assert provider.calls[:3] == ["fake_idle", "fake_listen", "fake_talk"]
             assert "fake_yes" in provider.calls
@@ -149,20 +151,19 @@ def test_ordering_identity_and_heartbeats_never_repeat_native_movement():
         runtime = ExecutionRuntime(PerformanceStage(FakeClock()))
         runtime.register("reachy", provider)
         ensemble = ConversationEnsemble(runtime, [pack("reachy")])
-        async with runtime.run():
-            async with ensemble.run():
-                await ensemble.observe(event("room", 0, "idle"))
-                await anyio.sleep(0.03)
-                initial = len(provider.calls)
-                assert (await ensemble.observe(event("room", 0, "idle")))["outcome"] == "duplicate"
-                assert (await ensemble.observe(event("room", 0, "speaking", event_id="conflict")))["outcome"] == "denied"
-                assert (await ensemble.observe(event("other-room", 1, "speaking")))["outcome"] == "denied"
-                assert (await ensemble.observe(event("room", 1, "idle")))["outcome"] == "accepted"
-                assert (await ensemble.observe(event("room", 0, "speaking")))["outcome"] == "stale"
-                await anyio.sleep(0.03)
-                assert len(provider.calls) == initial
-                await ensemble.observe(event("room", 2, "disconnected"))
-                assert (await ensemble.observe(event("next-room", 0, "listening")))["outcome"] == "accepted"
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "idle"))
+            await anyio.sleep(0.03)
+            initial = len(provider.calls)
+            assert (await ensemble.observe(event("room", 0, "idle")))["outcome"] == "duplicate"
+            assert (await ensemble.observe(event("room", 0, "speaking", event_id="conflict")))["outcome"] == "denied"
+            assert (await ensemble.observe(event("other-room", 1, "speaking")))["outcome"] == "denied"
+            assert (await ensemble.observe(event("room", 1, "idle")))["outcome"] == "accepted"
+            assert (await ensemble.observe(event("room", 0, "speaking")))["outcome"] == "stale"
+            await anyio.sleep(0.03)
+            assert len(provider.calls) == initial
+            await ensemble.observe(event("room", 2, "disconnected"))
+            assert (await ensemble.observe(event("next-room", 0, "listening")))["outcome"] == "accepted"
     anyio.run(run)
 
 
@@ -173,14 +174,13 @@ def test_denied_resource_ownership_does_not_stop_another_controller():
         runtime.register("soarm101", provider)
         runtime.acquire_control("soarm101", "manipulator", "job-a")
         ensemble = ConversationEnsemble(runtime, [pack("soarm101")])
-        async with runtime.run():
-            async with ensemble.run():
-                await ensemble.observe(event("room", 0, "speaking"))
-                await anyio.sleep(0.05)
-                snapshot = ensemble.snapshot()
-                assert snapshot["performers"]["soarm101"]["status"] == "unavailable"
-                assert provider.stop_calls == 0
-                assert provider.calls == []
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "speaking"))
+            await anyio.sleep(0.05)
+            snapshot = ensemble.snapshot()
+            assert snapshot["performers"]["soarm101"]["status"] == "unavailable"
+            assert provider.stop_calls == 0
+            assert provider.calls == []
         runtime.release_control("soarm101", "manipulator", "job-a")
     anyio.run(run)
 
@@ -192,17 +192,16 @@ def test_unknown_sdk_outcome_and_unconfirmed_stop_quarantines_only_one_performer
         runtime.register("reachy", ok)
         runtime.register("soarm101", bad)
         ensemble = ConversationEnsemble(runtime, [pack("reachy"), pack("soarm101")])
-        async with runtime.run():
-            async with ensemble.run():
-                await ensemble.observe(event("room", 0, "speaking"))
-                await anyio.sleep(0.05)
-                assert ensemble.snapshot()["performers"]["soarm101"]["status"] == "blocked"
-                calls_before = list(bad.calls)
-                await ensemble.observe(event("room", 1, "listening"))
-                await anyio.sleep(0.05)
-                assert bad.calls == calls_before
-                assert bad.stop_calls >= 1
-                assert "fake_listen" in ok.calls
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "speaking"))
+            await anyio.sleep(0.05)
+            assert ensemble.snapshot()["performers"]["soarm101"]["status"] == "blocked"
+            calls_before = list(bad.calls)
+            await ensemble.observe(event("room", 1, "listening"))
+            await anyio.sleep(0.05)
+            assert bad.calls == calls_before
+            assert bad.stop_calls >= 1
+            assert "fake_listen" in ok.calls
     anyio.run(run)
 
 
@@ -217,15 +216,14 @@ def test_expression_is_pinned_and_missing_mapping_is_not_substituted():
             {k: v for k, v in pack("stackchan").behaviors.items() if k != "no"},
         )
         ensemble = ConversationEnsemble(runtime, [pack("reachy"), missing])
-        async with runtime.run():
-            async with ensemble.run():
-                await ensemble.observe(event("room", 0, "idle"))
-                assert (await ensemble.express("no", action_id="no-1"))["outcome"] == "unsupported"
-                assert (await ensemble.express("yes", action_id="yes-1"))["outcome"] == "accepted"
-                assert (await ensemble.express("yes", action_id="yes-1"))["outcome"] == "duplicate"
-                assert (await ensemble.express("yes", action_id="other", performer_ids=("invalid",)))["outcome"] == "denied"
-                await anyio.sleep(0.03)
-                assert "fake_no" not in providers["stackchan"].calls
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "idle"))
+            assert (await ensemble.express("no", action_id="no-1"))["outcome"] == "unsupported"
+            assert (await ensemble.express("yes", action_id="yes-1"))["outcome"] == "accepted"
+            assert (await ensemble.express("yes", action_id="yes-1"))["outcome"] == "duplicate"
+            assert (await ensemble.express("yes", action_id="other", performer_ids=("invalid",)))["outcome"] == "denied"
+            await anyio.sleep(0.03)
+            assert "fake_no" not in providers["stackchan"].calls
     anyio.run(run)
 
 
@@ -235,15 +233,14 @@ def test_inactive_session_expires_and_stops_background_dispatch():
         runtime = ExecutionRuntime(PerformanceStage(FakeClock()))
         runtime.register("reachy", provider)
         ensemble = ConversationEnsemble(runtime, [pack("reachy")], presence_ttl_s=1)
-        async with runtime.run():
-            async with ensemble.run():
-                await ensemble.observe(event("room", 0, "idle"))
-                await anyio.sleep(1.2)
-                assert ensemble.snapshot()["stale"] is True
-                assert ensemble.snapshot()["state"] == "disconnected"
-                count = len(provider.calls)
-                await anyio.sleep(0.3)
-                assert len(provider.calls) == count
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "idle"))
+            await anyio.sleep(1.2)
+            assert ensemble.snapshot()["stale"] is True
+            assert ensemble.snapshot()["state"] == "disconnected"
+            count = len(provider.calls)
+            await anyio.sleep(0.3)
+            assert len(provider.calls) == count
     anyio.run(run)
 
 
@@ -253,16 +250,15 @@ def test_owner_fence_is_acquired_and_released_at_room_boundaries():
         runtime = ExecutionRuntime(PerformanceStage(FakeClock()))
         runtime.register("soarm101", provider)
         ensemble = ConversationEnsemble(runtime, [pack("soarm101")])
-        async with runtime.run():
-            async with ensemble.run():
-                await ensemble.observe(event("room", 0, "speaking"))
-                await anyio.sleep(0.03)
-                from forge_puppeteer.execution import ExecutionError
-                with pytest.raises(ExecutionError, match="ownership_busy"):
-                    runtime.acquire_control("soarm101", "manipulator", "job-a")
-                await ensemble.observe(event("room", 1, "disconnected"))
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "speaking"))
+            await anyio.sleep(0.03)
+            from forge_puppeteer.execution import ExecutionError
+            with pytest.raises(ExecutionError, match="ownership_busy"):
                 runtime.acquire_control("soarm101", "manipulator", "job-a")
-                runtime.release_control("soarm101", "manipulator", "job-a")
+            await ensemble.observe(event("room", 1, "disconnected"))
+            runtime.acquire_control("soarm101", "manipulator", "job-a")
+            runtime.release_control("soarm101", "manipulator", "job-a")
     anyio.run(run)
 
 
