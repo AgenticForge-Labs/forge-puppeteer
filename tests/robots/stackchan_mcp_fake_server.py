@@ -27,6 +27,9 @@ class FakeRobot:
     def _generation(self):
         return self.generation, self.event
 
+    def execution_state(self):
+        return SimpleNamespace(generation=self.generation)
+
     def discover(self):
         return {
             "protocol_version": "1.0",
@@ -43,8 +46,8 @@ class FakeRobot:
     def state(self):
         return {"native_angle_limits_tenths": {"yaw": [-500, 500], "pitch": [30, 870]}}
 
-    def _apply(self, _update, *, _generation=None):
-        if _generation != self.generation:
+    def _apply(self, _update, *, expected_generation=None):
+        if expected_generation != self.generation:
             raise RuntimeError("invalidated by stop")
         return (SimpleNamespace(event="completed"),)
 
@@ -52,7 +55,7 @@ class FakeRobot:
     move_head = _apply
     update_lights = _apply
 
-    def update_neohex(self, frame):
+    def update_neohex(self, frame, *, expected_generation=None):
         assert len(frame.pixels) == 37
         return (SimpleNamespace(event="completed"),)
 

@@ -2,7 +2,7 @@
 
 > **Goal:** Give an existing AI agent a natural physical presence through standard, discoverable MCP capabilities. Use the same performance primitives for live interaction and authored Forge Studios scripts.
 
-**Status:** Proposed next steps (October 30, 2026). This is a plan, not a claim that the features below are complete.
+**Status:** The talking/idle subset has a software-only implementation on a stacked draft PR (not main). A physical StackChan/Reachy/SO-ARM behavior mapping, listening, emotions and actual playback integration remain separate work. See [Talking/idle MVP](TALKING_IDLE_MVP.md).
 
 ## Scope and boundaries
 

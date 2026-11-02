@@ -22,9 +22,9 @@ def _sdk():
     try:
         from stackchan_control.assets import _step, list_assets, validate_asset
         from stackchan_control.external_control import CAPABILITIES, ExternalControl
+        from stackchan_control.neohex import NeoHexFrame
         from stackchan_control.playback import play_asset
         from stackchan_control.routed_serial import RoutedSerialClient
-        from stackchan_control.neohex import NeoHexFrame
     except ImportError as exc:
         raise RuntimeError(
             "Install a compatible stackchan-control SDK with serial support "
@@ -219,7 +219,10 @@ class StackChanProvider:
         # tool argument schemas while preserving SDK-owned descriptions,
         # effects, limits and resource identities.
         from ..mcp.stackchan import (
-            FaceParameters, HeadParameters, LightParameters, NeoHexParameters,
+            FaceParameters,
+            HeadParameters,
+            LightParameters,
+            NeoHexParameters,
         )
 
         model_for = {
@@ -362,11 +365,11 @@ class StackChanProvider:
         # Use the native SDK's stop generation, not a synthetic broker clock.
         # This invalidates preparation if a stop occurred while awaiting
         # firmware discovery or operator action validation.
-        generation = (await _call(self._invoke, robot, robot._generation))[0]
+        generation = (await _call(self._invoke, robot, robot.execution_state)).generation
         await self.validate(request)
         if self._connected() is not robot:
             raise RuntimeError("StackChan connection changed during preparation")
-        if (await _call(self._invoke, robot, robot._generation))[0] != generation:
+        if (await _call(self._invoke, robot, robot.execution_state)).generation != generation:
             raise RuntimeError("StackChan action invalidated by stop")
         prepared = await _call(self._prepare, request)
         if request.operation == "play_asset":
@@ -375,7 +378,7 @@ class StackChanProvider:
                 robot,
                 _sdk()[5],
                 robot, prepared,
-                expected_revision=request.asset_revision,
+                expected_revision=request.asset_revision, expected_generation=generation,
             )
             if len(results) != len(prepared.steps) or any(
                 not r.events or r.events[-1].event != "completed" for r in results
@@ -385,22 +388,22 @@ class StackChanProvider:
             if request.operation == "head":
                 events = await _call(
                     self._invoke, robot, robot.move_head, prepared.update,
-                    _generation=generation,
+                    expected_generation=generation,
                 )
             elif request.operation == "face":
                 events = await _call(
                     self._invoke, robot, robot.update_face, prepared.update,
-                    _generation=generation,
+                    expected_generation=generation,
                 )
             elif request.operation == "lights":
                 events = await _call(
                     self._invoke, robot, robot.update_lights, prepared.update,
-                    _generation=generation,
+                    expected_generation=generation,
                 )
             else:
                 # The SDK remains authoritative for NeoHEX state and STOP.
                 events = await _call(
-                    self._invoke, robot, robot.update_neohex, prepared,
+                    self._invoke, robot, robot.update_neohex, prepared, expected_generation=generation,
                 )
             if not events or events[-1].event != "completed":
                 raise RuntimeError("firmware completion not confirmed")
