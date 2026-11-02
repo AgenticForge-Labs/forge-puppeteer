@@ -121,3 +121,16 @@ def test_launcher_rejects_duplicate_performer_and_missing_sdk_grants(tmp_path):
     data["reachy"]["allowed_tools"] = ["play_move", "device_stop"]
     with pytest.raises(ValueError, match="expression requires"):
         EnsembleConfig.model_validate(data)
+
+
+def test_launcher_denies_two_physical_robots_claiming_same_serial_port(tmp_path):
+    data = config_data(tmp_path)
+    data["soarm101"].update({
+        "mode": "attended_physical_trial",
+        "calibration_id": "real-calibration",
+        "port": "/dev/ttyACM0",
+        "human_lease_path": str(tmp_path / "operator-lease.json"),
+        "physical_authority": "I_AUTHORIZE_ATTENDED_PHYSICAL_CHOREOGRAPHY",
+    })
+    with pytest.raises(ValueError, match="same serial port"):
+        EnsembleConfig.model_validate(data)
