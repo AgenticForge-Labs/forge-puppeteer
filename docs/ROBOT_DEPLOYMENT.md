@@ -1,5 +1,18 @@
 # Robot package deployment
 
+> **StackChan current migration note:** A source-only integration
+> branch now reconciles Puppeteer's `stackchan_sdk` adapter with
+> `stackchan-control==0.3.0` and the SDK's actual
+> `_generation` / `_generation=` API, adds native NeoHEX MCP,
+> and ensures direct Python execution observes operator grants.
+> Read [StackChan native MCP](STACKCHAN_NATIVE_MCP.md). The
+> independent SDK remains authoritative for firmware limits and
+> STOP. The older historical package/deployment examples below
+> may mention previous SDK assumptions. The draft is **not merged**,
+> not physically validated, and requires an exact installed wheel
+> and operator-selected port for actual USB access.
+
+
 ## Package extras and boundaries
 
 Forge Puppeteer has two optional dependency groups:

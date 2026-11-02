@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..execution import ActionRequest
 from .server import Gateway
@@ -17,14 +17,25 @@ class _Parameters(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
-class ServoTarget(_Parameters):
-    angle: int = Field(strict=True)
+class YawTarget(_Parameters):
+    angle: int = Field(strict=True, ge=-1280, le=1280)
+    speed: int = Field(strict=True, ge=0, le=1000)
+
+
+class PitchTarget(_Parameters):
+    angle: int = Field(strict=True, ge=30, le=870)
     speed: int = Field(strict=True, ge=0, le=1000)
 
 
 class HeadParameters(_Parameters):
-    yaw: ServoTarget | None = None
-    pitch: ServoTarget | None = None
+    yaw: YawTarget | None = None
+    pitch: PitchTarget | None = None
+
+    @model_validator(mode="after")
+    def require_axis(self):
+        if self.yaw is None and self.pitch is None:
+            raise ValueError("at least one head axis is required")
+        return self
 
 
 class FaceFeature(_Parameters):
@@ -34,11 +45,34 @@ class FaceFeature(_Parameters):
     weight: int | None = Field(default=None, strict=True, ge=0, le=100)
     size: int | None = Field(default=None, strict=True, ge=-100, le=100)
 
+    @model_validator(mode="after")
+    def require_complete_position(self):
+        if (self.x is None) != (self.y is None):
+            raise ValueError("face x and y must be supplied together")
+        if all(getattr(self, key) is None for key in ("x", "y", "rotation", "weight", "size")):
+            raise ValueError("empty native face feature")
+        return self
+
 
 class FaceParameters(_Parameters):
     left_eye: FaceFeature | None = None
     right_eye: FaceFeature | None = None
     mouth: FaceFeature | None = None
+
+    @model_validator(mode="after")
+    def require_feature(self):
+        if self.left_eye is None and self.right_eye is None and self.mouth is None:
+            raise ValueError("at least one face feature is required")
+        return self
+
+
+Color = Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$")]
+
+
+class NeoHexParameters(_Parameters):
+    # Matches the native SDK's NeoHexFrame contract (no raw serial passthrough).
+    pixels: list[Color] = Field(min_length=37, max_length=37)
+    brightness: int = Field(strict=True, ge=0, le=32)
 
 
 class LightParameters(_Parameters):
@@ -46,6 +80,14 @@ class LightParameters(_Parameters):
     right_color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     left_duration: float | None = Field(default=None, ge=0, le=10)
     right_duration: float | None = Field(default=None, ge=0, le=10)
+
+    @model_validator(mode="after")
+    def require_light(self):
+        if all(getattr(self, key) is None for key in (
+            "left_color", "right_color", "left_duration", "right_duration",
+        )):
+            raise ValueError("at least one lighting field is required")
+        return self
 
 
 def register_stackchan_tools(server: MCPServer, gateway: Gateway) -> None:
@@ -99,6 +141,20 @@ def register_stackchan_tools(server: MCPServer, gateway: Gateway) -> None:
                 session_id=session_id,
                 operation="lights",
                 parameters=parameters.model_dump(exclude_none=True),
+            ),
+        )
+
+    @server.tool()
+    async def neohex_update(
+        action_id: str, caller_id: str, session_id: str, parameters: NeoHexParameters
+    ) -> dict[str, object]:
+        """Update a single 37-pixel NeoHEX through StackChan's typed SDK facade."""
+        return await gateway.submit(
+            "neohex_update",
+            ActionRequest(
+                id=action_id, performer_id=gateway.performer_id,
+                caller_id=caller_id, session_id=session_id,
+                operation="neohex", parameters=parameters.model_dump(),
             ),
         )
 
