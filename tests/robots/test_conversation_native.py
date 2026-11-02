@@ -33,7 +33,7 @@ def test_reachy_native_pack_uses_exact_sdk_ops_and_asset_pins():
     )
     assert pack.revision == pack.content_revision()
     assert "4g" not in json.dumps(pack.model_dump())
-    assert set(("idle", "listening", "speaking", "yes", "no", "neutral")) <= set(pack.behaviors)
+    assert {"idle", "listening", "speaking", "yes", "no", "neutral"} <= set(pack.behaviors)
     assert pack.behaviors["yes"].cues[0].asset_id == "reachy/yes1"
     assert pack.behaviors["yes"].cues[0].asset_revision == REV
     assert pack.behaviors["yes"].cues[0].parameters == {"sound": False}
