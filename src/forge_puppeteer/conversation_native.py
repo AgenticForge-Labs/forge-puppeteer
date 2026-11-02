@@ -1,0 +1,230 @@
+"""Persona-independent Reachy Mini and StackChan conversational behavior packs.
+
+These are Puppeteer-authored *intent*, not SDK motion implementations. They
+resolve to the existing native provider operations through ExecutionRuntime.
+Only an operator-reviewed neutral Reachy head transform and StackChan pose
+bounds may enable physical use; SDK calibration, live limits and STOP prevail.
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Mapping, Sequence
+
+from .behavior_contract import BehaviorCue, BehaviorPattern, PerformerBehaviors
+
+_SHA_PREFIX = "sha256:"
+_MAX_REACHY_BREATH_M = 0.005
+_MAX_REACHY_WOBBLE_RAD = 0.07
+_MAX_STACKCHAN_YAW = 150
+_MAX_STACKCHAN_PITCH = 100
+
+
+def _cue(at_s: float, operation: str, **parameters: object) -> BehaviorCue:
+    return BehaviorCue(at_s=at_s, operation=operation, parameters=parameters)
+
+
+def _pattern(
+    cues: Sequence[BehaviorCue], *, period_s: float | None = None,
+    source: str = "procedural",
+) -> BehaviorPattern:
+    if period_s is None:
+        return BehaviorPattern(source=source, mode="once", cues=tuple(cues))
+    return BehaviorPattern(
+        source=source, mode="loop", cues=tuple(cues), period_s=period_s,
+        max_cycles=3600, max_duration_s=3600,
+    )
+
+
+def _head(
+    base: Sequence[Sequence[float]],
+    *,
+    pitch_rad: float = 0.0,
+    roll_rad: float = 0.0,
+    vertical_m: float = 0.0,
+) -> list[list[float]]:
+    """Compute a small orientation/translation offset around an OPERATOR pose.
+
+    This creates the transform; Reachy SDK remains the validation/execution
+    authority. Physical +Z and clearance are not inferred from this formula.
+    """
+    cp, sp = math.cos(pitch_rad), math.sin(pitch_rad)
+    cr, sr = math.cos(roll_rad), math.sin(roll_rad)
+    rotation = (
+        (1.0, 0.0, 0.0),
+        (0.0, cp, -sp),
+        (0.0, sp, cp),
+    )
+    rz = (
+        (cr, -sr, 0.0),
+        (sr, cr, 0.0),
+        (0.0, 0.0, 1.0),
+    )
+    local = [
+        [sum(rotation[i][k] * rz[k][j] for k in range(3)) for j in range(3)]
+        for i in range(3)
+    ]
+    result = [
+        [sum(base[i][k] * local[k][j] for k in range(3)) for j in range(3))
+         + [float(base[i][3]) + (vertical_m if i == 2 else 0.0)]
+        for i in range(3)
+    ]
+    return result + [[0.0, 0.0, 0.0, 1.0]]
+
+
+def _reachy_move(at_s: float, name: str, revision: str) -> BehaviorCue:
+    return BehaviorCue(
+        at_s=at_s, operation="play_move", parameters={"sound": False},
+        asset_id=f"reachy/{name}", asset_revision=revision,
+    )
+
+
+def reachy_conversation_pack(
+    performer_id: str,
+    *,
+    neutral_head: Sequence[Sequence[float]],
+    recording_revision: str,
+    available_recordings: Sequence[str],
+    breath_amplitude_m: float = 0.0,
+    wobble_amplitude_rad: float = 0.025,
+) -> PerformerBehaviors:
+    """Author Reachy motion using its existing native SDK adapter operations.
+
+    A reviewed neutral 4x4 transform MUST be supplied; there is no fabricated
+    physical home pose. Breathing displacement defaults to zero pending robot
+    qualification. Recorded yes/no and optional emotions use exact catalog pins.
+    """
+    from .devices.reachy import ReachyPlaybackProvider
+    from .execution import ActionRequest
+
+    if (not math.isfinite(breath_amplitude_m) or
+            not 0 <= breath_amplitude_m <= _MAX_REACHY_BREATH_M):
+        raise ValueError("Reachy breathing amplitude must be bounded and nonnegative")
+    if (not math.isfinite(wobble_amplitude_rad) or
+            not 0 <= wobble_amplitude_rad <= _MAX_REACHY_WOBBLE_RAD):
+        raise ValueError("Reachy talking wobble amplitude must be bounded and nonnegative")
+    if not recording_revision.startswith(_SHA_PREFIX) or len(recording_revision) != 71:
+        raise ValueError("Reachy recordings require a SHA-256 catalog revision")
+    if any(ch not in "0123456789abcdef" for ch in recording_revision[7:]):
+        raise ValueError("invalid Reachy recording revision")
+    if (len(neutral_head) != 4 or any(len(row) != 4 for row in neutral_head)):
+        raise ValueError("operator-reviewed neutral head must be a 4x4 transform")
+    neutral = [[float(v) for v in row] for row in neutral_head]
+    # Reuse existing provider geometric validation; no duplicated limits.
+    ReachyPlaybackProvider._validate_native(ActionRequest(
+        id="preflight", performer_id=performer_id, caller_id="author",
+        session_id="preview", operation="head_pose",
+        parameters={"pose": neutral, "duration_s": 0.5},
+    ))
+    available = frozenset(available_recordings)
+    if not {"yes1", "no1"} <= available:
+        raise ValueError("pinned Reachy catalog lacks yes1/no1 recordings")
+
+    def head_cue(at: float, *, pitch: float = 0.0, roll: float = 0.0,
+                 z: float = 0.0) -> BehaviorCue:
+        pose = _head(neutral, pitch_rad=pitch, roll_rad=roll, vertical_m=z)
+        ReachyPlaybackProvider._validate_native(ActionRequest(
+            id="preflight", performer_id=performer_id, caller_id="author",
+            session_id="preview", operation="head_pose",
+            parameters={"pose": pose, "duration_s": 0.5},
+        ))
+        return _cue(at, "head_pose", pose=pose, duration_s=0.5)
+
+    patterns: dict[str, BehaviorPattern] = {
+        "idle": _pattern((
+            head_cue(0.0, z=breath_amplitude_m),
+            head_cue(1.4, z=-breath_amplitude_m),
+            head_cue(2.8),
+        ), period_s=4.0),
+        "listening": _pattern((
+            head_cue(0.0, pitch=0.02),
+            head_cue(1.4, pitch=0.015),
+        ), period_s=3.0),
+        "speaking": _pattern((
+            head_cue(0.0, roll=wobble_amplitude_rad),
+            head_cue(0.55, roll=-wobble_amplitude_rad),
+            head_cue(1.1),
+        ), period_s=1.5),
+        "neutral": _pattern((head_cue(0.0),)),
+        "yes": _pattern((_reachy_move(0.0, "yes1", recording_revision),), source="recorded"),
+        "no": _pattern((_reachy_move(0.0, "no1", recording_revision),), source="recorded"),
+        "acknowledge": _pattern((_reachy_move(0.0, "yes1", recording_revision),), source="recorded"),
+    }
+    for name, recording in (
+        ("happy", "cheerful1"), ("curious", "curious1"),
+        ("confused", "confused1"), ("excited", "enthusiastic1"),
+    ):
+        if recording in available:
+            patterns[name] = _pattern(
+                (_reachy_move(0.0, recording, recording_revision),),
+                source="recorded",
+            )
+    return PerformerBehaviors.author(performer_id, patterns)
+
+
+def stackchan_conversation_pack(
+    performer_id: str,
+    *,
+    yaw_center: int = 0,
+    pitch_center: int = 450,
+    yaw_amplitude: int = 80,
+    pitch_amplitude: int = 45,
+    head_speed: int = 180,
+) -> PerformerBehaviors:
+    """Native SDK face/head/eyes patterns; units are tenths of a degree.
+
+    Defaults are authoring examples, not physical calibration or authorization.
+    Provider.validate still checks the connected firmware's reported bounds.
+    """
+    from .stackchan_validation import validate_stackchan_center
+
+    validate_stackchan_center(yaw_center, pitch_center, yaw_amplitude,
+                               pitch_amplitude, head_speed)
+
+    def face(at: float, *, mouth: int = 0, eyes: int | None = None) -> BehaviorCue:
+        payload: dict[str, object] = {"mouth": {"size": mouth}}
+        if eyes is not None:
+            payload.update({"left_eye": {"weight": eyes}, "right_eye": {"weight": eyes}})
+        return _cue(at, "face", **payload)
+
+    def head(at: float, *, yaw: int = 0, pitch: int = 0) -> BehaviorCue:
+        return _cue(at, "head", yaw={"angle": yaw_center + yaw, "speed": head_speed},
+                    pitch={"angle": pitch_center + pitch, "speed": head_speed})
+
+    return PerformerBehaviors.author(performer_id, {
+        "idle": _pattern((
+            face(0.0, mouth=0, eyes=45), head(0.35),
+            head(1.2, yaw=yaw_amplitude // 2), head(2.15),
+            face(2.65, mouth=0, eyes=40),
+        ), period_s=3.2),
+        "listening": _pattern((
+            face(0.0, mouth=0, eyes=70),
+            head(0.25, pitch=pitch_amplitude),
+            face(1.3, mouth=0, eyes=65),
+        ), period_s=2.1),
+        "speaking": _pattern((
+            face(0.0, mouth=12, eyes=50),
+            face(0.22, mouth=42),
+            face(0.44, mouth=22),
+            face(0.66, mouth=0),
+        ), period_s=0.9),
+        "yes": _pattern((
+            head(0.0, pitch=-pitch_amplitude),
+            head(0.32, pitch=pitch_amplitude),
+            head(0.64, pitch=-pitch_amplitude),
+            head(0.96, pitch=pitch_amplitude),
+            head(1.28),
+        )),
+        "no": _pattern((
+            head(0.0, yaw=-yaw_amplitude),
+            head(0.32, yaw=yaw_amplitude),
+            head(0.64, yaw=-yaw_amplitude),
+            head(0.96, yaw=yaw_amplitude),
+            head(1.28),
+        )),
+        "acknowledge": _pattern((head(0.0, pitch=pitch_amplitude), head(0.35))),
+        "neutral": _pattern((face(0.0, mouth=0, eyes=45), head(0.25))),
+        "happy": _pattern((face(0.0, mouth=35, eyes=80), head(0.35, yaw=yaw_amplitude // 2))),
+        "curious": _pattern((face(0.0, mouth=0, eyes=70), head(0.35, pitch=pitch_amplitude))),
+        "confused": _pattern((face(0.0, mouth=0, eyes=30), head(0.35, yaw=-yaw_amplitude // 2))),
+    })
