@@ -119,6 +119,9 @@ class EnsembleConfig(BaseModel):
             raise ValueError("native StackChan expression requires head, face and stop grants")
         if self.stackchan.physical_authority != "I_AUTHORIZE_STACKCHAN_CONTROL":
             raise ValueError("StackChan expression requires operator physical authorization")
+        if (self.soarm101.mode == "attended_physical_trial"
+                and self.stackchan.port == self.soarm101.port):
+            raise ValueError("StackChan and physical SO-ARM cannot share one serial port")
         return self
 
 
