@@ -162,6 +162,37 @@ def reachy_conversation_pack(
     return PerformerBehaviors.author(performer_id, patterns)
 
 
+async def reachy_pack_from_catalog(
+    performer_id: str,
+    catalog,
+    *,
+    neutral_head: Sequence[Sequence[float]],
+    breath_amplitude_m: float = 0.0,
+    wobble_amplitude_rad: float = 0.025,
+) -> PerformerBehaviors:
+    """Resolve available recordings only from an already-verified ReachyCatalog.
+
+    The catalog's SDK loading, complete snapshot SHA and native recorded moves
+    are authoritative; no model, client argument or guessed filename becomes
+    a source of an approved recording.
+    """
+    from .devices.reachy import ReachyCatalog
+
+    if not isinstance(catalog, ReachyCatalog):
+        raise TypeError("a verified native ReachyCatalog is required")
+    assets = await catalog.list_assets()
+    if any(not item.id.startswith("reachy/") or
+           item.revision != catalog.revision for item in assets):
+        raise ValueError("Reachy catalog asset revision is inconsistent")
+    return reachy_conversation_pack(
+        performer_id, neutral_head=neutral_head,
+        recording_revision=catalog.revision,
+        available_recordings=[item.id[7:] for item in assets],
+        breath_amplitude_m=breath_amplitude_m,
+        wobble_amplitude_rad=wobble_amplitude_rad,
+    )
+
+
 def stackchan_conversation_pack(
     performer_id: str,
     *,
