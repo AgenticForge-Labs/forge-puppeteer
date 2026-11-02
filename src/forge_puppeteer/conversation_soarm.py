@@ -115,9 +115,16 @@ def author_soarm_reference_programs(
         # acceleration discontinuities that the native SDK rightly rejects
         # under the operator's 25 deg/s² envelope.
         expanded = [frames[0]]
+        # The SDK's actual default command stream is 50 Hz (20 ms), not
+        # 20 Hz. Sparse 100 ms keyframes produce piecewise-linear slope
+        # jumps and spuriously high *real* discrete acceleration under the
+        # SDK's correct 50 Hz metrics. Author at its native cadence for short
+        # gestures; longer 10 s idle is bounded by the 256-frame contract.
+        total_duration = frames[-1].at_s
+        sample_period_s = max(0.02, total_duration / 240.0)
         for before, after in zip(frames, frames[1:]):
             duration = after.at_s - before.at_s
-            steps = max(1, math.ceil(duration / 0.1))
+            steps = max(1, math.ceil(duration / sample_period_s))
             for i in range(1, steps + 1):
                 u = i / steps
                 eased = u * u * (3 - 2 * u)
