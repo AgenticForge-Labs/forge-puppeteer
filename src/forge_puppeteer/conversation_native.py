@@ -9,7 +9,7 @@ bounds may enable physical use; SDK calibration, live limits and STOP prevail.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
 from .behavior_contract import BehaviorCue, BehaviorPattern, PerformerBehaviors
 
