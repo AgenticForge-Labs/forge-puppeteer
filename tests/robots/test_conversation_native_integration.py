@@ -7,13 +7,10 @@ journaling through the PR1 ConversationEnsemble.
 
 import hashlib
 import json
-import threading
 from types import SimpleNamespace
 
 import anyio
 import pytest
-
-pytest.importorskip("stackchan_control.assets")
 
 from forge_puppeteer.behavior_contract import EnsemblePresence
 from forge_puppeteer.conversation_ensemble import ConversationEnsemble
@@ -26,6 +23,7 @@ from forge_puppeteer.devices.stackchan import StackChanProvider
 from forge_puppeteer.execution import ExecutionRuntime
 from forge_puppeteer.runtime import PerformanceStage
 
+pytest.importorskip("stackchan_control.assets")
 pytestmark = pytest.mark.anyio
 
 NEUTRAL = [
