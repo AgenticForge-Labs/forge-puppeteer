@@ -1,10 +1,12 @@
 # StackChan Control SDK → Forge Puppeteer MCP
 
-**Implementation state:** Software work on `agent/stackchan-native-mcp-integration`.
-This is an independent, **unmerged draft** while SO-ARM101 SDK cleanup
-PR #99 is open. No StackChan firmware, connected USB device, physical
-motion or production credentials have been used. Local tests and
-installed-wheel / PTY acceptance remain outstanding.
+**Implementation state (2026-11-02):** The native StackChan MCP provider
+is merged into Puppeteer's `main` through PR #7. PR #12 adds its
+personality-neutral conversation behavior packs (talk/listen/idle/yes/no)
+using the same provider and installed StackChan SDK. Software CI does not
+qualify connected firmware, real USB motion, physical STOP or settling.
+Local installed-wheel, PTY and supervised hardware acceptance remain
+outstanding, and will be bundled into the planned final Codex handoff.
 
 ## Product boundary
 
@@ -27,15 +29,16 @@ stackchan-control ExternalControl + RoutedSerialClient
 operator-selected ESP32-S3 external-control firmware, protocol 1.0
 ```
 
-## Implemented on this branch
+## Implemented in the merged native MCP provider (PR #7)
 
-- **Actual SDK API reconciliation:** native `ExternalControl._generation()`
-  returns generation and stop event. Existing `update_face`,
-  `move_head` and `update_lights` accept `_generation=`, not
-  `expected_generation=`. Native `play_asset` requires pinned
-  `expected_revision` and uses its own generation fence; Puppeteer
-  no longer passes a nonexistent parameter to it. Do not mistake
-  fake-adapter compatibility for a working installed SDK integration.
+- **SDK public execution-generation contract:** the current SDK exposes
+  `execution_state().generation` and accepts `expected_generation=`
+  for guarded `update_face`, `move_head`, `update_lights`,
+  `update_neohex` and pinned `play_asset`. The earlier private
+  `_generation` method and legacy keyword remain compatibility details,
+  not Puppeteer's public dependency. Native playback requires an exact
+  `expected_revision`, and firmware events are not measured settling.
+  Integration tests use the actual current SDK package.
 - **Operator grants on every surface:** direct Python provider
   `validate` and `execute` now enforce the same pinned tool
   allowlist used by MCP. Read-only inspection may run without a
@@ -99,14 +102,13 @@ a requirement of either SDK or Puppeteer MCP.
 ## Acceptance checklist for local Codex (no physical robot)
 
 Repositories:
-- `AgenticForge-Labs/forge-puppeteer`, branch
-  `agent/stackchan-native-mcp-integration`, **exact head from PR**.
-- `AgenticForge-Labs/stackchan-control-sdk` main SHA
-  `f92499bf59d072d7b2c1e514dae737d26c2ebc3a`
-  or newer **verified main**, installed as version 0.3.0.
-- SO-ARM101 SDK PR #99 is an unrelated **open dependency gate** for
-  the overall three-robot program; do not merge this draft
-  behind it until its acceptance is resolved.
+- `AgenticForge-Labs/forge-puppeteer`, merge PR #7 for MCP provider and
+  PR #12 for native conversation pack authoring (use exact merged SHAs
+  when making the final local Codex handoff).
+- `AgenticForge-Labs/stackchan-control-sdk` verified `main`
+  `391ccb9b5ff777fbd88df6a97e2477161a34c7ec` (SDK v0.3.0).
+- SO-ARM101 deterministic choreography is a **different** SDK PR 3,
+  not a prerequisite to running standalone StackChan tests.
 
 ```bash
 cd ~/code/stackchan-control-sdk
@@ -136,17 +138,12 @@ commands, test counts/failures and any unqualified cases.
 
 ## Explicit follow-up limitations
 
-Native `ExternalControl._generation` is currently a
-SDK-private method, not a documented public API. It is used
-here solely to match the **real** current installed SDK.
-For the eventual stable cross-vendor MCP contract, expose a
-public stop-generation snapshot and an optional caller-
-supplied preflight generation in **StackChan Control SDK**,
-including replay/NeoHEX, before claiming hard cancellation
-or reconnect safety. The current code validates generation
-at preparation boundaries and the SDK checks generation
-inside native operations, but cannot prove an atomic stop-
-versus-replay handoff in every possible timing window.
+The SDK now exposes a public `execution_state()` generation
+snapshot and optional `expected_generation` parameters for guarded
+native operations; the Puppeteer provider uses those instead of a
+private `_generation` call. This strengthens preflight fencing but
+is **not** proof of physical STOP, servo settling or safety-rated
+shutdown across firmware outages and power loss.
 
 Firmware host-loss/reconnect/watchdog, servo settling
 measurement, physical STOP latency and true exclusive device

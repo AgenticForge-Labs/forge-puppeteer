@@ -2,7 +2,7 @@
 
 > **Goal:** Give an existing AI agent a natural physical presence through standard, discoverable MCP capabilities. Use the same performance primitives for live interaction and authored Forge Studios scripts.
 
-**Status (2026-11-02):** The talking/idle fake-driver subset (PR #8) and fake-only `forge.embodiment.v1` MCP reference (PR #10) are merged on `main`. PR #11 proposes the separate software-only `forge.behavior.v1` program catalog and `ConversationEnsemble` built on the existing ExecutionRuntime; see [Conversation behavior programs](CONVERSATION_BEHAVIOR_PROGRAMS.md). Native SDK behaviors, the ensemble MCP entrypoint and Conversationalist integration remain the next dependent PRs. 4G is a conversation identity, not a device-specific movement profile.
+**Status (2026-11-02):** The talking/idle fake-driver subset (PR #8) and fake-only `forge.embodiment.v1` MCP reference (PR #10) are merged on `main`. PR #11 merged the persona-independent `forge.behavior.v1` catalog and `ConversationEnsemble`; see [Conversation behavior programs](CONVERSATION_BEHAVIOR_PROGRAMS.md). PR #12 proposes native Reachy/StackChan behavior pack authors and immutable Reachy recording import. The ensemble MCP entrypoint, SO-ARM choreography and Conversationalist integration remain dependent PRs. 4G is a conversation identity, not a device-specific movement profile.
 
 ## Scope and boundaries
 
