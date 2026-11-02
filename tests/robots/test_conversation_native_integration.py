@@ -15,7 +15,7 @@ import pytest
 from forge_puppeteer.behavior_contract import EnsemblePresence
 from forge_puppeteer.conversation_ensemble import ConversationEnsemble
 from forge_puppeteer.conversation_native import (
-    reachy_conversation_pack,
+    reachy_pack_from_catalog,
     stackchan_conversation_pack,
 )
 from forge_puppeteer.devices.reachy import ReachyCatalog, ReachyPlaybackProvider
@@ -141,12 +141,9 @@ async def test_reachy_and_stackchan_execute_same_conversation_through_native_ada
     )
     await stack.connect("fake-port")
     try:
-        rev = catalog.revision
-        ids = [a.id.split("/", 1)[1] for a in await catalog.list_assets()]
         packs = [
-            reachy_conversation_pack(
-                "reachy", neutral_head=NEUTRAL, recording_revision=rev,
-                available_recordings=ids, breath_amplitude_m=0.0,
+            await reachy_pack_from_catalog(
+                "reachy", catalog, neutral_head=NEUTRAL, breath_amplitude_m=0.0,
             ),
             stackchan_conversation_pack("stackchan"),
         ]
