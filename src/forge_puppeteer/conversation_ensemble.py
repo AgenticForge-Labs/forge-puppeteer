@@ -69,6 +69,8 @@ class ConversationEnsemble:
         self._tasks = None
         self._slots: dict[str, _Slot] = {}
         self._blocked: set[str] = set()
+        self._owned: set[str] = set()
+        self._unavailable: dict[str, str] = {}
         self._session: str | None = None
         self._state: Presence = "disconnected"
         self._sequence = -1
@@ -94,6 +96,7 @@ class ConversationEnsemble:
                 with anyio.CancelScope(shield=True):
                     async with self._lock:
                         await self._stop_slots(tuple(self._slots))
+                        self._release_owners()
                 self._tasks = None
                 tasks.cancel_scope.cancel()
 
@@ -108,9 +111,13 @@ class ConversationEnsemble:
             "performers": {
                 name: {
                     "status": "blocked" if name in self._blocked else (
-                        self._slots[name].status if name in self._slots else "idle"
+                        self._slots[name].status if name in self._slots else (
+                            "unavailable" if name in self._unavailable else "idle"
+                        )
                     ),
-                    "evidence": self._slots[name].evidence if name in self._slots else "no action",
+                    "evidence": self._slots[name].evidence if name in self._slots else (
+                        self._unavailable.get(name, "no action")
+                    ),
                     "action_id": self._slots[name].last_action_id if name in self._slots else None,
                 }
                 for name in self.packs
@@ -141,13 +148,20 @@ class ConversationEnsemble:
             self._last_seen = anyio.current_time()
             self._expired = False
             self._state = event.state
-            if event.state != previous or event.interrupted:
+            transition = event.state != previous or event.interrupted
+            if transition:
                 await self._stop_slots(tuple(self._slots))
-                if event.state != "disconnected":
-                    for name in self.packs:
-                        self._spawn(name, event.state, f"{event.session_id}-{event.sequence}")
             if event.state == "disconnected":
+                self._release_owners()
                 self._session = None
+            else:
+                # Exclusive runtime ownership prevents an automatic device-wide
+                # STOP from interrupting an unrelated manipulation controller.
+                # A busy performer is skipped, not stopped or auto-retired.
+                for name in self.packs:
+                    newly_owned = self._acquire_owner(name)
+                    if transition or newly_owned:
+                        self._spawn(name, event.state, f"{event.session_id}-{event.sequence}")
             return {"outcome": "accepted", **self.snapshot()}
 
     async def express(
@@ -176,6 +190,8 @@ class ConversationEnsemble:
                 return {"outcome": "denied", "reason": "reserved_presence_state", **self.snapshot()}
             if any(n in self._blocked for n in names):
                 return {"outcome": "denied", "reason": "performer_quarantined", **self.snapshot()}
+            if any(n not in self._owned for n in names):
+                return {"outcome": "denied", "reason": "performer_not_owned", **self.snapshot()}
             if any(expression not in self.packs[n].behaviors for n in names):
                 return {"outcome": "unsupported", "reason": "unmapped_expression", **self.snapshot()}
             if any(self.packs[n].behaviors[expression].mode != "once" for n in names):
@@ -191,8 +207,33 @@ class ConversationEnsemble:
                 self._spawn(name, expression, action_id, resume=True)
             return {"outcome": "accepted", **self.snapshot()}
 
+    def _acquire_owner(self, name: str) -> bool:
+        if name in self._owned or name in self._blocked or self._session is None:
+            return False
+        try:
+            self.runtime.acquire_control(name, self.caller_id, self._session)
+        except ExecutionError:
+            self._unavailable[name] = "runtime_owner_or_resources_busy"
+            return False
+        self._unavailable.pop(name, None)
+        self._owned.add(name)
+        return True
+
+    def _release_owners(self) -> None:
+        if self._session is None:
+            return
+        for name in tuple(self._owned):
+            if name in self._blocked:
+                continue  # Preserve authority/quarantine until deliberate reconciliation.
+            try:
+                self.runtime.release_control(name, self.caller_id, self._session)
+            except ExecutionError:
+                self._blocked.add(name)
+                continue
+            self._owned.remove(name)
+
     def _spawn(self, name: str, behavior: str, action_id: str, *, resume: bool = False):
-        if name in self._blocked or self._session is None:
+        if name in self._blocked or name not in self._owned or self._session is None:
             return
         pattern = self.packs[name].behaviors.get(behavior)
         if pattern is None:
@@ -312,6 +353,7 @@ class ConversationEnsemble:
                 if (self._session is not None and self._last_seen is not None
                         and anyio.current_time() - self._last_seen >= self.presence_ttl_s):
                     await self._stop_slots(tuple(self._slots))
+                    self._release_owners()
                     self._session = None
                     self._state = "disconnected"
                     self._expired = True
