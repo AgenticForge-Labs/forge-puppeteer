@@ -280,11 +280,14 @@ class ConversationEnsemble:
                     cue_id=f"{behavior}:{cycle}:{index}",
                     asset_id=cue.asset_id, asset_revision=cue.asset_revision,
                 )
-                slot.pending = True
                 slot.last_action_id = request.id
+                # Runtime.submit validates authority and resource ownership BEFORE
+                # it admits the request. Never send device STOP when that admission
+                # was denied: another controller may own the robot.
                 await self.runtime.submit(request)
+                slot.pending = True
                 record = await self.runtime.wait(request.id)
-                slot.pending = False
+                slot.pending = record.state == ActionState.UNKNOWN
                 slot.action_count += 1
                 if record.state != ActionState.COMPLETED:
                     slot.status = "blocked" if record.state == ActionState.UNKNOWN else "unavailable"
