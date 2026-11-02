@@ -93,3 +93,25 @@ Every physical take should retain stable production/episode/scene/shot/take IDs 
 ## Secrets and safety
 
 Never commit credentials, Wi-Fi/device secrets, private network addresses, tokens, or local calibration secrets. Do not weaken safety limits for convenience or autonomous throughput.
+
+
+## Shared conversational behavior implementation (2026-11-02)
+
+- 4G is a conversation/persona name, **not** a Reachy, StackChan or SO-ARM
+  hardware identity. The same conversational source may address all three.
+  Do not encode persona prompts, voice models, Platform tools or company
+  permissions inside device behavior packs.
+- `forge.behavior.v1` and `ConversationEnsemble` are the PR 1 semantic
+  authoring and orchestration foundation. Reuse the existing
+  `ExecutionRuntime`, action IDs, journal, resource locks and provider
+  permission checks; do not add a second servo or MCP execution authority.
+- A procedural loop is a finite SDK-validated cue repeated only while the
+  host session remains fresh. Never approximate untrusted agent jog limits
+  by chaining tiny commands, or infer physical STOP from task cancellation.
+- When command admission is denied by resource ownership, **never** send an
+  automatic device STOP that could disrupt a manipulation controller.
+  Only potentially dispatched work owned by this coordinator warrants
+  its existing STOP/HOLD escalation path.
+- The new foundation is software-only until the next PRs bind each robot's
+  native SDK. Conversationalist remains an optional caller; standalone
+  releases must not import it or AgenticForge Platform to run robots.
