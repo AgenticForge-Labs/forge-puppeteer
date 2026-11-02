@@ -132,5 +132,5 @@ def test_launcher_denies_two_physical_robots_claiming_same_serial_port(tmp_path)
         "human_lease_path": str(tmp_path / "operator-lease.json"),
         "physical_authority": "I_AUTHORIZE_ATTENDED_PHYSICAL_CHOREOGRAPHY",
     })
-    with pytest.raises(ValueError, match="same serial port"):
+    with pytest.raises(ValueError, match="share one serial port"):
         EnsembleConfig.model_validate(data)
