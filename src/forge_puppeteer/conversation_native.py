@@ -65,7 +65,7 @@ def _head(
         for i in range(3)
     ]
     result = [
-        [sum(base[i][k] * local[k][j] for k in range(3)) for j in range(3))
+        [sum(base[i][k] * local[k][j] for k in range(3)) for j in range(3)]
          + [float(base[i][3]) + (vertical_m if i == 2 else 0.0)]
         for i in range(3)
     ]
