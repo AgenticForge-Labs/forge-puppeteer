@@ -25,7 +25,7 @@ from soarm101_motion.agent_control import AgentAuthorityStore
 from soarm101_motion.broker import AgentMotionRates
 from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.broker_watchdog import BrokerWatchdog
-from soarm101_motion.choreography import ChoreographyPolicy
+from soarm101_motion.choreography import ChoreographyPolicy, preflight_choreography
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS
 
@@ -166,6 +166,11 @@ def arm_binding(sdk):
 
 def test_soarm_pack_is_pinned_and_persona_free(sdk):
     provider, pack, programs = arm_binding(sdk)
+    # The source SDK must approve each full authored path before the
+    # ensemble attempts any hardware dispatch; error type remains visible.
+    arm = sdk[0]._session
+    for program in programs.values():
+        preflight_choreography(arm, program, provider.policy)
     assert pack.revision == pack.content_revision()
     assert "4g" not in pack.model_dump_json().lower()
     assert "yes" in pack.behaviors and "no" in pack.behaviors
