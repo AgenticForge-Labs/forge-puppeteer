@@ -125,7 +125,9 @@ class EnsembleConfig(BaseModel):
 def soarm_native_binding(config: SOARMEnsembleConfig):
     """Build ONLY exact source-controlled reviewed programs and native policy."""
     from soarm101_motion.choreography import (
-        ChoreographyPolicy, JointChoreography, JointFrame,
+        ChoreographyPolicy,
+        JointChoreography,
+        JointFrame,
     )
 
     programs = {
