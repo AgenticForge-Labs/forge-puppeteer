@@ -266,3 +266,15 @@ The default remains `legacy_size` to preserve already-reviewed behavior.
 Blink and left/right eye glances are added as finite face-only expressions.
 None of these choices enlarges the screen; the new firmware scale option is
 independent and remains unapproved on the connected unit.
+
+
+### Optional StackChan face enlargement
+
+On SDK **0.4.0** and compatible EXT CONTROL firmware, StackChan's whole face
+can be shown at **100%** (normal, new firmware default) or **170%** (the
+previous enlarged filming look). Puppeteer's `face_scale_update` exposes
+this as an explicitly authorized, journaled display action with native SDK
+capability checks. Older firmware supports existing expressions unchanged;
+face scale is neither an automatic startup setting nor inferred from speech.
+Physical display acceptance remains pending. See
+[StackChan native MCP](docs/STACKCHAN_NATIVE_MCP.md).
