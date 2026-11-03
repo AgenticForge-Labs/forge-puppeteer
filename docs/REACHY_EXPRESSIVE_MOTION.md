@@ -33,6 +33,33 @@ associated audio disabled; yes/no are unchanged.
 
 ## Operator settings
 
+### Adapter-owned daemon and startup wake-up
+
+Local Reachy SDK deployments may configure the generic Puppeteer daemon owner
+with an explicit argument vector, working directory, readiness timeout and
+optional log file. It reuses an available endpoint, starts the configured
+process only when absent, checks endpoint and SDK-reported hardware identity,
+and keeps a child daemon running after a normal room shutdown by default. It
+does not kill an existing process, restart a failed process or infer hardware
+calibration. Remote daemons remain supervised at their device host.
+
+The optional `reachy_startup_behavior: "wake_up_if_sleeping"` adds one
+Puppeteer-owned startup action to the behavior pack. It runs on the first
+presence event in the room, not when the daemon starts, and requires an
+operator-granted `wake_up` operation. The adapter uses the pinned SDK's own
+sleep-pose check and `robot.wake_up()` sequence; it does not derive neutral
+from the pose found at connection time. The neutral head transform should be
+the SDK startup identity transform, which is also the target of that sequence.
+With Puppeteer's `media_backend="no_media"`, the SDK wake-up sound is
+unavailable; head and antenna movement are still handled by the SDK sequence.
+SDK return is action evidence, not a physical settling or STOP acknowledgment.
+
+Keep daemon startup wake disabled (`--no-wake-up-on-start`) so only the
+Puppeteer adapter owns the startup movement. A missing or incompatible daemon
+fails readiness checks before the performer is exposed. Do not enable the
+startup option until its motion authority and SDK sleep-state behavior have
+been reviewed for the connected robot.
+
 Merge these fields into an existing, reviewed native ensemble JSON
 configuration (do **not** replace its identity, authorization or SDK fields):
 
@@ -126,8 +153,39 @@ SDK completion.
 
 ## Next dependent phase
 
-After this branch is physically qualified and merged, add fine-grained
-outgoing audio/playout timing at the LiveKit boundary, use the pinned
-Reachy `speech_tapper` algorithm or compatible SDK primitive, and compose
-audio-driven offsets under the **same** motion owner. Do not run a second
-controller or publish a raw-target LLM tool to accomplish lip-sync.
+The pinned Reachy SDK 1.10.0rc5 includes `motion/speech_tapper.py` and
+`motion/head_wobbler.py`. `SwayRollRT` analyzes mono float32 PCM using a 20 ms
+RMS frame every 50 ms, a VAD threshold with hysteresis and attack/release, and
+a clipped loudness envelope. Its oscillator offsets are scaled by that
+envelope. `HeadWobbler` accepts a monotonic playback-start timestamp, schedules
+the offsets on 50 ms hops, invalidates pending callbacks by generation on stop,
+and emits zero offsets. The local GStreamer path feeds it from a `sync=True`
+appsink at the buffer PTS and timestamps the callback with
+`time.monotonic_ns()`; this is local pipeline scheduling, not a measurement of
+sound at a browser speaker. The current `ReachySDKProvider` uses
+`media_backend="no_media"`, so the SDK audio path is not active.
+
+Do not call `ReachyMini.enable_wobbling()` from Puppeteer: it writes speech
+offset commands outside `ExecutionRuntime`, and SDK daemon-side audio may
+create a second motion source. Reuse the tapper's bounded analysis only behind
+Puppeteer's single performer owner, with SDK targets submitted through the
+existing adapter and runtime. Keep a single long-lived, interruptible action
+for the envelope stream instead of one journaled action per audio frame.
+
+The installed LiveKit `AudioOutput` exposes `PlaybackStartedEvent(created_at)`,
+`PlaybackProgressedEvent(started_at, offset, duration)` and
+`PlaybackFinishedEvent(playback_position, interrupted, synchronized_transcript)`.
+The Conversationalist currently subscribes to start/finish only. These server
+output events describe its track queue and playout accounting; they do not
+contain PCM loudness or prove browser acoustic playout. The exact next PR is in
+`forge-conversationalist`, titled **“Expose bounded outgoing speech envelope
+for Puppeteer”**: add an opt-in, bounded outgoing-PCM loudness envelope
+to the existing output integration, with sequence, sample interval and honest
+monotonic timing metadata, while preserving the existing one-sink audio path
+and interruption semantics. Its follow-up Puppeteer PR should consume only
+that authenticated envelope, apply rate and amplitude bounds, shape it through
+the reusable speech behavior, and report action evidence. Browser speaker
+timing remains estimated until measured against browser output timestamps.
+
+Neither PR should enable audio-reactive motion by default or on hardware before
+the speaker-to-motion delay, stop behavior and safe envelope are measured.

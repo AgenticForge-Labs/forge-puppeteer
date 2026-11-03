@@ -43,6 +43,12 @@ def author_config(
             "sdk_version": "1.10.0rc5",
             "host": "127.0.0.1", "daemon_port": 8000,
             "connection_mode": "localhost_only",
+            "daemon": {
+                "command": ["REVIEW_REQUIRED_REACHY_DAEMON_LAUNCHER"],
+                "startup_timeout_s": 45,
+                "persist_on_close": True,
+            },
+            "expected_daemon_hardware_id": "REVIEW_REQUIRED_READ_FROM_DAEMON",
         },
         "stackchan": {
             "backend": "stackchan_sdk", "device": "stackchan",

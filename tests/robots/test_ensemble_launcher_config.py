@@ -55,6 +55,8 @@ def config_data(tmp_path):
             "manifest": str(tmp_path / "emotions.manifest.json"),
             "sdk_version": "1.10.0rc5",
             "host": "127.0.0.1", "connection_mode": "localhost_only", "daemon_port": 8000,
+            "daemon": {"command": ["/bin/true"]},
+            "expected_daemon_hardware_id": "test-hardware",
         },
         "stackchan": {
             "backend": "stackchan_sdk", "device": "stackchan",
@@ -119,6 +121,19 @@ def test_reachy_expressive_requires_native_compound_grant_and_reviewed_neutral(t
     only["reachy_neutral_antennas_rad"] = [1.1, 0.1]
     with pytest.raises(ValueError, match="antenna motion"):
         ReachyOnlyEnsembleConfig.model_validate(only)
+
+
+def test_reachy_startup_behavior_requires_explicit_wake_up_grant(tmp_path):
+    data = config_data(tmp_path)
+    data["reachy_startup_behavior"] = "wake_up_if_sleeping"
+    with pytest.raises(ValueError, match="explicit wake_up grant"):
+        EnsembleConfig.model_validate(data)
+    data["reachy"]["allowed_tools"].append("wake_up")
+    assert EnsembleConfig.model_validate(data).reachy_startup_behavior == "wake_up_if_sleeping"
+
+    only = {k: v for k, v in data.items() if k not in {"stackchan", "soarm101"}}
+    only["schema_version"] = 2
+    assert ReachyOnlyEnsembleConfig.model_validate(only).reachy_startup_behavior == "wake_up_if_sleeping"
 
 
 def test_reachy_only_launcher_starts_without_other_device_providers(tmp_path, monkeypatch):

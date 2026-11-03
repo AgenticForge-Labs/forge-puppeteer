@@ -15,6 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..daemon_lifecycle import ManagedDaemon, ManagedDaemonConfig
 from ..execution import ActionRequest, Completion, ExecutionRuntime, StopResult
 from ..robot_contracts import AssetDescriptor, ControlDescriptor, DeviceDescriptor
 from ..runtime import PerformanceStage
@@ -73,6 +74,8 @@ class ServerConfig(BaseModel):
     host: str | None = None
     connection_mode: str | None = None
     daemon_port: int | None = None
+    daemon: ManagedDaemonConfig | None = None
+    expected_daemon_hardware_id: str | None = None
     # Restricted Reachy mode exposes only exact operator-pinned recorded moves.
     # It deliberately does not accept caller-selected native pose/joint targets.
     restricted_actions: bool = False
@@ -106,6 +109,13 @@ class ServerConfig(BaseModel):
                     )
         if len({(move.asset_id, move.revision) for move in self.approved_moves}) != len(self.approved_moves):
             raise ValueError("approved_moves contains duplicate asset pins")
+        if self.backend == "reachy_sdk":
+            if not self.expected_daemon_hardware_id:
+                raise ValueError("Reachy SDK requires expected_daemon_hardware_id")
+            if self.connection_mode == "localhost_only" and self.daemon is None:
+                raise ValueError("local Reachy SDK requires adapter-owned daemon configuration")
+            if self.connection_mode == "network" and self.daemon is not None:
+                raise ValueError("network Reachy daemon must be supervised at its device host")
         return self
 
 
@@ -223,16 +233,22 @@ class ReachySDKProvider:
 
     _TOOLS = frozenset({
         "device_info", "device_state", "list_assets", "action_lookup",
-        "play_move", "head_pose", "antenna_targets", "pose_and_antennas", "action_cancel", "device_stop",
+        "play_move", "head_pose", "antenna_targets", "pose_and_antennas",
+        "wake_up", "action_cancel", "device_stop",
     })
 
-    def __init__(self, config: ServerConfig, *, robot_factory=None, catalog_factory=None):
+    def __init__(
+        self, config: ServerConfig, *, robot_factory=None, catalog_factory=None,
+        daemon_factory=None,
+    ):
         if config.physical_authority != "I_AUTHORIZE_REACHY_CONTROL":
             raise ValueError("Reachy deployment requires explicit physical_authority declaration")
         if not config.asset_root or not config.manifest:
             raise ValueError("Reachy SDK backend requires asset_root and manifest")
         if not config.host or not config.daemon_port:
             raise ValueError("Reachy SDK backend requires explicit host and daemon_port")
+        if not config.expected_daemon_hardware_id:
+            raise ValueError("Reachy SDK backend requires expected_daemon_hardware_id")
         if config.connection_mode not in {"localhost_only", "network"}:
             raise ValueError("Reachy connection_mode must be localhost_only or network")
         if config.connection_mode == "localhost_only" and config.host not in {"localhost", "127.0.0.1", "::1"}:
@@ -244,7 +260,7 @@ class ReachySDKProvider:
             raise ValueError(f"unsupported Reachy allowed_tools: {sorted(unknown)}")
         if config.restricted_actions and set(config.allowed_tools) & {"head_pose", "antenna_targets", "pose_and_antennas"}:
             raise ValueError("restricted Reachy mode cannot grant arbitrary native targets")
-        if set(config.allowed_tools) & {"play_move", "head_pose", "antenna_targets", "pose_and_antennas", "action_cancel", "device_stop"} and config.physical_authority != "I_AUTHORIZE_REACHY_CONTROL":
+        if set(config.allowed_tools) & {"play_move", "head_pose", "antenna_targets", "pose_and_antennas", "wake_up", "action_cancel", "device_stop"} and config.physical_authority != "I_AUTHORIZE_REACHY_CONTROL":
             raise ValueError("Reachy motion tools require explicit physical authority")
         try:
             from importlib.metadata import version
@@ -269,6 +285,11 @@ class ReachySDKProvider:
         self.grants = frozenset(config.allowed_tools)
         self._provider_type = ReachyPlaybackProvider
         self._robot_factory = robot_factory
+        self._daemon = None
+        if config.daemon is not None:
+            self._daemon = (daemon_factory or ManagedDaemon)(
+                config.daemon, host=config.host, port=config.daemon_port,
+            )
         self._adapter = None
         self._robot = None
 
@@ -282,13 +303,27 @@ class ReachySDKProvider:
             factory = ReachyMini
         else:
             factory = self._robot_factory
-        # The pinned constructor connects immediately; never spawn a daemon and
-        # never use auto/mDNS fallback. Create and destroy it on worker threads.
-        robot = await asyncio.to_thread(factory, host=self.config.host,
-            port=self.config.daemon_port, connection_mode=self.config.connection_mode,
-            spawn_daemon=False, use_sim=False, media_backend="no_media")
-        self._robot = robot
+        # The adapter owns local daemon readiness before opening the SDK client.
+        # It never asks the SDK convenience constructor to spawn/kill processes.
+        if self._daemon is not None:
+            await self._daemon.ensure_running()
+        robot = None
         try:
+            robot = await asyncio.to_thread(factory, host=self.config.host,
+                port=self.config.daemon_port, connection_mode=self.config.connection_mode,
+                spawn_daemon=False, use_sim=False, media_backend="no_media")
+            self._robot = robot
+            client = getattr(robot, "client", None)
+            if client is not None:
+                status = await asyncio.to_thread(client.get_status, True, 5.0)
+                backend = getattr(status, "backend_status", None)
+                state = getattr(status, "state", None)
+                state = getattr(state, "value", state)
+                if (state != "running"
+                        or backend is None or not backend.ready
+                        or status.simulation_enabled is not False
+                        or status.hardware_id != self.config.expected_daemon_hardware_id):
+                    raise RuntimeError("Reachy daemon identity or readiness check failed")
             # Adapter initialization is expected to be local-only, but keep the
             # just-opened SDK connection covered if it ever raises.
             self._adapter = self._provider_type(
@@ -301,10 +336,13 @@ class ReachySDKProvider:
             yield
         finally:
             try:
-                await asyncio.to_thread(robot.__exit__, None, None, None)
+                if robot is not None:
+                    await asyncio.to_thread(robot.__exit__, None, None, None)
             finally:
                 self._adapter = None
                 self._robot = None
+                if self._daemon is not None:
+                    await self._daemon.close()
 
     async def permitted(self, tool: str) -> bool:
         return tool in self.grants
@@ -321,7 +359,23 @@ class ReachySDKProvider:
         adapter = self._adapter
         if adapter is None:
             raise RuntimeError("Reachy SDK session is not active")
-        return getattr(adapter, name)
+        value = getattr(adapter, name)
+        if not callable(value) or self._daemon is None:
+            return value
+        import inspect
+
+        # ExecutionRuntime calls resources_for synchronously while preparing
+        # reservations. Preserve that contract; only SDK-facing async calls
+        # need an endpoint liveness probe before dispatch.
+        if not inspect.iscoroutinefunction(value):
+            return value
+
+        async def checked(*args, **kwargs):
+            import asyncio
+            await asyncio.to_thread(self._daemon.assert_alive)
+            return await value(*args, **kwargs)
+
+        return checked
 
 
 class BrokerProvider:

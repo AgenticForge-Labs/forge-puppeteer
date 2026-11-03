@@ -107,6 +107,7 @@ def reachy_conversation_pack(
     expression_style: Literal["classic", "expressive"] = "classic",
     neutral_antennas_rad: tuple[float, float] | None = None,
     antenna_sway_rad: float = 0.18,
+    wake_up_if_sleeping: bool = False,
 ) -> PerformerBehaviors:
     """Author Reachy motion using its existing native SDK adapter operations.
 
@@ -261,7 +262,14 @@ def reachy_conversation_pack(
                 (_reachy_move(0.0, recording, recording_revision),),
                 source="recorded",
             )
-    return PerformerBehaviors.author(performer_id, patterns)
+    startup = (
+        BehaviorPattern(
+            source="sequence", mode="once",
+            cues=(_cue(0.0, "wake_up"),),
+        )
+        if wake_up_if_sleeping else None
+    )
+    return PerformerBehaviors.author(performer_id, patterns, startup=startup)
 
 
 async def reachy_pack_from_catalog(
@@ -277,6 +285,7 @@ async def reachy_pack_from_catalog(
     expression_style: Literal["classic", "expressive"] = "classic",
     neutral_antennas_rad: tuple[float, float] | None = None,
     antenna_sway_rad: float = 0.18,
+    wake_up_if_sleeping: bool = False,
 ) -> PerformerBehaviors:
     """Resolve available recordings only from an already-verified ReachyCatalog.
 
@@ -304,6 +313,7 @@ async def reachy_pack_from_catalog(
         expression_style=expression_style,
         neutral_antennas_rad=neutral_antennas_rad,
         antenna_sway_rad=antenna_sway_rad,
+        wake_up_if_sleeping=wake_up_if_sleeping,
     )
 
 

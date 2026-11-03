@@ -27,6 +27,7 @@ from .robot_contracts import ActionState
 @dataclass
 class _Slot:
     scope: anyio.CancelScope
+    behavior: str = ""
     expression_active: bool = False
     done: anyio.Event = field(default_factory=anyio.Event)
     status: str = "starting"
@@ -84,6 +85,10 @@ class ConversationEnsemble:
         self._expired = False
         self._gesture_ids: set[str] = set()
         self._gesture_order: deque[str] = deque()
+        self._startup_pending = {
+            performer_id for performer_id, pack in self.packs.items()
+            if pack.startup is not None
+        }
 
     @asynccontextmanager
     async def run(self):
@@ -136,6 +141,8 @@ class ConversationEnsemble:
                         behavior for behavior in ("idle", "listening", "speaking")
                         if behavior in self.packs[name].behaviors
                     ),
+                    "startup_behavior": self.packs[name].startup is not None,
+                    "startup_pending": name in self._startup_pending,
                 }
                 for name in self.packs
             },
@@ -185,8 +192,15 @@ class ConversationEnsemble:
                 # A busy performer is skipped, not stopped or auto-retired.
                 for name in self.packs:
                     newly_owned = self._acquire_owner(name)
-                    if (transition or newly_owned) and name not in self._slots:
-                        self._spawn(name, event.state, f"{event.session_id}-{event.sequence}")
+                    if name in self._owned and (transition or newly_owned) and name not in self._slots:
+                        if name in self._startup_pending:
+                            self._startup_pending.discard(name)
+                            self._spawn(
+                                name, "startup", f"{event.session_id}-{event.sequence}",
+                                resume=True,
+                            )
+                        else:
+                            self._spawn(name, event.state, f"{event.session_id}-{event.sequence}")
             return {"outcome": "accepted", **self.snapshot()}
 
     async def express(
@@ -260,11 +274,14 @@ class ConversationEnsemble:
     def _spawn(self, name: str, behavior: str, action_id: str, *, resume: bool = False):
         if name in self._blocked or name not in self._owned or self._session is None:
             return
-        pattern = self.packs[name].behaviors.get(behavior)
+        pattern = (
+            self.packs[name].startup if behavior == "startup"
+            else self.packs[name].behaviors.get(behavior)
+        )
         if pattern is None:
             return  # Missing device behavior is unsupported, never substituted.
         scope = anyio.CancelScope()
-        slot = _Slot(scope=scope, expression_active=resume)
+        slot = _Slot(scope=scope, behavior=behavior, expression_active=resume)
         self._slots[name] = slot
         self._tasks.start_soon(self._play, name, behavior, pattern, slot, action_id, resume)
 
@@ -305,16 +322,25 @@ class ConversationEnsemble:
                 if resume and name not in self._blocked and not slot.scope.cancel_called:
                     background = self.packs[name].behaviors.get(self._state)
                     if background and self._session:
+                        # A completed startup/gesture can resume a long-lived
+                        # presence loop in the same slot. Do not leave the
+                        # previous finite action's "completed" marker visible
+                        # while the next SDK action is being admitted.
+                        slot.status = "starting"
+                        slot.evidence = "resuming_presence_behavior"
                         await self._execute_pattern(
                             name, self._state, background, slot, f"{action_id}-resume"
                         )
             except anyio.get_cancelled_exc_class():
                 slot.status = "cancelling"
             except ExecutionError as exc:
-                slot.status = "unavailable" if exc.code in {
-                    "performer_busy", "ownership_busy", "permission_denied",
-                    "resource_busy", "not_authorized",
-                } else "blocked"
+                # Exceptions from submit are admission failures, before the
+                # provider can receive the action. Keep an existing confirmed
+                # unknown STOP inhibited, but do not quarantine the robot for a
+                # deterministic pre-dispatch rejection such as bad resources.
+                slot.status = "blocked" if (
+                    slot.pending or exc.code == "stop_unconfirmed"
+                ) else "unavailable"
                 slot.evidence = exc.code
             except Exception:  # noqa: BLE001 - unknown SDK outcome must quarantine
                 slot.status = "blocked"
