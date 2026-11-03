@@ -158,6 +158,20 @@ Never commit credentials, Wi-Fi/device secrets, private network addresses, token
 - Physical acceptance and audio/playback synchronization are separate
   gates. See `docs/REACHY_EXPRESSIVE_MOTION.md`.
 
+## Two-performer native ensemble
+
+- Schema v3 deliberately includes Reachy and StackChan only. It must not
+  instantiate, configure, import, or falsely report a simulated SO-ARM101
+  performer. Keep one room, one journal, one SDK session per selected robot.
+- The original v1 three-robot and v2 Reachy-only configs remain supported
+  without semantic conversion, new controller ownership or weaker grants.
+- The review-only generator cannot provide motion permission or guess
+  Reachy's neutral transform, daemon identity, StackChan serial port,
+  firmware revision, or calibration. Local Codex must verify the actual
+  hardware before any physical trial.
+- Conversationalist's validated `performer_ids` must match exactly what
+  Puppeteer advertises. Robot omission is explicit, not a startup fallback.
+
 ## Three-performer native ensemble (PR 4/5)
 
 - `mcp/ensemble_launcher.py` is the operator-configured standalone MCP

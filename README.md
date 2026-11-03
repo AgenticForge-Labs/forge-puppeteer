@@ -39,6 +39,19 @@ The playback-driven talking/idle fake-driver coordinator and **fake-only embodim
 
 **The agent decides what to communicate. Puppeteer translates that into approved behaviors. Device controllers retain authority over what can physically happen.**
 
+### Launch only the robots you have
+
+The standalone `forge-puppeteer-ensemble` now supports an operator-reviewed
+Reachy + StackChan **duo** (schema v3) without a fake/simulated SO-ARM101
+participant. It continues to support Reachy-only v2 and the original
+three-performer v1. One voice and MCP room uses one SDK connection per
+configured performer; no second motion controller is started. Use the
+review-only `scripts/author_three_robot_ensemble.py --reachy-stackchan-only`
+generator, then explicitly approve real SDK/daemon/USB identities and the
+normal motion grants before launching. See
+[Native conversational performers](docs/THREE_ROBOT_ENSEMBLE.md). This
+software does not authorize an unqualified Reachy motion or flash StackChan.
+
 ### Built today
 
 - Packaged **MCP stdio servers** with typed discovery, action, control, cancellation, and stop tools.

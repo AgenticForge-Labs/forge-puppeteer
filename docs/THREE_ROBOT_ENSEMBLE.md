@@ -1,6 +1,63 @@
-# Three native performers — PR 4 of 5
+# Native conversational performers — operator-selected deployment
 
-**Status:** Software integration on the PR 4 branch; verify the pull request merge status before treating this as current main behavior. Hardware validation is outstanding.
+**Current software state:** Reachy-only (schema v2), Reachy + StackChan duo
+(schema v3), and the original three-performer configuration (schema v1) all
+use the same `forge-puppeteer-ensemble` executable, `ConversationEnsemble`,
+`ExecutionRuntime`, journal, and SDK controllers. The v3 duo opens only
+Reachy and StackChan; it does not import/construct a simulated or physical
+SO-ARM101 SDK and does not require an SO-ARM neutral/calibration/program file.
+Hardware qualification remains a separate attended requirement.
+
+**Historical context:** The PR 4/5 architecture and its original v1
+three-performer instructions below describe the initial implementation.
+
+### Reachy + StackChan duo (schema v3)
+
+Create a **review-only** operator candidate from existing pinned Reachy
+recordings and a reviewed Reachy neutral head file:
+
+```bash
+python scripts/author_three_robot_ensemble.py \
+  --reachy-stackchan-only \
+  --reachy-manifest examples/robots/reachy/emotions.manifest.json \
+  --reachy-recordings /absolute/path/to/pinned-reachy-assets \
+  --reachy-neutral /absolute/path/to/reviewed-reachy-head.json \
+  --stackchan-port /dev/serial/by-id/OPERATOR_SELECTED_STACKCHAN_PORT \
+  --action-journal /absolute/path/to/ensemble-actions.sqlite3 \
+  --ownership-db /absolute/path/to/ensemble-owners.sqlite3 \
+  --output /absolute/path/to/reachy-stackchan-review.json
+```
+
+The script does not connect hardware, flash StackChan, start the Reachy
+daemon, or grant motion. Its generated `motion_authority`, per-robot
+`physical_authority`, Reachy daemon launcher/identity and other
+`REVIEW_REQUIRED` values must be reviewed and replaced by the operator.
+V3 requires the complete Reachy SDK controls, an actual StackChan USB port,
+and the native StackChan SDK version explicitly installed in the worker.
+The candidate uses SDK 0.4.0; firmware 0.3.0 still works for existing
+expressions but cannot accept optional `display.face_scale` operations.
+
+```bash
+forge-puppeteer-ensemble --config /absolute/path/to/operator-approved-duo.json
+```
+
+Or let a signed Conversationalist LiveKit room start this **same** executable
+by setting `PUPPETEER_ENSEMBLE_CONFIG` in its trusted worker environment.
+Do not run the standalone launcher at the same time as the worker's child:
+only one process may own each SDK/USB device. The Pollen Conversation App
+must also remain stopped while Puppeteer owns Reachy.
+
+The duo supports the same named presence, gestures, optional generated-PCM
+preview, and operator-granted `ensemble_presentation` StackChan
+`normal`/`enlarged` presets as v1. The optional display presets require
+an installed StackChan SDK 0.4.0, actual compatible firmware, and explicit
+`face_scale_update` grant; they never activate automatically. No actual
+speech-reactive hardware actuation, head/antenna settling, or shutdown sleep
+is qualified by software tests.
+
+The original v1 mode is unchanged and retains its seven SHA-pinned SO-ARM
+programs, watchdog, human lease rules and simulation default.
+
 
 ## Architecture
 

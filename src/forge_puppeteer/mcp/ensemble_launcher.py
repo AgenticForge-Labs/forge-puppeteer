@@ -1,4 +1,4 @@
-"""Operator-configured standalone three-robot ensemble stdio launcher.
+"""Operator-configured standalone native-robot ensemble stdio launcher.
 
 This is not an LLM, audio player, or Platform client. It reuses the existing
 Reachy/StackChan launcher SDK connections, one persistent SDK-host SO-ARM101
@@ -109,13 +109,13 @@ class SOARMEnsembleConfig(BaseModel):
 
 class EnsembleConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    schema_version: Literal[1]
+    schema_version: Literal[1, 3]
     motion_authority: Literal["I_AUTHORIZE_ENSEMBLE_ROBOT_MOTION"]
     reachy: ServerConfig
     stackchan: ServerConfig
     stackchan_display_presets_enabled: bool = False
     reachy_neutral_head: str
-    soarm101: SOARMEnsembleConfig
+    soarm101: SOARMEnsembleConfig | None = None
     action_journal: str
     ownership_db: str
     presence_ttl_s: float = Field(default=30, ge=1, le=3600)
@@ -128,18 +128,36 @@ class EnsembleConfig(BaseModel):
     reachy_antenna_sway_rad: float = Field(default=0.18, ge=0, le=0.26)
     reachy_breath_amplitude_m: float = Field(default=0.0, ge=0, le=0.005)
 
+    @model_validator(mode="before")
+    @classmethod
+    def require_explicit_performer_selection(cls, value):
+        # v1 is the existing three-robot contract. v3 explicitly selects
+        # Reachy + StackChan and refuses even a nullable SO-ARM record.
+        if (isinstance(value, dict) and value.get("schema_version") == 3
+                and "soarm101" in value):
+            raise ValueError("two-robot ensemble cannot declare SO-ARM101")
+        return value
+
     @model_validator(mode="after")
     def validate_ensemble(self):
         if self.reachy.backend != "reachy_sdk" or self.reachy.device != "reachy":
             raise ValueError("Reachy native SDK provider required")
         if self.stackchan.backend != "stackchan_sdk" or self.stackchan.device != "stackchan":
             raise ValueError("StackChan native SDK provider required")
-        ids = (self.reachy.instance_id, self.stackchan.instance_id, self.soarm101.instance_id)
-        if len(set(ids)) != 3:
-            raise ValueError("three unique performer IDs required")
+        if self.schema_version == 1 and self.soarm101 is None:
+            raise ValueError("three-robot ensemble requires an SO-ARM101 profile")
+        if self.schema_version == 3 and self.soarm101 is not None:
+            raise ValueError("two-robot ensemble excludes SO-ARM101")
+        ids = [self.reachy.instance_id, self.stackchan.instance_id]
+        if self.soarm101 is not None:
+            ids.append(self.soarm101.instance_id)
+        if len(set(ids)) != len(ids):
+            raise ValueError("unique performer IDs required")
         for value in (self.action_journal, self.ownership_db, self.reachy_neutral_head):
             if not value or not Path(value).is_absolute():
                 raise ValueError("action history, ownership and Reachy neutral pose require absolute paths")
+        if Path(self.action_journal).resolve() == Path(self.ownership_db).resolve():
+            raise ValueError("action journal and ownership DB must be distinct")
         if self.reachy.restricted_actions:
             raise ValueError("head expression requires Reachy's normal native SDK mode")
         _check_reachy_expression_authority(
@@ -164,7 +182,7 @@ class EnsembleConfig(BaseModel):
             )
         if self.stackchan.physical_authority != "I_AUTHORIZE_STACKCHAN_CONTROL":
             raise ValueError("StackChan expression requires operator physical authorization")
-        if (self.soarm101.mode == "attended_physical_trial"
+        if (self.soarm101 is not None and self.soarm101.mode == "attended_physical_trial"
                 and self.stackchan.port == self.soarm101.port):
             raise ValueError("StackChan and physical SO-ARM cannot share one serial port")
         return self
@@ -247,7 +265,9 @@ def soarm_native_binding(config: SOARMEnsembleConfig):
 
 
 def build_ensemble(config: EnsembleConfig):
-    """All three native providers share one action journal/ownership boundary."""
+    """The original three-performer assembly; unavailable for duo configs."""
+    if config.soarm101 is None:
+        raise ValueError("SO-ARM101 profile required for three-performer builder")
     from soarm101_motion.agent_control import AgentAuthorityStore
     from soarm101_motion.broker import AgentMotionRates
     from soarm101_motion.broker_sdk import SDKAgentExecutor
@@ -336,6 +356,36 @@ def build_ensemble(config: EnsembleConfig):
     return reachy, stackchan, arm, arm_pack, runtime, connected
 
 
+
+def build_reachy_stackchan_ensemble(config: EnsembleConfig):
+    """Two native SDK connections, one journal; no SO-ARM import or simulator.
+
+    The existing Reachy and StackChan providers are identical to the v1
+    three-performer deployment. No second controller or alternative STOP path
+    is introduced. This factory intentionally does not import soarm101_motion.
+    """
+    if config.schema_version != 3 or config.soarm101 is not None:
+        raise ValueError("explicit two-performer configuration required")
+    reachy = ReachySDKProvider(config.reachy)
+    stackchan = StackChanSDKProvider(config.stackchan)
+    runtime = ExecutionRuntime(
+        PerformanceStage(), journal_path=config.action_journal,
+        ownership_path=config.ownership_db,
+        stop_timeout=config.stop_timeout_s,
+    )
+    runtime.register(config.reachy.instance_id, reachy)
+    runtime.register(config.stackchan.instance_id, stackchan)
+
+    @asynccontextmanager
+    async def connected():
+        async with AsyncExitStack() as stack:
+            await stack.enter_async_context(reachy.connected())
+            await stack.enter_async_context(stackchan.connected())
+            yield
+
+    return reachy, stackchan, runtime, connected
+
+
 def load_config(path: str | Path) -> EnsembleConfig | ReachyOnlyEnsembleConfig:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     if isinstance(data, dict) and type(data.get("schema_version")) is int and data["schema_version"] == 2:
@@ -393,7 +443,11 @@ def serve(config_path: str | Path) -> None:
         return
     # This is intentionally a deliberate, potentially physical operator action:
     # no local discovery, no automatic launch of the Conversation App.
-    reachy, _stackchan, _arm, arm_pack, runtime, connected = build_ensemble(config)
+    if config.schema_version == 3:
+        reachy, _stackchan, runtime, connected = build_reachy_stackchan_ensemble(config)
+        arm_pack = None
+    else:
+        reachy, _stackchan, _arm, arm_pack, runtime, connected = build_ensemble(config)
     async def resolve():
         return await reachy_pack_from_catalog(
             config.reachy.instance_id, reachy.catalog,
@@ -413,8 +467,11 @@ def serve(config_path: str | Path) -> None:
     stack_pack = stackchan_conversation_pack(
         config.stackchan.instance_id, speaking_mode=config.stackchan_speaking_mode,
     )
+    packs = (reachy_pack, stack_pack) if arm_pack is None else (
+        reachy_pack, stack_pack, arm_pack,
+    )
     ensemble = ConversationEnsemble(
-        runtime, (reachy_pack, stack_pack, arm_pack),
+        runtime, packs,
         presence_ttl_s=config.presence_ttl_s,
         stop_timeout_s=config.stop_timeout_s,
     )
@@ -427,7 +484,7 @@ def serve(config_path: str | Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="forge-puppeteer-ensemble")
-    parser.add_argument("--config", required=True, help="trusted operator three-robot JSON config")
+    parser.add_argument("--config", required=True, help="trusted operator one-, two- or three-performer JSON config")
     args = parser.parse_args(argv)
     try:
         serve(args.config)
