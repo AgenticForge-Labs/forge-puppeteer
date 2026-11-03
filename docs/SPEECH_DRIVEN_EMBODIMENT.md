@@ -92,9 +92,11 @@ execute through the existing ExecutionRuntime and SDK.
   Conversationalist, preserve immediate interruption priority, room identity
   and current playback lifecycle evidence; never allow a feature queue to
   obstruct a semantic STOP event. Drop stale audio features, don't catch up.
-- Extend the existing room-owned Puppeteer MCP child with an **optional**
-  versioned envelope-ingest tool. Negotiate capability on startup. Do not
-  automatically reinterpret generated PCM as playback or issue motor commands.
+- The existing room-owned Puppeteer MCP child now exposes an **optional**
+  versioned envelope-ingest tool. Conversationalist must negotiate that
+  capability on startup and send only bounded frames. The current ingestion
+  tool is preview-only. Do not automatically reinterpret generated PCM as
+  playback or issue motor commands.
   Do not offer the envelope tool directly to the conversational LLM.
 - Establish mapping to LiveKit output playback accounting and the selected
   local EMEET speaker. Generated-PCM time by itself can lead physical sound
