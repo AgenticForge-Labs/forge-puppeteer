@@ -41,6 +41,7 @@ async def test_stackchan_mcp_typed_operations_and_asset(tmp_path):
         assert {
             "head_move",
             "face_update",
+            "face_scale_update",
             "lights_update",
             "play_asset",
             "neohex_update",
@@ -71,6 +72,32 @@ async def test_stackchan_mcp_typed_operations_and_asset(tmp_path):
                     break
                 await anyio.sleep(0.01)
         assert action["state"] == "completed"
+        scale = await session.call_tool(
+            "face_scale_update",
+            {
+                "action_id": "scale170", "caller_id": "c", "session_id": "s",
+                "parameters": {"percent": 170},
+            },
+        )
+        assert not scale.is_error
+        with anyio.fail_after(2):
+            while True:
+                scale_action = (
+                    await session.call_tool("action_lookup", {"action_id": "scale170"})
+                ).structured_content
+                if scale_action["state"] in ("completed", "failed", "unknown"):
+                    break
+                await anyio.sleep(0.01)
+        assert scale_action["state"] == "completed"
+        assert scale_action["operation"] == "face_scale"
+        bad_scale = await session.call_tool(
+            "face_scale_update",
+            {
+                "action_id": "scale-bad", "caller_id": "c", "session_id": "s",
+                "parameters": {"percent": 169},
+            },
+        )
+        assert bad_scale.is_error
         neohex = await session.call_tool(
             "neohex_update",
             {
