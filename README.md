@@ -213,3 +213,22 @@ Rich **shifting and shared autonomy** across humans, agents, and controllers is 
 **Current status:** Active development (`0.1.0` package metadata), with tested software integrations and further physical qualification required. No published package release is assumed by these instructions.
 
 **License:** This public repository does not currently include a license file. Public visibility alone does not grant general reuse or redistribution rights; a license decision is still needed before describing the project as open source.
+
+
+### Speech-driven embodiment: shared signal, different renderers
+
+A software-only, device-neutral speech-expression shaper is now available in
+src/forge_puppeteer/speech_expression.py. It consumes Conversationalist's
+forge.speech_envelope.v1 generated-PCM activity/intensity features and derives
+bounded, **unitless** mouth, antenna and six-axis gesture texture inspired by
+the pinned Pollen Reachy Conversation App. It opens no hardware and sends no motor commands. The existing room-owned
+MCP server now also advertises optional ensemble_speech_envelope for strictly
+validated, content-free feature ingestion and preview only; no native SDK or
+ExecutionRuntime motion is invoked by that tool. These channels are not angles, poses, or certified trajectories.
+
+See docs/SPEECH_DRIVEN_EMBODIMENT.md for the ordered integration plan:
+reviewed neutral/sleep shutdown, an opt-in LiveKit output PCM tap, an
+authenticated room-owned MCP ingestion path, capability-specific Reachy /
+StackChan / SO-ARM101 renderers, Platform OTel, and separate EMEET/physical
+acceptance. Do not confuse these merged-or-proposed software components with
+live speech-reactive physical movement.
