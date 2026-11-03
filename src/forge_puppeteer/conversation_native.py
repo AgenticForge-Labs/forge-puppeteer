@@ -382,4 +382,25 @@ def stackchan_conversation_pack(
         "happy": _pattern((face(0.0, mouth=35, eyes=80), head(0.35, yaw=yaw_amplitude // 2))),
         "curious": _pattern((face(0.0, mouth=0, eyes=70), head(0.35, pitch=pitch_amplitude))),
         "confused": _pattern((face(0.0, mouth=0, eyes=30), head(0.35, yaw=-yaw_amplitude // 2))),
+        # These share the device-independent expression vocabulary. StackChan
+        # renders them using its native eyes/mouth and head primitives; their
+        # final visual appearance must still be reviewed on the actual screen.
+        "concerned": _pattern((
+            face(0.0, mouth=5, eyes=25),
+            head(0.35, pitch=-pitch_amplitude // 2),
+        )),
+        "excited": _pattern((
+            face(0.0, mouth=65, eyes=85),
+            head(0.2, pitch=pitch_amplitude),
+            head(0.5, pitch=-pitch_amplitude // 2),
+            head(0.8),
+        )),
+        "surprised": _pattern((
+            face(0.0, mouth=75, eyes=95),
+            head(0.35, pitch=pitch_amplitude // 2),
+        )),
+        "sad": _pattern((
+            face(0.0, mouth=5, eyes=20),
+            head(0.35, pitch=-pitch_amplitude // 2),
+        )),
     })
