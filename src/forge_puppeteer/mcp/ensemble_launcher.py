@@ -120,7 +120,7 @@ class EnsembleConfig(BaseModel):
     stop_timeout_s: float = Field(default=5, ge=0.1, le=60)
     reachy_expression_style: Literal["classic", "expressive"] = "classic"
     reachy_neutral_antennas_rad: tuple[float, float] | None = None
-    reachy_expressive_amplitude_rad: float = Field(default=0.05, ge=0, le=0.07)
+    reachy_expressive_amplitude_rad: float = Field(default=0.09, ge=0, le=0.12)
     reachy_antenna_sway_rad: float = Field(default=0.18, ge=0, le=0.26)
     reachy_breath_amplitude_m: float = Field(default=0.0, ge=0, le=0.005)
 
@@ -174,7 +174,7 @@ class ReachyOnlyEnsembleConfig(BaseModel):
     listening_mode: Literal["tilt", "hold"] = "tilt"
     reachy_expression_style: Literal["classic", "expressive"] = "classic"
     reachy_neutral_antennas_rad: tuple[float, float] | None = None
-    reachy_expressive_amplitude_rad: float = Field(default=0.05, ge=0, le=0.07)
+    reachy_expressive_amplitude_rad: float = Field(default=0.09, ge=0, le=0.12)
     reachy_antenna_sway_rad: float = Field(default=0.18, ge=0, le=0.26)
     reachy_breath_amplitude_m: float = Field(default=0.0, ge=0, le=0.005)
 
