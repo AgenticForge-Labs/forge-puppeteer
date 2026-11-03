@@ -169,7 +169,14 @@ def test_duo_launcher_exposes_both_performers_without_synthetic_arm(tmp_path, mo
 
 
 def test_review_only_authoring_requires_no_arm_file_or_sdk(tmp_path):
-    from scripts.author_three_robot_ensemble import author_config
+    from importlib.util import module_from_spec, spec_from_file_location
+
+    source = Path(__file__).resolve().parents[2] / "scripts" / "author_three_robot_ensemble.py"
+    spec = spec_from_file_location("ensemble_review_generator", source)
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    author_config = module.author_config
 
     data = author_config(
         reachy_manifest=tmp_path / "manifest.json",
