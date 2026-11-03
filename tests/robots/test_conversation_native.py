@@ -102,11 +102,19 @@ def test_reachy_requires_operator_neutral_and_pinned_catalog():
             "reachy", neutral_head=[[1]], recording_revision=REV,
             available_recordings=("yes1", "no1"),
         )
+    # Missing yes1 is fatal; a filtered no1 now falls back to a bounded
+    # authored refusal shake instead of raising.
     with pytest.raises(ValueError):
         reachy_conversation_pack(
             "reachy", neutral_head=NEUTRAL, recording_revision=REV,
-            available_recordings=("yes1",),
+            available_recordings=("no1",),
         )
+    fallback = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1",),
+    )
+    assert all(c.operation == "head_pose" for c in fallback.behaviors["no"].cues)
+    assert max(abs(c.parameters["pose"][0][2]) for c in fallback.behaviors["no"].cues) <= 0.13
     with pytest.raises(ValueError):
         reachy_conversation_pack(
             "reachy", neutral_head=NEUTRAL, recording_revision="sha256:faked",
@@ -283,3 +291,31 @@ def test_native_weight_resting_states_close_the_mouth_after_interrupted_speech()
     for name in ("idle", "listening", "neutral"):
         face_cues = [c for c in legacy.behaviors[name].cues if c.operation == "face"]
         assert all("weight" not in c.parameters.get("mouth", {}) for c in face_cues), name
+
+
+def test_recorded_replay_envelope_rejects_fast_head_shakes():
+    from forge_puppeteer.conversation_native import (
+        recorded_move_envelope,
+        recorded_move_is_safe,
+    )
+
+    class Move:
+        def __init__(self, duration, yaw_at):
+            self.duration = duration
+            self._yaw_at = yaw_at
+
+        def evaluate(self, t):
+            yaw = self._yaw_at(t)
+            import math
+            c, s = math.cos(yaw), math.sin(yaw)
+            return ([[c, -s, 0.0, 0.0], [s, c, 0.0, 0.0],
+                     [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]], None, 0.0)
+
+    import math
+    # no1-style shake: +/-25 deg flipping in ~0.25 s.
+    fast = recorded_move_envelope(Move(2.0, lambda t: math.radians(25) * (1 if int(t / 0.25) % 2 else -1)))
+    assert fast["yaw_deg"] > 20 and fast["yaw_rate_deg_s"] > 120
+    assert not recorded_move_is_safe(fast)
+    # A small, slow gesture stays inside the envelope.
+    slow = recorded_move_envelope(Move(2.0, lambda t: math.radians(8) * math.sin(t)))
+    assert recorded_move_is_safe(slow)
