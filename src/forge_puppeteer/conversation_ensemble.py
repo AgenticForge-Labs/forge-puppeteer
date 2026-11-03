@@ -124,6 +124,18 @@ class ConversationEnsemble:
                         self._unavailable.get(name, "no action")
                     ),
                     "action_id": self._slots[name].last_action_id if name in self._slots else None,
+                    # Immutable, operator-authored catalog — never inferred
+                    # from device type, personality, or arbitrary MCP input.
+                    "behavior_revision": self.packs[name].revision,
+                    "expressions": sorted(
+                        behavior for behavior, pattern in self.packs[name].behaviors.items()
+                        if pattern.mode == "once"
+                        and behavior not in {"idle", "listening", "speaking", "disconnected"}
+                    ),
+                    "presence_behaviors": sorted(
+                        behavior for behavior in ("idle", "listening", "speaking")
+                        if behavior in self.packs[name].behaviors
+                    ),
                 }
                 for name in self.packs
             },
