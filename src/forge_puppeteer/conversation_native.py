@@ -336,10 +336,24 @@ def stackchan_conversation_pack(
     validate_stackchan_center(yaw_center, pitch_center, yaw_amplitude,
                                pitch_amplitude, head_speed)
 
-    def face(at: float, *, mouth: int = 0, eyes: int | None = None) -> BehaviorCue:
-        payload: dict[str, object] = {"mouth": {"size": mouth}}
-        if eyes is not None:
-            payload.update({"left_eye": {"weight": eyes}, "right_eye": {"weight": eyes}})
+    def face(
+        at: float, *, mouth: int | None = 0,
+        eyes: int | None = None, eye_x: int | None = None,
+    ) -> BehaviorCue:
+        payload: dict[str, object] = {}
+        if mouth is not None:
+            payload["mouth"] = {"size": mouth}
+        if eyes is not None or eye_x is not None:
+            feature: dict[str, int] = {}
+            if eyes is not None:
+                feature["weight"] = eyes
+            if eye_x is not None:
+                # Native firmware applies coordinates as an x/y pair.
+                feature.update({"x": eye_x, "y": 0})
+            payload["left_eye"] = dict(feature)
+            payload["right_eye"] = dict(feature)
+        if not payload:
+            raise ValueError("StackChan face cue must update at least one feature")
         return _cue(at, "face", **payload)
 
     def head(at: float, *, yaw: int = 0, pitch: int = 0) -> BehaviorCue:
@@ -402,5 +416,20 @@ def stackchan_conversation_pack(
         "sad": _pattern((
             face(0.0, mouth=5, eyes=20),
             head(0.35, pitch=-pitch_amplitude // 2),
+        )),
+        # Deterministic counterparts of the pinned stock BlinkModifier and
+        # IdleExpressionModifier. They update only face resources, not motors,
+        # and restore the explicitly authored default eye baseline/position.
+        "blink": _pattern((
+            face(0.0, mouth=None, eyes=25),
+            face(0.2, mouth=None, eyes=45),
+        )),
+        "glance_left": _pattern((
+            face(0.0, mouth=None, eye_x=-15),
+            face(0.4, mouth=None, eye_x=0),
+        )),
+        "glance_right": _pattern((
+            face(0.0, mouth=None, eye_x=15),
+            face(0.4, mouth=None, eye_x=0),
         )),
     })
