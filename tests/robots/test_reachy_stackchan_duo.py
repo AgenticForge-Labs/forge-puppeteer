@@ -118,7 +118,11 @@ async def test_duo_builder_connects_only_two_native_providers(tmp_path, monkeypa
 
 
 def test_duo_launcher_exposes_both_performers_without_synthetic_arm(tmp_path, monkeypatch):
-    from forge_puppeteer.behavior_contract import BehaviorCue, BehaviorPattern, PerformerBehaviors
+    from forge_puppeteer.behavior_contract import (
+        BehaviorCue,
+        BehaviorPattern,
+        PerformerBehaviors,
+    )
 
     class FakeProvider:
         def __init__(self, config):
