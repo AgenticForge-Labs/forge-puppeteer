@@ -95,6 +95,7 @@ def test_restricted_reachy_config_requires_exact_operator_asset_pins():
         ({"allowed_tools": ["device_info", "list_assets", "action_lookup", "play_move"]}, "device_stop"),
         ({"allowed_tools": ["device_info", "action_lookup", "play_move", "device_stop"]}, "list_assets"),
         ({"allowed_tools": ["device_info", "list_assets", "action_lookup", "play_move", "device_stop", "head_pose"]}, "cannot enable arbitrary"),
+        ({"allowed_tools": ["device_info", "list_assets", "action_lookup", "play_move", "device_stop", "pose_and_antennas"]}, "cannot enable arbitrary"),
         ({"ownership_db": None}, "absolute ownership_db"),
         ({"action_journal": None}, "absolute action_journal"),
         ({"ownership_db": "relative/owners.sqlite3"}, "absolute ownership_db"),
@@ -138,6 +139,16 @@ async def test_reachy_lifecycle_uses_fixed_sdk_options_and_closes(monkeypatch, t
             "use_sim": False, "media_backend": "no_media"}]
         assert await provider.permitted("play_move")
         assert not await provider.permitted("antenna_targets")
+        assert not await provider.permitted("pose_and_antennas")
+        from forge_puppeteer.execution import ActionRequest
+        head = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+        ungranted = ActionRequest(
+            id="ungranted", performer_id="reachy", caller_id="test",
+            session_id="s", operation="pose_and_antennas",
+            parameters={"pose": head, "angles_rad": [-0.17, 0.17]},
+        )
+        with pytest.raises(PermissionError, match="not operator-granted"):
+            await provider.validate(ungranted)
         assets = await provider.list_assets()
         from forge_puppeteer.execution import ActionRequest
 
