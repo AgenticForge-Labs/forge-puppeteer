@@ -171,7 +171,7 @@ def test_reachy_only_launcher_starts_without_other_device_providers(tmp_path, mo
     assert seen == ["stdio", "stdio"]
     assert resolved_kwargs[1]["expression_style"] == "expressive"
     assert resolved_kwargs[1]["neutral_antennas_rad"] == (-0.17, 0.17)
-    assert resolved_kwargs[1]["wobble_amplitude_rad"] == 0.05
+    assert resolved_kwargs[1]["wobble_amplitude_rad"] == 0.09
 
 
 @pytest.mark.parametrize("bad", [
