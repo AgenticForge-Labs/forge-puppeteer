@@ -47,12 +47,53 @@ The optional `reachy_startup_behavior: "wake_up_if_sleeping"` adds one
 Puppeteer-owned startup action to the behavior pack. It runs on the first
 presence event in the room, not when the daemon starts, and requires an
 operator-granted `wake_up` operation. The adapter uses the pinned SDK's own
-sleep-pose check and `robot.wake_up()` sequence; it does not derive neutral
-from the pose found at connection time. The neutral head transform should be
-the SDK startup identity transform, which is also the target of that sequence.
-With Puppeteer's `media_backend="no_media"`, the SDK wake-up sound is
-unavailable; head and antenna movement are still handled by the SDK sequence.
-SDK return is action evidence, not a physical settling or STOP acknowledgment.
+sleep-pose check and `robot.wake_up()` sequence. Select `"wake_up"` when the
+operator wants the same SDK sequence to run even when the current pose is
+outside the SDK sleep-pose tolerance. Both modes use the SDK-defined startup
+pose, not a pose inferred at connection time. With Puppeteer's
+`media_backend="no_media"`, the SDK wake-up sound is unavailable; head and
+antenna movement are still handled by the SDK sequence. When the sequence
+returns, Puppeteer waits for measured head, antenna and body-yaw feedback to
+converge to the SDK startup target before sampling the present head transform
+and antenna positions as the per-session neutral. This prevents a transient
+post-interpolation sample from becoming neutral. The pinned SDK startup
+sequence also targets body yaw 0.0 rad; Puppeteer retains that target because
+recorded expressions can change body yaw and `None` would leave it there.
+
+`reachy_return_to_neutral_after_expression: true` authors a `neutral_behavior`
+in the performer's behavior pack and requires
+`reachy_startup_behavior: "wake_up"` plus explicit `wake_up` and
+`pose_and_antennas` grants in the reviewed Reachy tool allowlist. The combined
+target grant remains a configuration capability for the internal authored
+neutral behavior; it does not register a raw-target MCP function.
+Puppeteer's shared conversation
+state machine runs each finite expression, runs that performer's neutral
+behavior, then resumes the latest semantic presence state. Motion-bearing
+presence changes and confirmed interruptions also pass through that authored
+neutral. A manual expression first returns active motion to neutral and then
+uses the same expression/neutral/resume sequence. The neutral step has its own
+journal action and action ID under the same exclusive performer
+owner. Reachy's adapter maps the fixed `return_to_neutral` operation to the
+head and antenna feedback sampled after startup plus the SDK startup body-yaw
+target; callers cannot provide raw targets. Other performers can author their
+own neutral behavior and use the same state-machine transition. SDK completion
+remains distinct from measured physical settling. With this option, zero-breath
+classic idle is a hold.
+
+For the pinned Reachy SDK 1.10.0rc5, `ReachyMini.goto_target()` waits for the
+daemon's `TaskProgress.finished` event. The daemon emits that event after its
+time-based `GotoMove` loop returns; that loop submits interpolated targets on
+each tick and does not wait for measured joints to settle at the endpoint.
+Therefore an action record marked `completed` proves the SDK task loop ended,
+not that the head, antennas or body yaw reached the neutral target. Puppeteer
+now samples the SDK head and antenna feedback plus the daemon's measured body
+yaw after startup and neutral returns. It requires three consecutive samples
+within 10 mm head translation, 0.05 rad head rotation, and 0.05 rad per antenna
+and body yaw, within two seconds. Missing feedback or a timeout leaves the
+action outcome unknown and quarantines the performer; the adapter does not
+retry or claim that STOP was confirmed. These are software acceptance bounds,
+not calibration values or proof that the tolerances are suitable for this
+physical robot. Attended hardware qualification is still required.
 
 Keep daemon startup wake disabled (`--no-wake-up-on-start`) so only the
 Puppeteer adapter owns the startup movement. A missing or incompatible daemon

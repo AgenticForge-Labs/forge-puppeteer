@@ -27,6 +27,7 @@ async def test_real_stdio_mcp_one_room_controls_three_mock_devices():
         tools = await session.list_tools()
         names = {tool.name for tool in tools.tools}
         assert {"ensemble_state", "ensemble_presence", "ensemble_expression"} <= names
+        assert not names & {"pose_and_antennas", "head_pose", "antenna_targets"}
         snapshot = await session.call_tool("ensemble_state", {})
         assert not snapshot.is_error
         assert snapshot.structured_content["state"] == "disconnected"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import ClassVar
 
 import pytest
 
@@ -88,7 +89,46 @@ def test_classic_pack_preserves_single_axis_and_nonmoving_default_breathing():
         available_recordings=("yes1", "no1"),
     )
     assert all(c.operation == "head_pose" for c in pack.behaviors["speaking"].cues)
-    assert all(c.parameters["pose"][2][3] == 0 for c in pack.behaviors["idle"].cues)
+    idle = pack.behaviors["idle"]
+    assert idle.mode == "loop"
+    assert len(idle.cues) == 20
+
+
+def test_reachy_pack_authors_generic_neutral_transition_after_finite_expressions():
+    pack = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1", "no1"), wake_up_always=True,
+        return_to_neutral_after_expression=True,
+    )
+    assert pack.behaviors["idle"].mode == "hold"
+    assert pack.neutral_behavior == "neutral"
+    assert pack.behaviors["neutral"].cues[0].operation == "return_to_neutral"
+    for gesture in ("yes", "no", "acknowledge"):
+        cues = pack.behaviors[gesture].cues
+        assert len(cues) == 1
+        assert cues[0].operation == "play_move"
+        assert "return_to_neutral" not in cues[0].parameters
+    assert pack.startup is not None
+    assert pack.startup.cues[0].parameters == {"force": True}
+
+    with pytest.raises(ValueError, match="forced SDK startup sequence"):
+        reachy_conversation_pack(
+            "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+            available_recordings=("yes1", "no1"),
+            return_to_neutral_after_expression=True,
+        )
+
+
+def test_classic_idle_loop_is_kept_when_breathing_is_enabled():
+    pack = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1", "no1"), breath_amplitude_m=0.002,
+        wake_up_always=True, return_to_neutral_after_expression=True,
+    )
+    idle = pack.behaviors["idle"]
+    assert idle.mode == "loop"
+    assert len(idle.cues) == 20
+    assert any(c.parameters["pose"][2][3] != 0 for c in idle.cues)
 
 
 class FakeRobot:
@@ -102,7 +142,7 @@ class FakeRobot:
 @pytest.mark.anyio
 async def test_expressive_motion_uses_single_sdk_goto_for_head_and_antennas():
     class Catalog:
-        manifest = {"sdk_version": "1.10.0rc5"}
+        manifest: ClassVar[dict[str, str]] = {"sdk_version": "1.10.0rc5"}
 
     robot = FakeRobot()
     provider = ReachyPlaybackProvider(Catalog(), robot, motion_authorized=True)

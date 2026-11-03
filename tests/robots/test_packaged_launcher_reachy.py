@@ -1,6 +1,7 @@
 """Reachy packaged launcher lifecycle tests; SDK is always a fake."""
 
 import hashlib
+import io
 import json
 import os
 import sys
@@ -21,6 +22,13 @@ class FakeRobot:
         self.kwargs = kwargs
         self.closed = False
         self.calls = []
+        self.head_pose = [
+            [1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0],
+        ]
+        self.antennas = [-0.17, 0.17]
+        self.body_yaw = 0.0
+        self.ignore_body_yaw_target = False
 
     def __exit__(self, *_args):
         self.closed = True
@@ -28,17 +36,30 @@ class FakeRobot:
     async def async_play_move(self, move, *, sound=False):
         self.calls.append((move.description, sound))
 
-    def cancel_move(self):
-        self.calls.append("cancel")
+    def goto_target(self, **kwargs):
+        self.calls.append(("goto_target", kwargs))
+        if kwargs.get("head") is not None:
+            self.head_pose = kwargs["head"]
+        if kwargs.get("antennas") is not None:
+            self.antennas = kwargs["antennas"]
+        if kwargs.get("body_yaw") is not None and not self.ignore_body_yaw_target:
+            self.body_yaw = kwargs["body_yaw"]
 
     def get_current_head_pose(self):
-        return [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+        return self.head_pose
+
+    def get_present_antenna_joint_positions(self):
+        return self.antennas
+
+    def cancel_move(self):
+        self.calls.append("cancel")
 
     def enable_motors(self):
         self.calls.append("enable_motors")
 
     def wake_up(self):
         self.calls.append("wake_up")
+        self.body_yaw = 0.0
 
 
 class FakeDaemon:
@@ -50,6 +71,28 @@ class FakeDaemon:
 
     def assert_alive(self):
         pass
+
+
+def test_sdk_provider_reads_current_full_state_and_requires_enabled_motors(monkeypatch):
+    provider = object.__new__(ReachySDKProvider)
+    provider.config = SimpleNamespace(host="127.0.0.1", daemon_port=8000)
+    provider._daemon = FakeDaemon()
+    requested = []
+
+    def open_state(url, timeout):
+        requested.append((url, timeout))
+        return io.BytesIO(b'{"control_mode":"enabled","body_yaw":0.0}')
+
+    monkeypatch.setattr("urllib.request.urlopen", open_state)
+    assert provider._read_full_state() == {"control_mode": "enabled", "body_yaw": 0.0}
+    assert requested == [("http://127.0.0.1:8000/api/state/full", 1.0)]
+
+    def disabled_state(_url, timeout):
+        return io.BytesIO(b'{"control_mode":"disabled","body_yaw":0.0}')
+
+    monkeypatch.setattr("urllib.request.urlopen", disabled_state)
+    with pytest.raises(RuntimeError, match="motor control is not enabled"):
+        provider._read_full_state()
 
 
 class FakeStatusClient:
@@ -98,10 +141,22 @@ def config(**overrides):
 
 
 def install_fake_reachy_wake_helpers(monkeypatch, distance):
+    class FakeArray(list):
+        def copy(self):
+            return FakeArray([list(row) for row in self])
+
+        def tolist(self):
+            return [list(row) for row in self]
+
     package = ModuleType("reachy_mini")
     package.__path__ = []
     reachy_module = ModuleType("reachy_mini.reachy_mini")
     reachy_module.SLEEP_HEAD_POSE = object()
+    reachy_module.INIT_HEAD_POSE = FakeArray([
+        [1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0],
+    ])
+    reachy_module.INIT_ANTENNAS_JOINT_POSITIONS = (-0.1745, 0.1745)
     utils_package = ModuleType("reachy_mini.utils")
     utils_package.__path__ = []
     interpolation = ModuleType("reachy_mini.utils.interpolation")
@@ -188,7 +243,10 @@ async def test_sdk_wake_up_uses_sdk_sleep_check_and_wake_sequence(monkeypatch, t
     catalog = ReachyCatalog(root, make_snapshot(root), move_factory=Move)
     robot = FakeRobot()
     install_fake_reachy_wake_helpers(monkeypatch, (0.0, 0.0, 0.0))
-    adapter = ReachyPlaybackProvider(catalog, robot, motion_authorized=True)
+    adapter = ReachyPlaybackProvider(
+        catalog, robot, motion_authorized=True,
+        state_reader=lambda: {"control_mode": "enabled", "body_yaw": robot.body_yaw},
+    )
     request = ActionRequest(
         id="startup", performer_id="reachy", caller_id="conversation",
         session_id="room", operation="wake_up", parameters={},
@@ -196,6 +254,49 @@ async def test_sdk_wake_up_uses_sdk_sleep_check_and_wake_sequence(monkeypatch, t
     result = await adapter.execute(request)
     assert robot.calls == ["enable_motors", "wake_up"]
     assert "SDK wake-up sequence returned" in result.evidence
+
+
+@pytest.mark.anyio
+async def test_wake_up_requires_measured_feedback_reader_before_motion(tmp_path):
+    from forge_puppeteer.devices.reachy import ReachyCatalog, ReachyPlaybackProvider
+    from forge_puppeteer.execution import ActionRequest
+
+    root = tmp_path / "assets"
+    catalog = ReachyCatalog(root, make_snapshot(root), move_factory=Move)
+    robot = FakeRobot()
+    adapter = ReachyPlaybackProvider(catalog, robot, motion_authorized=True)
+    request = ActionRequest(
+        id="startup", performer_id="reachy", caller_id="conversation",
+        session_id="room", operation="wake_up", parameters={"force": True},
+    )
+
+    with pytest.raises(RuntimeError, match="measured state reader is required"):
+        await adapter.validate(request)
+    assert robot.calls == []
+
+
+@pytest.mark.anyio
+async def test_startup_failure_to_converge_does_not_capture_neutral(monkeypatch, tmp_path):
+    from forge_puppeteer.devices.reachy import ReachyCatalog, ReachyPlaybackProvider
+    from forge_puppeteer.execution import ActionRequest
+
+    root = tmp_path / "assets"
+    catalog = ReachyCatalog(root, make_snapshot(root), move_factory=Move)
+    robot = FakeRobot()
+    install_fake_reachy_wake_helpers(monkeypatch, (0.1, 0.5, 30.0))
+    adapter = ReachyPlaybackProvider(
+        catalog, robot, motion_authorized=True,
+        state_reader=lambda: {"control_mode": "disabled", "body_yaw": robot.body_yaw},
+    )
+    request = ActionRequest(
+        id="startup", performer_id="reachy", caller_id="conversation",
+        session_id="room", operation="wake_up", parameters={"force": True},
+    )
+
+    with pytest.raises(RuntimeError, match="measured neutral feedback is invalid"):
+        await adapter.execute(request)
+    assert adapter._startup_neutral_head is None
+    assert adapter._quarantined
 
 
 @pytest.mark.anyio
@@ -207,7 +308,10 @@ async def test_sdk_wake_up_is_noop_outside_native_sleep_pose(monkeypatch, tmp_pa
     catalog = ReachyCatalog(root, make_snapshot(root), move_factory=Move)
     robot = FakeRobot()
     install_fake_reachy_wake_helpers(monkeypatch, (0.1, 0.5, 30.0))
-    adapter = ReachyPlaybackProvider(catalog, robot, motion_authorized=True)
+    adapter = ReachyPlaybackProvider(
+        catalog, robot, motion_authorized=True,
+        state_reader=lambda: {"control_mode": "enabled", "body_yaw": robot.body_yaw},
+    )
     request = ActionRequest(
         id="startup", performer_id="reachy", caller_id="conversation",
         session_id="room", operation="wake_up", parameters={},
@@ -215,6 +319,135 @@ async def test_sdk_wake_up_is_noop_outside_native_sleep_pose(monkeypatch, tmp_pa
     result = await adapter.execute(request)
     assert robot.calls == []
     assert "skipped" in result.evidence
+
+
+@pytest.mark.anyio
+async def test_operator_selected_wake_up_runs_sdk_sequence_from_any_pose(monkeypatch, tmp_path):
+    from forge_puppeteer.devices.reachy import ReachyCatalog, ReachyPlaybackProvider
+    from forge_puppeteer.execution import ActionRequest
+
+    root = tmp_path / "assets"
+    catalog = ReachyCatalog(root, make_snapshot(root), move_factory=Move)
+    robot = FakeRobot()
+    install_fake_reachy_wake_helpers(monkeypatch, (0.1, 0.5, 30.0))
+    adapter = ReachyPlaybackProvider(
+        catalog, robot, motion_authorized=True,
+        state_reader=lambda: {"control_mode": "enabled", "body_yaw": robot.body_yaw},
+    )
+    request = ActionRequest(
+        id="startup", performer_id="reachy", caller_id="conversation",
+        session_id="room", operation="wake_up", parameters={"force": True},
+    )
+    result = await adapter.execute(request)
+    assert robot.calls == ["enable_motors", "wake_up"]
+    assert "SDK wake-up sequence returned" in result.evidence
+
+
+@pytest.mark.anyio
+async def test_internal_neutral_return_requires_both_grants_without_exposing_a_tool():
+    from forge_puppeteer.execution import ActionRequest
+
+    seen = []
+    class Adapter:
+        async def validate(self, request):
+            seen.append(request.operation)
+
+    provider = object.__new__(ReachySDKProvider)
+    provider._adapter = Adapter()
+    provider.grants = frozenset()
+    request = ActionRequest(
+        id="neutral", performer_id="reachy", caller_id="conversation",
+        session_id="room", operation="return_to_neutral", parameters={},
+    )
+    with pytest.raises(PermissionError, match="explicit wake_up grant"):
+        await provider.validate(request)
+    assert seen == []
+
+    provider.grants = frozenset({"wake_up"})
+    with pytest.raises(PermissionError, match="explicit pose_and_antennas grant"):
+        await provider.validate(request)
+    assert seen == []
+
+    provider.grants = frozenset({"wake_up", "pose_and_antennas"})
+    await provider.validate(request)
+    assert seen == ["return_to_neutral"]
+    assert "return_to_neutral" not in provider._TOOLS
+
+
+@pytest.mark.anyio
+async def test_reachy_neutral_operation_uses_pose_sampled_after_sdk_startup(monkeypatch, tmp_path):
+    from forge_puppeteer.devices.reachy import ReachyCatalog, ReachyPlaybackProvider
+    from forge_puppeteer.execution import ActionRequest
+
+    root = tmp_path / "assets"
+    catalog = ReachyCatalog(root, make_snapshot(root), move_factory=Move)
+    robot = FakeRobot()
+    install_fake_reachy_wake_helpers(monkeypatch, (0.1, 0.5, 30.0))
+    adapter = ReachyPlaybackProvider(
+        catalog, robot, motion_authorized=True,
+        state_reader=lambda: {"control_mode": "enabled", "body_yaw": robot.body_yaw},
+    )
+    neutral = ActionRequest(
+        id="neutral", performer_id="reachy", caller_id="conversation",
+        session_id="room", operation="return_to_neutral", parameters={},
+    )
+    with pytest.raises(RuntimeError, match="not been captured"):
+        await adapter.validate(neutral)
+    startup = ActionRequest(
+        id="startup", performer_id="reachy", caller_id="conversation",
+        session_id="room", operation="wake_up", parameters={"force": True},
+    )
+    startup_result = await adapter.execute(startup)
+    assert robot.calls[:2] == ["enable_motors", "wake_up"]
+    assert "Measured Reachy feedback settled" in startup_result.evidence
+    assert "startup feedback captured" in startup_result.evidence
+
+    result = await adapter.execute(neutral)
+    assert robot.calls[2][0] == "goto_target"
+    _, args = robot.calls[2]
+    assert args["head"].tolist() == [
+        [1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0],
+    ]
+    assert args["antennas"] == [-0.17, 0.17]
+    assert args["duration"] == 2.0
+    assert args["body_yaw"] == 0.0
+    assert "Measured Reachy feedback settled at requested target (3 samples" in result.evidence
+
+
+@pytest.mark.anyio
+async def test_neutral_return_quarantines_when_measured_feedback_does_not_reach_target(
+    monkeypatch, tmp_path,
+):
+    from forge_puppeteer.devices.reachy import ReachyCatalog, ReachyPlaybackProvider
+    from forge_puppeteer.execution import ActionRequest
+
+    root = tmp_path / "assets"
+    catalog = ReachyCatalog(root, make_snapshot(root), move_factory=Move)
+    robot = FakeRobot()
+    install_fake_reachy_wake_helpers(monkeypatch, (0.1, 0.5, 30.0))
+    adapter = ReachyPlaybackProvider(
+        catalog, robot, motion_authorized=True,
+        state_reader=lambda: {"control_mode": "enabled", "body_yaw": robot.body_yaw},
+    )
+    await adapter.execute(ActionRequest(
+        id="startup", performer_id="reachy", caller_id="conversation",
+        session_id="room", operation="wake_up", parameters={"force": True},
+    ))
+    robot.body_yaw = 0.2
+    robot.ignore_body_yaw_target = True
+    adapter.settle_timeout_s = 0.01
+    neutral = ActionRequest(
+        id="neutral", performer_id="reachy", caller_id="conversation",
+        session_id="room", operation="return_to_neutral", parameters={},
+    )
+
+    with pytest.raises(RuntimeError, match="did not settle at requested target"):
+        await adapter.execute(neutral)
+    assert adapter._quarantined
+    assert len([call for call in robot.calls if isinstance(call, tuple) and call[0] == "goto_target"]) == 1
+    with pytest.raises(RuntimeError, match="quarantined"):
+        await adapter.validate(neutral)
 
 
 def test_restricted_reachy_config_requires_exact_operator_asset_pins():

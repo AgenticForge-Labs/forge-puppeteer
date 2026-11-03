@@ -306,12 +306,23 @@ the endpoint probe. Keep lifecycle process management with the adapter that
 owns that device connection.
 
 The Reachy-only ensemble config also accepts
-`reachy_startup_behavior: "wake_up_if_sleeping"`. This adds the pinned SDK
-wake-up behavior to Puppeteer's generic, content-addressed startup slot; it
-requires `wake_up` in the operator's exact Reachy grants. It runs once on the
-first presence event and uses the SDK's sleep pose and `wake_up()` behavior.
-Keep daemon auto-wake disabled to avoid a second motion owner. SDK completion
-does not prove physical settling or a confirmed STOP.
+`reachy_startup_behavior: "wake_up_if_sleeping"` or `"wake_up"`. Both add the
+pinned SDK wake-up behavior to Puppeteer's content-addressed startup slot and
+require `wake_up` in the operator's exact Reachy grants. They run once on the
+first presence event; the former checks the SDK sleep pose first, while the
+latter runs regardless of the current pose. Keep daemon auto-wake disabled to
+avoid a second motion owner. SDK completion does not prove physical settling or
+a confirmed STOP.
+
+Set `reachy_startup_behavior: "wake_up"` and
+`reachy_return_to_neutral_after_expression: true` to have Puppeteer's shared
+state machine run each finite expression, the performer's authored neutral
+behavior, and then the latest presence behavior in order. Reachy captures the
+present head and antenna feedback after the SDK startup sequence and restores
+the SDK startup body-yaw target. The configuration requires the
+explicit `wake_up` grant. Each step has separate journal evidence under one
+performer owner; SDK completion does not prove physical settling. This remains
+opt-in pending attended physical qualification.
 
 ### Restricted, operator-approved Reachy moves
 

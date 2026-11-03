@@ -332,6 +332,7 @@ class ReachySDKProvider:
                 motion_authorized=True,
                 restricted_actions=self.config.restricted_actions,
                 approved_moves=self.approved_moves,
+                state_reader=self._read_full_state,
             )
             yield
         finally:
@@ -344,12 +345,41 @@ class ReachySDKProvider:
                 if self._daemon is not None:
                     await self._daemon.close()
 
+    def _read_full_state(self) -> dict[str, Any]:
+        """Read the daemon's current sensed pose for post-motion verification."""
+        from urllib.request import urlopen
+
+        if self._daemon is not None:
+            self._daemon.assert_alive()
+        host = self.config.host
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        with urlopen(
+            f"http://{host}:{self.config.daemon_port}/api/state/full", timeout=1.0,
+        ) as response:
+            state = json.load(response)
+        if not isinstance(state, dict):
+            raise TypeError("Reachy daemon returned an invalid state response")
+        if state.get("control_mode") != "enabled":
+            raise RuntimeError("Reachy motor control is not enabled")
+        return state
+
     async def permitted(self, tool: str) -> bool:
         return tool in self.grants
 
     async def validate(self, request: ActionRequest) -> None:
         """Honor operator tool grants for internal choreography as well as MCP."""
-        if request.operation not in self.grants:
+        if request.operation == "return_to_neutral":
+            # This fixed target is internal choreography. Require both the
+            # startup and composed-target grants; no arbitrary target is exposed
+            # through the MCP tool catalog.
+            if "wake_up" not in self.grants:
+                raise PermissionError("Reachy neutral return requires the explicit wake_up grant")
+            if "pose_and_antennas" not in self.grants:
+                raise PermissionError(
+                    "Reachy neutral return requires the explicit pose_and_antennas grant"
+                )
+        elif request.operation not in self.grants:
             raise PermissionError("Reachy operation is not operator-granted")
         if self._adapter is None:
             raise RuntimeError("Reachy SDK session is not active")

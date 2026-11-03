@@ -36,6 +36,7 @@ class _Slot:
     pending: bool = False
     action_done: anyio.Event = field(default_factory=anyio.Event)
     action_count: int = 0
+    pre_neutral: bool = False
 
 
 class ConversationEnsemble:
@@ -136,6 +137,7 @@ class ConversationEnsemble:
                         behavior for behavior, pattern in self.packs[name].behaviors.items()
                         if pattern.mode == "once"
                         and behavior not in {"idle", "listening", "speaking", "disconnected"}
+                        and behavior != self.packs[name].neutral_behavior
                     ),
                     "presence_behaviors": sorted(
                         behavior for behavior in ("idle", "listening", "speaking")
@@ -143,6 +145,7 @@ class ConversationEnsemble:
                     ),
                     "startup_behavior": self.packs[name].startup is not None,
                     "startup_pending": name in self._startup_pending,
+                    "neutral_behavior": self.packs[name].neutral_behavior,
                 }
                 for name in self.packs
             },
@@ -167,6 +170,10 @@ class ConversationEnsemble:
             previous = self._state
             if self._session is None:
                 self._session = event.session_id
+                self._startup_pending = {
+                    name for name, pack in self.packs.items()
+                    if pack.startup is not None
+                }
             self._sequence = event.sequence
             self._event_id = event.event_id
             self._last_seen = anyio.current_time()
@@ -178,11 +185,13 @@ class ConversationEnsemble:
                 # acknowledging a requested gesture) must not preempt that
                 # finite gesture. Real interruption/disconnect remains urgent.
                 preserve_expressions = event.state != "disconnected" and not event.interrupted
-                await self._stop_slots(
+                settle_after_stop = await self._stop_slots(
                     tuple(name for name, slot in self._slots.items()
                           if not (preserve_expressions and slot.expression_active)),
                     graceful=event.state != "disconnected" and not event.interrupted,
                 )
+            else:
+                settle_after_stop = set()
             if event.state == "disconnected":
                 self._release_owners()
                 self._session = None
@@ -192,8 +201,16 @@ class ConversationEnsemble:
                 # A busy performer is skipped, not stopped or auto-retired.
                 for name in self.packs:
                     newly_owned = self._acquire_owner(name)
-                    if name in self._owned and (transition or newly_owned) and name not in self._slots:
-                        if name in self._startup_pending:
+                    if (name in self._owned and (transition or newly_owned)
+                            and name not in self._slots and name not in self._unavailable):
+                        neutral_behavior = self.packs[name].neutral_behavior
+                        if name in settle_after_stop and neutral_behavior is not None:
+                            self._spawn(
+                                name, neutral_behavior,
+                                f"{event.session_id}-{event.sequence}-interrupted-neutral",
+                                resume=True,
+                            )
+                        elif name in self._startup_pending:
                             self._startup_pending.discard(name)
                             self._spawn(
                                 name, "startup", f"{event.session_id}-{event.sequence}",
@@ -229,13 +246,19 @@ class ConversationEnsemble:
                 return {"outcome": "denied", "reason": "reserved_presence_state", **self.snapshot()}
             if any(n in self._blocked for n in names):
                 return {"outcome": "denied", "reason": "performer_quarantined", **self.snapshot()}
+            if any(n in self._unavailable for n in names):
+                return {"outcome": "denied", "reason": "performer_unavailable", **self.snapshot()}
             if any(n not in self._owned for n in names):
                 return {"outcome": "denied", "reason": "performer_not_owned", **self.snapshot()}
             if any(expression not in self.packs[n].behaviors for n in names):
                 return {"outcome": "unsupported", "reason": "unmapped_expression", **self.snapshot()}
+            if any(self._slots.get(n) and self._slots[n].behavior == "startup" for n in names):
+                return {"outcome": "denied", "reason": "startup_in_progress", **self.snapshot()}
+            if any(self._slots.get(n) and self._slots[n].expression_active for n in names):
+                return {"outcome": "denied", "reason": "expression_in_progress", **self.snapshot()}
             if any(self.packs[n].behaviors[expression].mode != "once" for n in names):
                 return {"outcome": "denied", "reason": "expression_must_be_finite", **self.snapshot()}
-            await self._stop_slots(names, graceful=True)
+            settle_after_stop = await self._stop_slots(names, graceful=True)
             if any(n in self._blocked for n in names):
                 return {"outcome": "denied", "reason": "unconfirmed_prior_stop", **self.snapshot()}
             self._gesture_ids.add(action_id)
@@ -243,7 +266,11 @@ class ConversationEnsemble:
             if len(self._gesture_order) > 256:
                 self._gesture_ids.discard(self._gesture_order.popleft())
             for name in names:
-                self._spawn(name, expression, action_id, resume=True)
+                self._spawn(
+                    name, expression, action_id, resume=True,
+                    pre_neutral=(name in settle_after_stop
+                                 and self.packs[name].neutral_behavior is not None),
+                )
             return {"outcome": "accepted", **self.snapshot()}
 
     def _acquire_owner(self, name: str) -> bool:
@@ -271,7 +298,10 @@ class ConversationEnsemble:
                 continue
             self._owned.remove(name)
 
-    def _spawn(self, name: str, behavior: str, action_id: str, *, resume: bool = False):
+    def _spawn(
+        self, name: str, behavior: str, action_id: str, *,
+        resume: bool = False, pre_neutral: bool = False,
+    ):
         if name in self._blocked or name not in self._owned or self._session is None:
             return
         pattern = (
@@ -281,12 +311,20 @@ class ConversationEnsemble:
         if pattern is None:
             return  # Missing device behavior is unsupported, never substituted.
         scope = anyio.CancelScope()
-        slot = _Slot(scope=scope, behavior=behavior, expression_active=resume)
+        slot = _Slot(
+            scope=scope, behavior=behavior, expression_active=resume,
+            pre_neutral=pre_neutral,
+        )
         self._slots[name] = slot
         self._tasks.start_soon(self._play, name, behavior, pattern, slot, action_id, resume)
 
     async def _stop_slots(self, names: tuple[str, ...], *, graceful: bool = False):
         active = [(n, self._slots.pop(n)) for n in names if n in self._slots]
+        settle_after_stop: set[str] = set()
+        had_motion = {
+            name: slot.pending or slot.action_count > 0
+            for name, slot in active
+        }
         # On ordinary semantic transitions, an opt-in SDK can complete its
         # already-admitted finite native segment before we cancel the *loop*.
         # This must be time-bounded: a stuck SDK action still takes the
@@ -308,6 +346,9 @@ class ConversationEnsemble:
                 await slot.done.wait()
             if deadline.cancel_called or slot.status == "blocked":
                 self._blocked.add(name)
+            elif had_motion[name]:
+                settle_after_stop.add(name)
+        return settle_after_stop
 
     async def _play(
         self, name: str, behavior: str, pattern: BehaviorPattern,
@@ -315,11 +356,42 @@ class ConversationEnsemble:
     ):
         with slot.scope:
             try:
+                performer = self.packs[name]
+                if slot.pre_neutral and performer.neutral_behavior is not None:
+                    neutral_behavior = performer.neutral_behavior
+                    slot.status = "starting"
+                    slot.evidence = "returning_to_neutral_before_next_behavior"
+                    await self._execute_pattern(
+                        name, neutral_behavior,
+                        performer.behaviors[neutral_behavior], slot,
+                        f"{action_id}-pre-neutral",
+                    )
+                    if slot.status != "completed":
+                        return
+                slot.status = "starting"
+                slot.evidence = "executing_behavior_sequence"
                 await self._execute_pattern(name, behavior, pattern, slot, action_id)
+                neutral_behavior = performer.neutral_behavior
+                if (
+                    slot.status == "completed"
+                    and resume
+                    and pattern.mode == "once"
+                    and behavior != "startup"
+                    and neutral_behavior is not None
+                    and behavior != neutral_behavior
+                ):
+                    neutral_pattern = performer.behaviors[neutral_behavior]
+                    slot.status = "starting"
+                    slot.evidence = "returning_to_neutral"
+                    await self._execute_pattern(
+                        name, neutral_behavior, neutral_pattern, slot,
+                        f"{action_id}-neutral",
+                    )
                 slot.expression_active = False
                 # An expression returns to the *latest* conversational presence
                 # only if it was not interrupted or blocked.
-                if resume and name not in self._blocked and not slot.scope.cancel_called:
+                if (resume and slot.status == "completed"
+                        and name not in self._blocked and not slot.scope.cancel_called):
                     background = self.packs[name].behaviors.get(self._state)
                     if background and self._session:
                         # A completed startup/gesture can resume a long-lived
@@ -342,6 +414,8 @@ class ConversationEnsemble:
                     slot.pending or exc.code == "stop_unconfirmed"
                 ) else "unavailable"
                 slot.evidence = exc.code
+                if slot.status == "unavailable":
+                    self._unavailable[name] = exc.code
             except Exception:  # noqa: BLE001 - unknown SDK outcome must quarantine
                 slot.status = "blocked"
                 slot.evidence = "behavior_execution_unknown"
@@ -367,6 +441,7 @@ class ConversationEnsemble:
         self, name: str, behavior: str, pattern: BehaviorPattern,
         slot: _Slot, action_id: str
     ):
+        slot.behavior = behavior
         if pattern.mode == "hold":
             # The preceding transition has already finished or followed the
             # mandatory stop/quarantine path. This is no motor command and
@@ -415,6 +490,8 @@ class ConversationEnsemble:
                     slot.evidence = f"action_{record.state.value}"
                     if slot.status == "blocked":
                         self._blocked.add(name)
+                    else:
+                        self._unavailable[name] = slot.evidence
                     return
                 slot.status = "active"
                 slot.evidence = "runtime_confirmed_action_completion"
