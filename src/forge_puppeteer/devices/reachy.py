@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import threading
@@ -138,7 +139,13 @@ class ReachyPlaybackProvider:
     # Normal presence changes may let an already-dispatched, finite SDK
     # segment finish before switching loops. Explicit interruption, disconnect,
     # expiry and shutdown still bypass this grace and use the STOP path.
-    finish_before_interrupt_s = 1.5
+    # Native goto segments are sub-second, but the SDK startup wake-up runs
+    # about 2.5 s and would otherwise be truncated into the unacknowledged
+    # native STOP path on the first presence transition. Long recorded moves
+    # exceed any usable grace; they are cancelled through the SDK's
+    # acknowledged playback loop in ``stop`` instead. The ensemble caps this
+    # grace at 5 s.
+    finish_before_interrupt_s = 3.0
 
     def __init__(
         self,
@@ -160,6 +167,7 @@ class ReachyPlaybackProvider:
         self._active = False
         self._active_operation: str | None = None
         self._quarantined = False
+        self._playback: asyncio.Future[None] | None = None
 
     async def describe(self) -> DeviceDescriptor:
         from ..robot_contracts import ControlDescriptor
@@ -306,16 +314,26 @@ class ReachyPlaybackProvider:
         try:
             if request.operation == "play_move":
                 move = self.catalog.get(request.asset_id, request.asset_revision)
-                await self.robot.async_play_move(move, sound=request.parameters.get("sound", False))
+                # Keep the SDK playback loop addressable so an operator or
+                # presence STOP can cancel it and observe the loop actually
+                # returning. Recorded moves run for seconds and their targets
+                # are re-sent every iteration until that flag is seen.
+                self._playback = asyncio.ensure_future(
+                    self.robot.async_play_move(
+                        move, sound=request.parameters.get("sound", False),
+                    )
+                )
+                try:
+                    await asyncio.shield(self._playback)
+                finally:
+                    self._playback = None
                 evidence = "SDK playback loop returned; physical settling unmeasured"
             elif request.operation == "wake_up":
-                import asyncio
                 evidence = await asyncio.to_thread(self._wake_up_if_sleeping)
             else:
                 # The pinned SDK's goto_target waits for its daemon task to finish,
                 # but returns no measured-pose evidence. Keep its blocking call off
                 # the event loop so stop and unrelated runtime work can proceed.
-                import asyncio
 
                 args = self._native_sdk_args(request)
                 sdk_task = asyncio.create_task(asyncio.to_thread(self.robot.goto_target, **args))
@@ -418,9 +436,39 @@ class ReachyPlaybackProvider:
         return {"antennas": [float(x) for x in request.parameters["angles_rad"]], "duration": duration, "body_yaw": None}
 
     async def stop(self) -> StopResult:
-        # cancel_move only requests cancellation; the SDK has no acknowledgment.
         with self._lock:
             active_operation = self._active_operation
+            playback = self._playback
+        if active_operation == "play_move" and playback is not None:
+            # The pinned SDK's cancel_move sets a flag that its playback loop
+            # checks every iteration; the loop returning is the SDK's own
+            # acknowledgment that no further targets will be streamed. That is
+            # a confirmed command stop, not a measured physical settling, so
+            # the performer is not left permanently quarantined by a gesture
+            # that outlived the ensemble's bounded grace window.
+            try:
+                self.robot.cancel_move()
+            except Exception as exc:  # noqa: BLE001 - contain SDK stop failure and retain quarantine
+                with self._lock:
+                    self._quarantined = True
+                return StopResult(False, f"SDK cancellation request failed; provider quarantined: {type(exc).__name__}")
+            try:
+                await asyncio.wait_for(asyncio.shield(playback), 5.0)
+            except TimeoutError:
+                with self._lock:
+                    self._quarantined = True
+                return StopResult(False, "SDK playback loop did not return after cancellation; provider quarantined")
+            except Exception as exc:  # noqa: BLE001 - playback failure is not a confirmed stop
+                with self._lock:
+                    self._quarantined = True
+                return StopResult(False, f"SDK playback raised during cancellation; provider quarantined: {type(exc).__name__}")
+            with self._lock:
+                self._quarantined = False
+            return StopResult(
+                True,
+                "SDK playback loop returned after cancellation request; physical settling unmeasured",
+            )
+        with self._lock:
             self._quarantined = True
         if active_operation in (None, "play_move") and hasattr(self.robot, "cancel_move"):
             try:

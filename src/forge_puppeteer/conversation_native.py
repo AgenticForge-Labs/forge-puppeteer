@@ -256,6 +256,12 @@ def reachy_conversation_pack(
     for name, recording in (
         ("happy", "cheerful1"), ("curious", "curious1"),
         ("confused", "confused1"), ("excited", "enthusiastic1"),
+        # Wider reviewed set from the same pinned dataset revision. Each name
+        # is mapped to one exact recording; unmapped emotions stay absent
+        # rather than being guessed from a filename.
+        ("sad", "sad1"), ("surprised", "surprised1"),
+        ("calm", "serenity1"), ("proud", "proud1"),
+        ("grateful", "grateful1"), ("thoughtful", "thoughtful1"),
     ):
         if recording in available:
             patterns[name] = _pattern(
