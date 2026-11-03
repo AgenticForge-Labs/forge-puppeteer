@@ -146,9 +146,9 @@ attended speaker/movement measurements. UNKNOWN outcomes block retry/rearm.
 
 Puppeteer now includes a pure `StackChanSpeechFacePreview` that reduces
 50 ms normalized speech channels to at most 5 native-format mouth requests per
-second by default (150 ms spacing), returning an explicit closing-mouth
+second by default (200 ms spacing), returning an explicit closing-mouth
 candidate on activity release. Values are bounded by a reviewed per-renderer
-profile (default peak size 42); the native StackChan SDK parser validates the
+profile (default peak mouth weight 75); the native StackChan SDK parser validates the
 resulting `face` operation in offline tests. This module does not run an MCP
 client, open USB, dispatch through ExecutionRuntime, or claim speaker timing.
 
