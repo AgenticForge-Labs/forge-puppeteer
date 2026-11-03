@@ -246,3 +246,23 @@ def test_checked_in_reachy_dataset_lock_contains_native_yes_no_and_license():
     assert "no1.json" in manifest["files"]
     for name in manifest["files"]:
         assert "/resolve/" + manifest["dataset_revision"] in recording_url(manifest, name)
+
+
+def test_stackchan_native_weight_speech_option_uses_stock_mouth_primitive():
+    from stackchan_control.assets import _step
+
+    # The existing size-based profile is backward compatible; native weight
+    # is opt-in for a reviewed performer configuration.
+    legacy = stackchan_conversation_pack("stackchan")
+    native = stackchan_conversation_pack("stackchan", speaking_mode="native_weight")
+    assert legacy.behaviors["speaking"].cues[1].parameters["mouth"] == {"size": 42}
+    speaking = native.behaviors["speaking"]
+    assert speaking.mode == "loop"
+    assert [cue.parameters["mouth"]["weight"] for cue in speaking.cues] == [
+        45, 75, 55, 0,
+    ]
+    assert all(cue.operation == "face" for cue in speaking.cues)
+    for cue in speaking.cues:
+        _step({"at_s": 0.0, "operation": cue.operation, "parameters": cue.parameters})
+    with pytest.raises(ValueError, match="speaking mode"):
+        stackchan_conversation_pack("stackchan", speaking_mode="unapproved")
