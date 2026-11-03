@@ -128,12 +128,12 @@ class PerformerBehaviors(ContractModel):
             raise ValueError("invalid semantic behavior name")
         for name in ("idle", "listening", "speaking"):
             pattern = self.behaviors.get(name)
-            allowed = {"loop", "hold"} if name == "listening" else {"loop"}
+            allowed = {"loop", "hold"} if name in {"idle", "listening"} else {"loop"}
             if pattern is not None and pattern.mode not in allowed:
                 raise ValueError(f"{name} must be an interruptible loop or supported hold")
-        if any(name != "listening" and pattern.mode == "hold"
+        if any(name not in {"idle", "listening"} and pattern.mode == "hold"
                for name, pattern in self.behaviors.items()):
-            raise ValueError("hold mode is supported only for listening")
+            raise ValueError("hold mode is supported only for idle or listening")
         if self.startup is not None and self.startup.mode != "once":
             raise ValueError("startup behavior must be a finite one-shot pattern")
         for name in ("yes", "no", "acknowledge"):

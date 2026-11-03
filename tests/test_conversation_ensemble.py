@@ -300,10 +300,14 @@ def test_listening_hold_sends_no_motion_and_resumes_on_speaking():
     anyio.run(run)
 
 
-def test_hold_is_only_allowed_for_cueless_listening():
+def test_hold_is_allowed_for_cueless_idle_or_listening_only():
     hold = BehaviorPattern(source="procedural", mode="hold", cues=())
+    assert PerformerBehaviors.author("reachy", {"idle": hold}).behaviors["idle"] == hold
+    assert PerformerBehaviors.author("reachy", {"listening": hold}).behaviors["listening"] == hold
     with pytest.raises(ValueError):
         PerformerBehaviors.author("reachy", {"speaking": hold})
+    with pytest.raises(ValueError):
+        PerformerBehaviors.author("reachy", {"yes": hold})
     with pytest.raises(ValueError):
         BehaviorPattern(source="procedural", mode="hold", cues=(BehaviorCue(at_s=0, operation="x"),))
     with pytest.raises(ValueError):

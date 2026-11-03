@@ -215,6 +215,11 @@ def reachy_conversation_pack(
         "no": _pattern((_reachy_move(0.0, "no1", recording_revision),), source="recorded"),
         "acknowledge": _pattern((_reachy_move(0.0, "yes1", recording_revision),), source="recorded"),
     }
+    if expression_style == "classic" and breath_amplitude_m == 0:
+        # A zero-amplitude idle loop submits the same neutral target every
+        # half-second. Keep classic idle truly motionless instead of creating
+        # needless SDK work and an avoidable in-flight action at shutdown.
+        patterns["idle"] = BehaviorPattern(source="procedural", mode="hold", cues=())
     if expression_style == "expressive":
         # One SDK goto per sample synchronously interpolates head and antennas.
         # Discrete room-state timing is not synchronized to outgoing audio.
