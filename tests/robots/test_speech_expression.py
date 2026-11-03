@@ -1,11 +1,16 @@
 """Offline, no-hardware acceptance tests for unitless speech expression shaping."""
 
 import math
+from itertools import pairwise
 
 import pytest
 from pydantic import ValidationError
 
-from forge_puppeteer.speech_expression import SpeechEnvelopeHop, SpeechExpressionShaper, SpeechEnvelopeWindow
+from forge_puppeteer.speech_expression import (
+    SpeechEnvelopeHop,
+    SpeechEnvelopeWindow,
+    SpeechExpressionShaper,
+)
 
 
 def sample(sequence=0, intensity=0.8, active=True, stream_id="utterance-1"):
@@ -58,7 +63,7 @@ def test_robot_neutral_expression_channels_are_bounded_and_deterministic():
         for i in range(10)
     ]
     assert expressions[0] == b.render(SpeechEnvelopeHop.model_validate(sample()))
-    assert any(x.pitch != y.pitch for x, y in zip(expressions, expressions[1:]))
+    assert any(x.pitch != y.pitch for x, y in pairwise(expressions))
     for x in expressions:
         assert -1 <= x.pitch <= 1 and -1 <= x.yaw <= 1
         assert -1 <= x.roll <= 1 and -1 <= x.antenna <= 1
