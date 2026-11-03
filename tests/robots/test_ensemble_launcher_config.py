@@ -288,3 +288,13 @@ async def test_native_ensemble_launcher_opens_one_supervised_sdk_session(
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+def test_stackchan_native_speaking_is_explicit_operator_config(tmp_path):
+    data = config_data(tmp_path)
+    assert EnsembleConfig.model_validate(data).stackchan_speaking_mode == "legacy_size"
+    data["stackchan_speaking_mode"] = "native_weight"
+    assert EnsembleConfig.model_validate(data).stackchan_speaking_mode == "native_weight"
+    data["stackchan_speaking_mode"] = "anything"
+    with pytest.raises(ValueError):
+        EnsembleConfig.model_validate(data)
