@@ -133,6 +133,15 @@ def test_stackchan_poses_follow_native_tenths_and_valid_protocol_shape():
         assert pack.behaviors[name].mode == "once"
         assert pack.behaviors[name].cues[0].operation == "face"
         assert all(c.operation in {"face", "head"} for c in pack.behaviors[name].cues)
+    # Pinned stock BlinkModifier and IdleExpressionModifier operate on eye
+    # weight and position; these are deterministic native face-only cues.
+    for name in ("blink", "glance_left", "glance_right"):
+        assert pack.behaviors[name].mode == "once"
+        assert {cue.operation for cue in pack.behaviors[name].cues} == {"face"}
+        assert all("mouth" not in cue.parameters for cue in pack.behaviors[name].cues)
+    assert pack.behaviors["blink"].cues[0].parameters["left_eye"]["weight"] == 25
+    assert pack.behaviors["glance_left"].cues[0].parameters["left_eye"] == {"x": -15, "y": 0}
+    assert pack.behaviors["glance_right"].cues[-1].parameters["right_eye"] == {"x": 0, "y": 0}
     for pattern in pack.behaviors.values():
         for cue in pattern.cues:
             step = _step({"at_s": 0.0, "operation": cue.operation,
