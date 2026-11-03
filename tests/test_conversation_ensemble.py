@@ -33,7 +33,7 @@ class FakeSDK:
         self.stop_confirmed = stop_confirmed
 
     async def validate(self, request):
-        if request.operation not in {"fake_idle", "fake_listen", "fake_talk", "fake_yes", "fake_no"}:
+        if request.operation not in {"fake_idle", "fake_listen", "fake_talk", "fake_yes", "fake_no", "fake_wake_up"}:
             raise ValueError("unsupported SDK operation")
 
     def resources_for(self, request):
@@ -179,6 +179,74 @@ def test_normal_voice_transition_does_not_cancel_finite_gesture():
             assert sdk.calls.count("fake_no") == 1
             assert "fake_talk" in sdk.calls
             assert sdk.stop_calls == 0
+    anyio.run(run)
+
+
+def test_startup_behavior_runs_once_before_latest_presence_and_is_not_an_expression():
+    async def run():
+        startup_started = anyio.Event()
+        finish_startup = anyio.Event()
+        speaking_started = anyio.Event()
+
+        class StartupSDK(FakeSDK):
+            async def execute(self, request):
+                self.calls.append(request.operation)
+                if request.operation == "fake_wake_up":
+                    startup_started.set()
+                    await finish_startup.wait()
+                elif request.operation == "fake_talk":
+                    speaking_started.set()
+                return Completion("fake SDK completed")
+
+        sdk = StartupSDK()
+        runtime = ExecutionRuntime(PerformanceStage())
+        runtime.register("reachy", sdk)
+        base = pack("reachy")
+        authored = PerformerBehaviors.author(
+            "reachy", base.behaviors, startup=once("fake_wake_up"),
+        )
+        ensemble = ConversationEnsemble(runtime, [authored])
+        snapshot = ensemble.snapshot()["performers"]["reachy"]
+        assert snapshot["startup_behavior"] is True
+        assert snapshot["startup_pending"] is True
+        assert "startup" not in snapshot["expressions"]
+
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "listening"))
+            await startup_started.wait()
+            result = await ensemble.observe(event("room", 1, "speaking"))
+            assert result["performers"]["reachy"]["startup_pending"] is False
+            assert sdk.stop_calls == 0
+            finish_startup.set()
+            await speaking_started.wait()
+            assert ensemble.snapshot()["performers"]["reachy"]["status"] == "starting"
+            assert sdk.calls.count("fake_wake_up") == 1
+            assert "fake_talk" in sdk.calls
+            assert "fake_listen" not in sdk.calls
+
+    anyio.run(run)
+
+
+def test_pre_dispatch_runtime_rejection_does_not_quarantine_or_send_stop():
+    async def run():
+        class InvalidResources(FakeSDK):
+            def resources_for(self, _request):
+                return ()
+
+        sdk = InvalidResources()
+        runtime = ExecutionRuntime(PerformanceStage())
+        runtime.register("reachy", sdk)
+        ensemble = ConversationEnsemble(runtime, [pack("reachy")])
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "listening"))
+            await anyio.sleep(0.03)
+            performer = ensemble.snapshot()["performers"]["reachy"]
+            assert performer["status"] == "unavailable"
+            assert performer["evidence"] == "invalid_resources"
+            assert sdk.calls == []
+            assert sdk.stop_calls == 0
+            assert "reachy" not in ensemble._blocked
+
     anyio.run(run)
 
 

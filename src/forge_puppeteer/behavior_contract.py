@@ -91,22 +91,33 @@ class PerformerBehaviors(ContractModel):
     performer_id: str = Field(min_length=1, max_length=128)
     revision: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     behaviors: dict[str, BehaviorPattern] = Field(min_length=1)
+    startup: BehaviorPattern | None = None
 
     @classmethod
-    def author(cls, performer_id: str, behaviors: dict[str, BehaviorPattern]):
+    def author(
+        cls, performer_id: str, behaviors: dict[str, BehaviorPattern],
+        *, startup: BehaviorPattern | None = None,
+    ):
         """Build a content-addressed pack without asking authors to invent hashes."""
         body = {
             "schema": BEHAVIOR_SCHEMA,
             "performer_id": performer_id,
             "behaviors": {name: pattern.model_dump(mode="json") for name, pattern in behaviors.items()},
         }
+        if startup is not None:
+            body["startup"] = startup.model_dump(mode="json")
         revision = "sha256:" + hashlib.sha256(
             json.dumps(body, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
         ).hexdigest()
-        return cls(performer_id=performer_id, revision=revision, behaviors=behaviors)
+        return cls(
+            performer_id=performer_id, revision=revision,
+            behaviors=behaviors, startup=startup,
+        )
 
     def content_revision(self) -> str:
-        payload = self.model_dump(mode="json", exclude={"revision"})
+        payload = self.model_dump(mode="json", exclude={"revision", "startup"})
+        if self.startup is not None:
+            payload["startup"] = self.startup.model_dump(mode="json")
         return "sha256:" + hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
         ).hexdigest()
@@ -123,6 +134,8 @@ class PerformerBehaviors(ContractModel):
         if any(name != "listening" and pattern.mode == "hold"
                for name, pattern in self.behaviors.items()):
             raise ValueError("hold mode is supported only for listening")
+        if self.startup is not None and self.startup.mode != "once":
+            raise ValueError("startup behavior must be a finite one-shot pattern")
         for name in ("yes", "no", "acknowledge"):
             pattern = self.behaviors.get(name)
             if pattern is not None and pattern.mode != "once":

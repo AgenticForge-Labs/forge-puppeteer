@@ -5,6 +5,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -29,6 +30,36 @@ class FakeRobot:
 
     def cancel_move(self):
         self.calls.append("cancel")
+
+    def get_current_head_pose(self):
+        return [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+
+    def enable_motors(self):
+        self.calls.append("enable_motors")
+
+    def wake_up(self):
+        self.calls.append("wake_up")
+
+
+class FakeDaemon:
+    async def ensure_running(self):
+        pass
+
+    async def close(self):
+        pass
+
+    def assert_alive(self):
+        pass
+
+
+class FakeStatusClient:
+    def get_status(self, _wait=True, _timeout=5.0):
+        return SimpleNamespace(
+            state=SimpleNamespace(value="running"),
+            backend_status=SimpleNamespace(ready=True),
+            simulation_enabled=False,
+            hardware_id="test-hardware",
+        )
 
 
 class Move:
@@ -56,12 +87,31 @@ def config(**overrides):
         "asset_root": "/fixture", "manifest": "/fixture/manifest.json",
         "physical_authority": "I_AUTHORIZE_REACHY_CONTROL", "sdk_version": "1.10.0rc5",
         "host": "127.0.0.1", "daemon_port": 8000, "connection_mode": "localhost_only",
+        "daemon": {"command": ["/bin/true"]},
+        "expected_daemon_hardware_id": "test-hardware",
         "allowed_tools": ["device_info", "device_state", "list_assets", "action_lookup", "play_move", "device_stop"],
         "ownership_db": "/tmp/forge-puppeteer-test-ownership.sqlite3",
         "action_journal": "/tmp/forge-puppeteer-test-actions.sqlite3",
     }
     values.update(overrides)
     return ServerConfig(**values)
+
+
+def install_fake_reachy_wake_helpers(monkeypatch, distance):
+    package = ModuleType("reachy_mini")
+    package.__path__ = []
+    reachy_module = ModuleType("reachy_mini.reachy_mini")
+    reachy_module.SLEEP_HEAD_POSE = object()
+    utils_package = ModuleType("reachy_mini.utils")
+    utils_package.__path__ = []
+    interpolation = ModuleType("reachy_mini.utils.interpolation")
+    interpolation.distance_between_poses = lambda *_args: distance
+    monkeypatch.setitem(sys.modules, "reachy_mini", package)
+    monkeypatch.setitem(sys.modules, "reachy_mini.reachy_mini", reachy_module)
+    monkeypatch.setitem(sys.modules, "reachy_mini.utils", utils_package)
+    monkeypatch.setitem(
+        sys.modules, "reachy_mini.utils.interpolation", interpolation,
+    )
 
 
 def test_reachy_launcher_rejects_implicit_or_unsafe_configuration(monkeypatch):
@@ -78,6 +128,93 @@ def test_reachy_launcher_rejects_implicit_or_unsafe_configuration(monkeypatch):
     ]:
         with pytest.raises(ValueError, match=message):
             ReachySDKProvider(config(**changes), catalog_factory=lambda *_: None)
+
+
+def test_local_reachy_requires_adapter_owned_daemon_and_identity():
+    with pytest.raises(ValueError, match="adapter-owned daemon"):
+        config(daemon=None)
+    with pytest.raises(ValueError, match="expected_daemon_hardware_id"):
+        config(expected_daemon_hardware_id=None)
+
+
+@pytest.mark.anyio
+async def test_reachy_liveness_wrapper_preserves_sync_resource_lookup():
+    from types import SimpleNamespace
+
+    provider = object.__new__(ReachySDKProvider)
+    provider._adapter = SimpleNamespace(resources_for=lambda _request: ("head.pose",))
+    provider._daemon = SimpleNamespace(assert_alive=lambda: None)
+    resources = provider.resources_for(object())
+    assert resources == ("head.pose",)
+    assert not hasattr(resources, "__await__")
+
+
+@pytest.mark.anyio
+async def test_reachy_connection_rejects_wrong_daemon_hardware_identity(tmp_path, monkeypatch):
+    import importlib.metadata
+
+    from forge_puppeteer.devices.reachy import ReachyCatalog
+
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "1.10.0rc5")
+
+    root = tmp_path / "assets"
+    manifest = make_snapshot(root)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+    robot = FakeRobot()
+    robot.client = FakeStatusClient()
+    provider = ReachySDKProvider(
+        config(asset_root=str(root), manifest=str(manifest_path),
+               expected_daemon_hardware_id="different-device"),
+        robot_factory=lambda **_kwargs: robot,
+        catalog_factory=lambda path, _manifest: ReachyCatalog(
+            path, manifest, move_factory=Move,
+        ),
+        daemon_factory=lambda *_args, **_kwargs: FakeDaemon(),
+    )
+    with pytest.raises(RuntimeError, match="identity or readiness"):
+        async with provider.connected():
+            pass
+    assert robot.closed
+    assert provider._robot is None
+
+
+@pytest.mark.anyio
+async def test_sdk_wake_up_uses_sdk_sleep_check_and_wake_sequence(monkeypatch, tmp_path):
+    from forge_puppeteer.devices.reachy import ReachyCatalog, ReachyPlaybackProvider
+    from forge_puppeteer.execution import ActionRequest
+
+    root = tmp_path / "assets"
+    catalog = ReachyCatalog(root, make_snapshot(root), move_factory=Move)
+    robot = FakeRobot()
+    install_fake_reachy_wake_helpers(monkeypatch, (0.0, 0.0, 0.0))
+    adapter = ReachyPlaybackProvider(catalog, robot, motion_authorized=True)
+    request = ActionRequest(
+        id="startup", performer_id="reachy", caller_id="conversation",
+        session_id="room", operation="wake_up", parameters={},
+    )
+    result = await adapter.execute(request)
+    assert robot.calls == ["enable_motors", "wake_up"]
+    assert "SDK wake-up sequence returned" in result.evidence
+
+
+@pytest.mark.anyio
+async def test_sdk_wake_up_is_noop_outside_native_sleep_pose(monkeypatch, tmp_path):
+    from forge_puppeteer.devices.reachy import ReachyCatalog, ReachyPlaybackProvider
+    from forge_puppeteer.execution import ActionRequest
+
+    root = tmp_path / "assets"
+    catalog = ReachyCatalog(root, make_snapshot(root), move_factory=Move)
+    robot = FakeRobot()
+    install_fake_reachy_wake_helpers(monkeypatch, (0.1, 0.5, 30.0))
+    adapter = ReachyPlaybackProvider(catalog, robot, motion_authorized=True)
+    request = ActionRequest(
+        id="startup", performer_id="reachy", caller_id="conversation",
+        session_id="room", operation="wake_up", parameters={},
+    )
+    result = await adapter.execute(request)
+    assert robot.calls == []
+    assert "skipped" in result.evidence
 
 
 def test_restricted_reachy_config_requires_exact_operator_asset_pins():
@@ -130,7 +267,8 @@ async def test_reachy_lifecycle_uses_fixed_sdk_options_and_closes(monkeypatch, t
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(manifest))
     provider = ReachySDKProvider(config(asset_root=str(root), manifest=str(manifest_path)), robot_factory=factory,
-        catalog_factory=lambda path, _manifest: ReachyCatalog(path, manifest, move_factory=Move))
+        catalog_factory=lambda path, _manifest: ReachyCatalog(path, manifest, move_factory=Move),
+        daemon_factory=lambda *_args, **_kwargs: FakeDaemon())
     with pytest.raises(RuntimeError, match="not active"):
         await provider.describe()
     async with provider.connected():
@@ -189,6 +327,7 @@ async def test_restricted_reachy_adapter_allows_only_exact_pinned_moves(monkeypa
         ),
         robot_factory=lambda **_kwargs: robot,
         catalog_factory=catalog_factory,
+        daemon_factory=lambda *_args, **_kwargs: FakeDaemon(),
     )
 
     async with provider.connected():
@@ -333,6 +472,7 @@ async def test_reachy_lifecycle_closes_sdk_if_adapter_initialization_fails(monke
         catalog_factory=lambda path, _manifest: __import__(
             "forge_puppeteer.devices.reachy", fromlist=["ReachyCatalog"]
         ).ReachyCatalog(path, manifest, move_factory=Move),
+        daemon_factory=lambda *_args, **_kwargs: FakeDaemon(),
     )
 
     def fail_adapter(*_args, **_kwargs):
@@ -410,7 +550,8 @@ class RecordedMove:
     cfg.write_text(json.dumps({
         "backend": "reachy_sdk", "device": "reachy", "instance_id": "reachy",
         "physical_authority": "I_AUTHORIZE_REACHY_CONTROL", "sdk_version": "1.10.0rc5",
-        "host": "127.0.0.1", "daemon_port": 8000, "connection_mode": "localhost_only",
+        "host": "127.0.0.1", "daemon_port": 8000, "connection_mode": "network",
+        "expected_daemon_hardware_id": "fake-hardware",
         "asset_root": str(assets), "manifest": str(manifest_path),
         "ownership_db": str(tmp_path / "reachy-owners.sqlite3"),
         "action_journal": str(tmp_path / "reachy-actions.sqlite3"),

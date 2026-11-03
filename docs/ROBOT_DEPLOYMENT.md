@@ -268,6 +268,14 @@ Example config for the operator-authorized SDK backend:
   "host": "127.0.0.1",
   "daemon_port": 8000,
   "connection_mode": "localhost_only",
+  "daemon": {
+    "command": ["/absolute/path/to/reachy-daemon-launcher", "--no-wake-up-on-start", "--no-goto-sleep-on-stop"],
+    "cwd": "/absolute/path/to/device-launcher",
+    "log_path": "/var/log/forge-puppeteer/reachy-daemon.log",
+    "startup_timeout_s": 45,
+    "persist_on_close": true
+  },
+  "expected_daemon_hardware_id": "<read from the connected Reachy daemon>",
   "asset_root": "/var/lib/forge-puppeteer/reachy/assets",
   "manifest": "/var/lib/forge-puppeteer/reachy/manifest.json",
   "allowed_tools": ["device_info", "device_state", "list_assets", "play_move", "device_stop"]
@@ -276,6 +284,34 @@ Example config for the operator-authorized SDK backend:
 
 Reachy playback, cancellation guarantees, and physical acceptance are not
 established by catalog loading.
+
+For a local `reachy_sdk` backend, the adapter requires an explicit daemon
+command and expected hardware ID. It checks the endpoint, starts the configured
+argv without a shell when absent, waits for it to answer, then verifies SDK
+daemon state, ready backend, real-hardware mode and hardware ID before exposing
+the performer. It reuses an already responding endpoint and never kills an
+existing process. A child started by the adapter persists after a normal room
+shutdown by default. Process death is reported; the adapter does not restart a
+failed daemon or replay an action. Use a pinned local launcher with an explicit
+serial port and `--no-wake-up-on-start`; Puppeteer owns the separate approved
+conversation startup behavior. A network-mode daemon must be supervised at its
+device host and still passes the same SDK identity/readiness check.
+
+`daemon` is a generic adapter lifecycle contract, not a Reachy-only process
+manager. Its trusted `command` is passed as argv without shell interpretation;
+`cwd` and `log_path` are optional absolute paths. When no log path is supplied,
+child output is discarded so it cannot corrupt the stdio MCP protocol. Local
+adapters must provide their backend's own identity and readiness checks after
+the endpoint probe. Keep lifecycle process management with the adapter that
+owns that device connection.
+
+The Reachy-only ensemble config also accepts
+`reachy_startup_behavior: "wake_up_if_sleeping"`. This adds the pinned SDK
+wake-up behavior to Puppeteer's generic, content-addressed startup slot; it
+requires `wake_up` in the operator's exact Reachy grants. It runs once on the
+first presence event and uses the SDK's sleep pose and `wake_up()` behavior.
+Keep daemon auto-wake disabled to avoid a second motion owner. SDK completion
+does not prove physical settling or a confirmed STOP.
 
 ### Restricted, operator-approved Reachy moves
 
@@ -300,6 +336,12 @@ the move, then put only the approved pairs in the trusted server config:
   "host": "127.0.0.1",
   "daemon_port": 8000,
   "connection_mode": "localhost_only",
+  "daemon": {
+    "command": ["/absolute/path/to/reachy-daemon-launcher", "--no-wake-up-on-start", "--no-goto-sleep-on-stop"],
+    "startup_timeout_s": 45,
+    "persist_on_close": true
+  },
+  "expected_daemon_hardware_id": "<read from the connected Reachy daemon>",
   "asset_root": "/var/lib/forge-puppeteer/reachy/assets",
   "manifest": "/var/lib/forge-puppeteer/reachy/manifest.json",
   "ownership_db": "/var/lib/forge-puppeteer/reachy/ownership.sqlite3",

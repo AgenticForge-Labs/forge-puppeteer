@@ -179,7 +179,15 @@ class ReachyPlaybackProvider:
         )]
         operations = ["list_assets", "play_move", "stop"]
         if not self.restricted_actions:
-            operations.extend(("head_pose", "antenna_targets", "pose_and_antennas"))
+            operations.extend(("head_pose", "antenna_targets", "pose_and_antennas", "wake_up"))
+            controls.append(ControlDescriptor(
+                id="reachy.wake_up",
+                description="Run the SDK wake-up sequence only when the head is in its SDK sleep pose",
+                effect="motion",
+                parameters_schema={"type": "object", "properties": {}, "additionalProperties": False},
+                resources=_RESOURCES,
+                concurrency_constraints=("serialized across all Reachy motion",),
+            ))
             controls.extend((ControlDescriptor(
                 id="reachy.head_pose",
                 description="Move the head to a bounded rigid pose",
@@ -244,7 +252,7 @@ class ReachyPlaybackProvider:
     async def permitted(self, tool: str) -> bool:
         """Explicit local tool grant, intersected with current motion authority."""
         known = {"device_info", "device_state", "list_assets", "action_lookup"}
-        motion = {"play_move", "head_pose", "antenna_targets", "pose_and_antennas", "action_cancel", "device_stop"}
+        motion = {"play_move", "head_pose", "antenna_targets", "pose_and_antennas", "wake_up", "action_cancel", "device_stop"}
         if self.restricted_actions and tool in {"head_pose", "antenna_targets", "pose_and_antennas"}:
             return False
         return tool in known or (tool in motion and self.motion_authorized)
@@ -259,7 +267,7 @@ class ReachyPlaybackProvider:
         return _RESOURCES
 
     async def validate(self, request: ActionRequest) -> None:
-        if request.operation not in {"play_move", "head_pose", "antenna_targets", "pose_and_antennas"}:
+        if request.operation not in {"play_move", "head_pose", "antenna_targets", "pose_and_antennas", "wake_up"}:
             raise ValueError("unsupported Reachy operation")
         if not self.motion_authorized:
             raise PermissionError("Reachy motion authority is not granted")
@@ -279,6 +287,9 @@ class ReachyPlaybackProvider:
             if self.restricted_actions and (request.asset_id, request.asset_revision) not in self.approved_moves:
                 raise PermissionError("Reachy move is not in the operator-approved asset allowlist")
             self.catalog.get(request.asset_id, request.asset_revision)
+        elif request.operation == "wake_up":
+            if self.restricted_actions or request.parameters:
+                raise PermissionError("Reachy wake_up is unavailable in restricted move-only mode")
         else:
             self._validate_native(request)
         with self._lock:
@@ -297,6 +308,9 @@ class ReachyPlaybackProvider:
                 move = self.catalog.get(request.asset_id, request.asset_revision)
                 await self.robot.async_play_move(move, sound=request.parameters.get("sound", False))
                 evidence = "SDK playback loop returned; physical settling unmeasured"
+            elif request.operation == "wake_up":
+                import asyncio
+                evidence = await asyncio.to_thread(self._wake_up_if_sleeping)
             else:
                 # The pinned SDK's goto_target waits for its daemon task to finish,
                 # but returns no measured-pose evidence. Keep its blocking call off
@@ -319,6 +333,20 @@ class ReachyPlaybackProvider:
                 self._active = False
                 self._active_operation = None
         return Completion(evidence)
+
+    def _wake_up_if_sleeping(self) -> str:
+        """Use the pinned SDK's sleep pose and wake-up choreography unchanged."""
+        from reachy_mini.reachy_mini import SLEEP_HEAD_POSE
+        from reachy_mini.utils.interpolation import distance_between_poses
+
+        translation_m, rotation_rad, *_ = distance_between_poses(
+            self.robot.get_current_head_pose(), SLEEP_HEAD_POSE,
+        )
+        if translation_m > 0.05 or rotation_rad > 0.35:
+            return "SDK wake-up skipped; current head pose is outside the SDK sleep-pose tolerance"
+        self.robot.enable_motors()
+        self.robot.wake_up()
+        return "SDK wake-up sequence returned; physical settling unmeasured"
 
     @staticmethod
     def _validate_native(request: ActionRequest) -> None:
