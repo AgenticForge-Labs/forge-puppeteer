@@ -230,3 +230,16 @@ Never commit credentials, Wi-Fi/device secrets, private network addresses, token
   The optional `stackchan_speaking_mode: native_weight` is operator-only,
   while `legacy_size` remains the default. Never silently switch styles
   based on model interpretation or infer measured face appearance.
+
+## Optional StackChan display scale in Puppeteer
+
+- The merged SDK 0.4.0 defines `display.face_scale` (100 or 170 percent).
+  Puppeteer's corresponding `face_scale_update` is a separate operator-granted,
+  journaled visual operation. Do not add it to semantic emotion packs, infer it
+  from speech, or automatically change it at startup.
+- Require the installed SDK 0.4.0 and current firmware's advertised capability;
+  older firmware must fail closed for this operation without losing other
+  existing controls. Each display request still passes SDK STOP-generation
+  fencing and shared resource serialization; firmware completion is not visual
+  inspection. No reconnect, automatic retry, firmware flashing, or physical
+  qualification is implied by CI.

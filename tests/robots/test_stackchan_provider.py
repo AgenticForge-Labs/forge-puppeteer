@@ -13,7 +13,7 @@ pytestmark = pytest.mark.anyio
 
 ALL_TOOLS = frozenset({
     "device_info", "device_state", "list_assets", "action_lookup",
-    "head_move", "face_update", "lights_update", "neohex_update",
+    "head_move", "face_update", "face_scale_update", "lights_update", "neohex_update",
     "play_asset", "device_stop", "action_cancel",
 })
 
@@ -29,6 +29,7 @@ class Fake:
         self.capabilities = [
             "system.state",
             "avatar.update",
+            "display.face_scale",
             "motion.update.position_only",
             "lights.update",
             "external_lights.update",
@@ -56,6 +57,11 @@ class Fake:
         if expected_generation != self.generation:
             raise RuntimeError("action invalidated by stop")
         return self._event("face", update)
+
+    def set_face_scale(self, percent, *, expected_generation=None):
+        if expected_generation != self.generation:
+            raise RuntimeError("action invalidated by stop")
+        return self._event("face_scale", percent)
 
     def move_head(self, update, *, expected_generation=None):
         if expected_generation != self.generation:
@@ -378,4 +384,102 @@ async def test_stop_during_asset_preflight_does_not_launch_playback(tmp_path):
     assert len(result) == 1
     assert "invalidated by stop" in result[0]
     assert all(entry[0] != "face" for entry in fake.calls)
+    await provider.close()
+
+
+async def test_optional_face_scale_is_visual_only_and_uses_existing_execution_fence():
+    fake = Fake()
+    provider = StackChanProvider(
+        "robot", connector=lambda *a, **k: (Client(), fake),
+        allowed_tools=ALL_TOOLS,
+    )
+    await provider.connect("fake")
+    assert await provider.permitted("face_scale_update")
+    descriptor = await provider.describe()
+    control = next(item for item in descriptor.controls if item.id == "face_scale")
+    assert control.effect == "visual"
+    assert control.resources == ("face.display",)
+    assert control.parameters_schema["properties"]["percent"]["enum"] == [100, 170]
+    assert "face_scale" in descriptor.supported_operations
+    action = request("face_scale", {"percent": 170})
+    assert "stackchan.serialized" in provider.resources_for(action)
+    assert "face.display" in provider.resources_for(action)
+    await provider.validate(action)
+    completed = await provider.execute(action)
+    assert "not measured" in completed.evidence
+    assert fake.calls == [("face_scale", 170)]
+    await provider.execute(request("face_scale", {"percent": 100}))
+    assert fake.calls[-1] == ("face_scale", 100)
+    assert not any(name in {"head", "stop"} for name, _ in fake.calls)
+    await provider.close()
+
+
+async def test_face_scale_rejects_invalid_payloads_before_native_submission():
+    fake = Fake()
+    provider = StackChanProvider(
+        "robot", connector=lambda *a, **k: (Client(), fake),
+        allowed_tools=ALL_TOOLS,
+    )
+    await provider.connect("fake")
+    for payload in (
+        {"percent": 169}, {"percent": 101}, {"percent": True},
+        {"percent": 100.0}, {"percent": "170"},
+        {"percent": 170, "yaw": 20}, {},
+    ):
+        with pytest.raises((ValueError, TypeError)):
+            await provider.validate(request("face_scale", payload))
+    with pytest.raises(ValueError, match="native operation cannot specify an asset"):
+        await provider.validate(request(
+            "face_scale", {"percent": 100},
+            asset_id="stackchan/face-neutral", asset_revision="sha256:" + "a" * 64,
+        ))
+    assert fake.calls == []
+    await provider.close()
+
+
+async def test_face_scale_requires_grant_new_sdk_and_live_firmware_support():
+    fake = Fake()
+    provider = StackChanProvider(
+        "robot", connector=lambda *a, **k: (Client(), fake),
+        allowed_tools=frozenset({"device_info", "device_state"}),
+    )
+    await provider.connect("fake")
+    assert not await provider.permitted("face_scale_update")
+    with pytest.raises(PermissionError, match="operator grants"):
+        await provider.execute(request("face_scale", {"percent": 170}))
+    await provider.close()
+
+    fake = Fake()
+    provider = StackChanProvider(
+        "robot", connector=lambda *a, **k: (Client(), fake),
+        allowed_tools=ALL_TOOLS,
+    )
+    await provider.connect("fake")
+    fake.capabilities.remove("display.face_scale")
+    assert not await provider.permitted("face_scale_update")
+    assert "face_scale" not in (await provider.describe()).supported_operations
+    with pytest.raises(ValueError, match="unavailable"):
+        await provider.validate(request("face_scale", {"percent": 170}))
+    assert fake.calls == []
+    await provider.close()
+
+
+async def test_face_scale_unknown_outcome_is_not_retried():
+    from stackchan_control.routed_serial import UnknownOutcome
+
+    fake = Fake()
+    provider = StackChanProvider(
+        "robot", connector=lambda *a, **k: (Client(), fake),
+        allowed_tools=ALL_TOOLS,
+    )
+    await provider.connect("fake")
+
+    def lost_scale(percent, *, expected_generation=None):
+        fake.calls.append(("unconfirmed_face_scale", percent))
+        raise UnknownOutcome("fixture: command submitted but outcome not observed")
+
+    fake.set_face_scale = lost_scale
+    with pytest.raises(UnknownOutcome):
+        await provider.execute(request("face_scale", {"percent": 170}))
+    assert fake.calls == [("unconfirmed_face_scale", 170)]
     await provider.close()

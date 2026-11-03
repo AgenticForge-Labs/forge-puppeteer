@@ -466,7 +466,7 @@ class StackChanSDKProvider:
 
     _TOOLS = frozenset({
         "device_info", "device_state", "list_assets", "action_lookup",
-        "head_move", "face_update", "lights_update", "neohex_update", "play_asset",
+        "head_move", "face_update", "face_scale_update", "lights_update", "neohex_update", "play_asset",
         "action_cancel", "device_stop",
     })
 
@@ -497,6 +497,10 @@ class StackChanSDKProvider:
         if installed != config.sdk_version:
             raise ValueError(
                 f"installed stackchan-control {installed} does not match configured {config.sdk_version}"
+            )
+        if "face_scale_update" in config.allowed_tools and installed != "0.4.0":
+            raise ValueError(
+                "StackChan face-scale grant requires installed stackchan-control==0.4.0"
             )
         from ..devices.stackchan import StackChanProvider
         self.config = config

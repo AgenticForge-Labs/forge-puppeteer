@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -69,6 +69,12 @@ class FaceParameters(_Parameters):
 Color = Annotated[str, Field(pattern=r"^#[0-9a-fA-F]{6}$")]
 
 
+class FaceScaleParameters(_Parameters):
+    """Optional EXT CONTROL display transform, never a motor or emotion."""
+
+    percent: Literal[100, 170]
+
+
 class NeoHexParameters(_Parameters):
     # Matches the native SDK's NeoHexFrame contract (no raw serial passthrough).
     pixels: list[Color] = Field(min_length=37, max_length=37)
@@ -124,6 +130,23 @@ def register_stackchan_tools(server: MCPServer, gateway: Gateway) -> None:
                 session_id=session_id,
                 operation="face",
                 parameters=parameters.model_dump(exclude_none=True),
+            ),
+        )
+
+    @server.tool()
+    async def face_scale_update(
+        action_id: str, caller_id: str, session_id: str, parameters: FaceScaleParameters
+    ) -> dict[str, object]:
+        """Select normal (100%) or enlarged (170%) StackChan face presentation."""
+        return await gateway.submit(
+            "face_scale_update",
+            ActionRequest(
+                id=action_id,
+                performer_id=gateway.performer_id,
+                caller_id=caller_id,
+                session_id=session_id,
+                operation="face_scale",
+                parameters=parameters.model_dump(),
             ),
         )
 

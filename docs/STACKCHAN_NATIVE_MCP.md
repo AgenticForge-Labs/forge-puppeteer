@@ -201,3 +201,47 @@ physical rendering must be attended-reviewed.
 The optional audio-responsive `StackChanSpeechFacePreview` likewise
 uses normalized mouth intensity to propose native mouth **weight**
 updates, not a duplicate speaking engine. It remains preview-only.
+
+
+## Optional display-scale capability (SDK 0.4.0; requires firmware support)
+
+The native SDK 0.4.0 now supports `display.face_scale` for either normal
+(100%) or enlarged (170%) LVGL face presentation. This is **not** an emotion,
+speech-reactivity setting, motion envelope, or calibration change. Older 0.3.0
+firmware neither advertises nor accepts this optional native command.
+
+Puppeteer exposes `face_scale_update` only through its existing room-owned
+MCP/action-journal/ExecutionRuntime path. Trusted operator configuration must
+include the explicit `face_scale_update` tool grant, exact installed
+`stackchan-control==0.4.0`, chosen USB port, and
+`I_AUTHORIZE_STACKCHAN_CONTROL` physical-authority marker; merely having
+version 0.4.0 installed does **not** grant display control. The provider
+intersects that grant with connected firmware's `display.face_scale`
+capability and the SDK's published native control registry. Older firmware
+works with prior controls and simply lacks face-scale support.
+
+Call the existing MCP tool with a stable, unique action ID and a strictly
+validated `parameters: {"percent": 170}` to enlarge, or percent 100 to
+restore. These are the only accepted percentages. Device discovery reports a
+`face_scale` operation with visual effect and `face.display` resource.
+The command is serialized against all other StackChan SDK operations and
+passes the same STOP-generation snapshot used by the existing controls.
+A completed action represents firmware command completion, not independent
+visual verification; any unknown outcome must retain the normal action
+journal state and **never be retried automatically**.
+
+There is **no automatic startup change** and no resize from emotion, voice,
+or speech-intensity signals. Stock 100% is the new firmware default until an
+operator requests 170%. The legacy 0.3.0 firmware is left untouched. Attended
+firmware installation and inspection of 100%/170% rendering, home/status UI,
+and mouth clearing are outstanding.
+
+Local software validation before attended hardware use:
+
+```bash
+cd ~/code/stackchan-control-sdk
+python -m pytest tests/test_external_control.py tests/test_capability_schemas.py tests/test_cli.py -q
+
+cd ~/code/forge-puppeteer
+python -m pytest tests/robots/test_stackchan_provider.py tests/robots/test_stackchan_mcp.py tests/robots/test_packaged_launcher_stackchan.py -q
+```

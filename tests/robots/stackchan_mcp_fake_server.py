@@ -37,6 +37,7 @@ class FakeRobot:
                 "system.state",
                 "system.stop",
                 "avatar.update",
+                "display.face_scale",
                 "motion.update.position_only",
                 "lights.update",
                 "external_lights.update",
@@ -53,6 +54,7 @@ class FakeRobot:
 
     update_face = _apply
     move_head = _apply
+    set_face_scale = _apply
     update_lights = _apply
 
     def update_neohex(self, frame, *, expected_generation=None):
@@ -74,6 +76,7 @@ def main():
             "list_assets",
             "head_move",
             "face_update",
+            "face_scale_update",
             "lights_update",
             "neohex_update",
             "play_asset",
