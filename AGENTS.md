@@ -243,3 +243,18 @@ Never commit credentials, Wi-Fi/device secrets, private network addresses, token
   fencing and shared resource serialization; firmware completion is not visual
   inspection. No reconnect, automatic retry, firmware flashing, or physical
   qualification is implied by CI.
+
+
+## Three-robot presentation presets
+
+- The optional room-owned `ensemble_presentation` is for trusted authored
+  visual presets, not free-form SDK commands. StackChan normal/enlarged
+  face options require `stackchan_display_presets_enabled: true`, installed
+  native SDK 0.4.0, and the existing explicit `face_scale_update` grant.
+- Reuse `ConversationEnsemble.present` and the same `_play`/ExecutionRuntime
+  scheduling, journal, ownership and quarantine as finite expressions.
+  Preflight before replacing an ambient behavior. A denied or unsupported
+  display operation must not issue motor STOP or alter Reachy/SO-ARM.
+- Do not start a second StackChan MCP server for a three-robot room, add
+  arbitrary percentages to MCP, or interpret a firmware command-completed
+  result as measured face rendering.

@@ -19,6 +19,7 @@ from forge_puppeteer.mcp.ensemble_launcher import (
     SOARMEnsembleConfig,
     build_ensemble,
     soarm_native_binding,
+    stackchan_display_presets,
 )
 
 
@@ -298,3 +299,25 @@ def test_stackchan_native_speaking_is_explicit_operator_config(tmp_path):
     data["stackchan_speaking_mode"] = "anything"
     with pytest.raises(ValueError):
         EnsembleConfig.model_validate(data)
+
+
+def test_optional_stackchan_display_presets_require_sdk_and_separate_grant(tmp_path):
+    data = config_data(tmp_path)
+    config = EnsembleConfig.model_validate(data)
+    assert config.stackchan_display_presets_enabled is False
+    assert stackchan_display_presets(config) == {}
+    data["stackchan_display_presets_enabled"] = True
+    with pytest.raises(ValueError, match="SDK 0.4.0"):
+        EnsembleConfig.model_validate(data)
+    data["stackchan"]["sdk_version"] = "0.4.0"
+    with pytest.raises(ValueError, match="face_scale_update"):
+        EnsembleConfig.model_validate(data)
+    data["stackchan"]["allowed_tools"].append("face_scale_update")
+    config = EnsembleConfig.model_validate(data)
+    curated = stackchan_display_presets(config)["stackchan"]
+    assert set(curated) == {"normal", "enlarged"}
+    assert curated["normal"].operation == "face_scale"
+    assert curated["normal"].parameters == {"percent": 100}
+    assert curated["enlarged"].parameters == {"percent": 170}
+    assert all(cue.asset_id is None for cue in curated.values())
+    assert "face_scale" not in config.stackchan.allowed_tools  # only the named MCP grant

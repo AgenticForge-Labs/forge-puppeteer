@@ -278,3 +278,15 @@ capability checks. Older firmware supports existing expressions unchanged;
 face scale is neither an automatic startup setting nor inferred from speech.
 Physical display acceptance remains pending. See
 [StackChan native MCP](docs/STACKCHAN_NATIVE_MCP.md).
+
+
+### One room, one StackChan display owner
+
+The three-robot ensemble can now optionally expose two source-controlled
+StackChan display presets through `ensemble_presentation`: `normal`
+(100%) and `enlarged` (170%). The room remains the **only** robot owner:
+no second StackChan MCP process or parallel firmware transport is launched.
+Presets are disabled by default, never part of an emotion/voice loop, and
+require exact StackChan SDK 0.4.0 plus an explicit operator grant. Existing
+action journaling, resource locks and STOP/unknown quarantine still apply.
+Actual appearance on the device has not been physically qualified.

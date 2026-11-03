@@ -17,7 +17,7 @@ class Fake:
 
     async def validate(self, request):
         if request.operation not in {"fake_idle", "fake_listening", "fake_speaking",
-                                     "fake_yes", "fake_no"}:
+                                     "fake_yes", "fake_no", "fake_face_scale"}:
             raise ValueError("unsupported fake operation")
 
     def resources_for(self, request):
@@ -55,6 +55,16 @@ def main():
     ensemble = ConversationEnsemble(runtime, (pack(n) for n in names))
     create_ensemble_server(
         runtime, ensemble, name="Mock 3-Robot Room", motion_enabled=True,
+        presentation_presets={
+            "stackchan": {
+                "normal": BehaviorCue(
+                    at_s=0, operation="fake_face_scale", parameters={"percent": 100},
+                ),
+                "enlarged": BehaviorCue(
+                    at_s=0, operation="fake_face_scale", parameters={"percent": 170},
+                ),
+            },
+        },
     ).run(transport="stdio")
 
 

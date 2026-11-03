@@ -468,3 +468,66 @@ def test_mutating_a_frozen_pack_nested_payload_is_rejected_before_scheduling():
     runtime = ExecutionRuntime(PerformanceStage(FakeClock()))
     with pytest.raises(ValueError, match="revision"):
         ConversationEnsemble(runtime, [original])
+
+
+
+def test_presentation_preflight_denial_does_not_stop_or_preempt_ambient_cues():
+    async def run():
+        sdk = FakeSDK()
+        runtime = ExecutionRuntime(PerformanceStage())
+        runtime.register("stackchan", sdk)
+        ensemble = ConversationEnsemble(runtime, [pack("stackchan")])
+        cue = BehaviorCue(at_s=0, operation="face_scale", parameters={"percent": 170})
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "speaking"))
+            await anyio.sleep(0.03)
+            before = list(sdk.calls)
+            result = await ensemble.present(
+                "stackchan", "enlarged", action_id="scale-failed", cue=cue,
+            )
+            assert result["outcome"] == "unsupported"
+            assert result["reason"] == "presentation_preflight_denied"
+            assert sdk.stop_calls == 0
+            assert "face_scale" not in sdk.calls
+            assert sdk.calls[:len(before)] == before
+            assert "stackchan" not in ensemble._blocked
+    anyio.run(run)
+
+
+def test_presentation_uses_existing_action_journal_and_resumes_presence():
+    async def run():
+        class VisualSDK(FakeSDK):
+            async def validate(self, request):
+                if request.operation == "face_scale":
+                    if request.parameters != {"percent": 170}:
+                        raise ValueError("unsupported visual preset")
+                    return
+                await super().validate(request)
+
+        sdk = VisualSDK()
+        runtime = ExecutionRuntime(PerformanceStage())
+        runtime.register("stackchan", sdk)
+        ensemble = ConversationEnsemble(runtime, [pack("stackchan")])
+        cue = BehaviorCue(at_s=0, operation="face_scale", parameters={"percent": 170})
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "speaking"))
+            await anyio.sleep(0.03)
+            result = await ensemble.present(
+                "stackchan", "enlarged", action_id="scale-one", cue=cue,
+            )
+            assert result["outcome"] == "accepted"
+            with anyio.fail_after(2):
+                while "face_scale" not in sdk.calls:
+                    await anyio.sleep(0.01)
+            record = await runtime.wait("scale-one:stackchan:0:0")
+            assert record.state.value == "completed"
+            assert sdk.calls.count("face_scale") == 1
+            assert sdk.stop_calls == 0
+            duplicate = await ensemble.present(
+                "stackchan", "enlarged", action_id="scale-one", cue=cue,
+            )
+            assert duplicate["outcome"] == "duplicate"
+            assert "face_scale" not in ensemble.snapshot()["performers"]["stackchan"]["expressions"]
+            await anyio.sleep(0.05)
+            assert sdk.calls.count("fake_talk") >= 2
+    anyio.run(run)

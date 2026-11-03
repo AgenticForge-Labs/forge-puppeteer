@@ -26,10 +26,14 @@ async def test_real_stdio_mcp_one_room_controls_three_mock_devices():
         await session.initialize()
         tools = await session.list_tools()
         names = {tool.name for tool in tools.tools}
-        assert {"ensemble_state", "ensemble_presence", "ensemble_expression"} <= names
+        assert {"ensemble_state", "ensemble_presence", "ensemble_expression",
+                "ensemble_presentation"} <= names
         snapshot = await session.call_tool("ensemble_state", {})
         assert not snapshot.is_error
         assert snapshot.structured_content["state"] == "disconnected"
+        assert snapshot.structured_content["presentation_presets_configured"] == {
+            "stackchan": ["enlarged", "normal"],
+        }
         accepted = await session.call_tool("ensemble_presence", {
             "session_id": "4g-room", "event_id": "e0",
             "sequence": 0, "state": "speaking",
@@ -41,6 +45,19 @@ async def test_real_stdio_mcp_one_room_controls_three_mock_devices():
             "reachy", "stackchan", "soarm101",
         }
         await anyio.sleep(0.04)
+        display = await session.call_tool("ensemble_presentation", {
+            "performer_id": "stackchan", "preset": "enlarged", "action_id": "scale-1",
+        })
+        assert not display.is_error
+        assert display.structured_content["outcome"] == "accepted"
+        missing_display = await session.call_tool("ensemble_presentation", {
+            "performer_id": "reachy", "preset": "enlarged", "action_id": "bad-scale",
+        })
+        assert missing_display.structured_content["outcome"] == "unsupported"
+        again = await session.call_tool("ensemble_presentation", {
+            "performer_id": "stackchan", "preset": "enlarged", "action_id": "scale-1",
+        })
+        assert again.structured_content["outcome"] == "duplicate"
         yes = await session.call_tool("ensemble_expression", {
             "expression": "yes", "action_id": "yes-0",
         })

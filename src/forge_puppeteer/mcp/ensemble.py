@@ -8,11 +8,11 @@ business tools are stored in Puppeteer.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING
 
-from ..behavior_contract import EnsemblePresence
+from ..behavior_contract import BehaviorCue, EnsemblePresence
 from ..conversation_ensemble import ConversationEnsemble
 from ..execution import ExecutionRuntime
 from ..speech_expression import SpeechEnvelopeWindow
@@ -28,6 +28,7 @@ def create_ensemble_server(
     connected: Callable | None = None,
     name: str = "Forge Puppeteer Ensemble",
     motion_enabled: bool = False,
+    presentation_presets: Mapping[str, Mapping[str, BehaviorCue]] | None = None,
 ) -> MCPServer:
     """An opt-in single-room stdio server with operator startup gate.
 
@@ -42,6 +43,10 @@ def create_ensemble_server(
         raise RuntimeError("Install forge-puppeteer[mcp] for ensemble tools") from exc
 
     speech_window = SpeechEnvelopeWindow()
+    # This is operator-selected trusted code/data, never LLM-provided cues.
+    presets = {name: dict(options) for name, options in (presentation_presets or {}).items()}
+    if any(name not in ensemble.packs or not options for name, options in presets.items()):
+        raise ValueError("presentation presets must bind configured performers")
 
     @asynccontextmanager
     async def lifespan(_server):
@@ -63,7 +68,10 @@ def create_ensemble_server(
     async def ensemble_state() -> dict[str, object]:
         """Current room state and independent per-performer action evidence."""
         return {"outcome": "observed", **ensemble.snapshot(),
-                "speech_envelope": speech_window.snapshot()}
+                "speech_envelope": speech_window.snapshot(),
+                "presentation_presets_configured": {
+                    name: sorted(options) for name, options in presets.items()
+                }}
 
     @server.tool()
     async def ensemble_presence(
@@ -104,6 +112,23 @@ def create_ensemble_server(
         except Exception:  # noqa: BLE001 - all provider failures map to a safe MCP error
             raise ToolError("invalid_or_unavailable_ensemble_expression") from None
 
+
+    @server.tool()
+    async def ensemble_presentation(
+        performer_id: str, preset: str, action_id: str,
+    ) -> dict[str, object]:
+        """Explicit source-controlled, finite visual preset; not a free-form SDK call."""
+        if not motion_enabled:
+            raise ToolError("ensemble_motion_not_operator_authorized")
+        cue = presets.get(performer_id, {}).get(preset)
+        if cue is None:
+            return {"outcome": "unsupported", "reason": "unmapped_presentation_preset"}
+        try:
+            return await ensemble.present(
+                performer_id, preset, action_id=action_id, cue=cue,
+            )
+        except (TypeError, ValueError, RuntimeError):
+            raise ToolError("invalid_or_unavailable_ensemble_presentation") from None
 
     @server.tool()
     async def ensemble_speech_envelope(
