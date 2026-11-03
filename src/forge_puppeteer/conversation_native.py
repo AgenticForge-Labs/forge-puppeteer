@@ -325,6 +325,7 @@ def stackchan_conversation_pack(
     yaw_amplitude: int = 80,
     pitch_amplitude: int = 45,
     head_speed: int = 180,
+    speaking_mode: Literal["legacy_size", "native_weight"] = "legacy_size",
 ) -> PerformerBehaviors:
     """Native SDK face/head/eyes patterns; units are tenths of a degree.
 
@@ -335,6 +336,8 @@ def stackchan_conversation_pack(
 
     validate_stackchan_center(yaw_center, pitch_center, yaw_amplitude,
                                pitch_amplitude, head_speed)
+    if speaking_mode not in {"legacy_size", "native_weight"}:
+        raise ValueError("unsupported StackChan speaking mode")
 
     def face(
         at: float, *, mouth: int | None = 0,
@@ -360,7 +363,7 @@ def stackchan_conversation_pack(
         return _cue(at, "head", yaw={"angle": yaw_center + yaw, "speed": head_speed},
                     pitch={"angle": pitch_center + pitch, "speed": head_speed})
 
-    return PerformerBehaviors.author(performer_id, {
+    behaviors = {
         "idle": _pattern((
             face(0.0, mouth=0, eyes=45), head(0.35),
             head(1.2, yaw=yaw_amplitude // 2), head(2.15),
@@ -432,4 +435,17 @@ def stackchan_conversation_pack(
             face(0.0, mouth=None, eye_x=15),
             face(0.4, mouth=None, eye_x=0),
         )),
-    })
+    }
+    if speaking_mode == "native_weight":
+        # Optional deterministic equivalent of the stock SpeakingModifier,
+        # which opens/closes mouth WEIGHT rather than mouth SIZE.
+        # Still a Puppeteer-authorized loop through the native SDK, never the
+        # firmware's random head-motion modifier or a second motor scheduler.
+        behaviors["speaking"] = _pattern((
+            _cue(0.0, "face", mouth={"weight": 45},
+                 left_eye={"weight": 50}, right_eye={"weight": 50}),
+            _cue(0.22, "face", mouth={"weight": 75}),
+            _cue(0.44, "face", mouth={"weight": 55}),
+            _cue(0.66, "face", mouth={"weight": 0}),
+        ), period_s=0.9)
+    return PerformerBehaviors.author(performer_id, behaviors)
