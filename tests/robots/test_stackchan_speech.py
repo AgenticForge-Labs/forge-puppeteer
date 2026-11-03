@@ -38,7 +38,8 @@ def test_native_mouth_preview_never_opens_hardware_or_moves_servos():
     assert _step({"at_s": 0, "operation": first.operation, "parameters": first.parameters})
     assert preview.render(shaping.render(hop(1))) is None
     assert preview.render(shaping.render(hop(2))) is None
-    resumed = preview.render(shaping.render(hop(3)))
+    assert preview.render(shaping.render(hop(3))) is None
+    resumed = preview.render(shaping.render(hop(4)))
     assert resumed is not None and resumed.operation == "face"
 
 
