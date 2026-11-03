@@ -19,12 +19,12 @@ from .speech_expression import ExpressionChannels
 class StackChanSpeechFaceProfile:
     """Bounded presentation-only limits in native StackChan feature units."""
 
-    max_mouth_size: int = 42
+    max_mouth_weight: int = 75
     min_interval_ms: int = 150
 
     def __post_init__(self) -> None:
-        if type(self.max_mouth_size) is not int or not 0 <= self.max_mouth_size <= 100:
-            raise ValueError("mouth size must be an integer in 0..100")
+        if type(self.max_mouth_weight) is not int or not 0 <= self.max_mouth_weight <= 100:
+            raise ValueError("mouth weight must be an integer in 0..100")
         if type(self.min_interval_ms) is not int or not 100 <= self.min_interval_ms <= 1000:
             raise ValueError("face output cadence must be between 100 and 1000 ms")
 
@@ -71,13 +71,13 @@ class StackChanSpeechFacePreview:
         ):
             return None
 
-        size = (
-            int(round(self.profile.max_mouth_size * channels.mouth))
+        weight = (
+            int(round(self.profile.max_mouth_weight * channels.mouth))
             if channels.active else 0
         )
         self._last_emitted_ms = channels.offset_ms
         return BehaviorCue(
             at_s=0.0,
             operation="face",
-            parameters={"mouth": {"size": size}},
+            parameters={"mouth": {"weight": weight}},
         )
