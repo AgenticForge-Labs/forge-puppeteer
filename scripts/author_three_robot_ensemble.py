@@ -1,4 +1,4 @@
-"""Create a review-only three-robot SIMULATION ensemble configuration.
+"""Create review-only two- or three-robot ensemble configurations.
 
 Does not contact hardware, run SDK motion, arm a device, grant motion, open a
 port, or approve any generated path. Fill all operator gates only after review.
@@ -19,19 +19,24 @@ def author_config(
     reachy_manifest: Path,
     reachy_recordings: Path,
     reachy_neutral_file: Path,
-    soarm_neutral_file: Path,
+    soarm_neutral_file: Path | None = None,
     stackchan_port: str,
     action_journal: Path,
     ownership_db: Path,
+    reachy_stackchan_only: bool = False,
 ) -> dict[str, object]:
-    neutral = json.loads(soarm_neutral_file.read_text(encoding="utf-8"))
-    if not isinstance(neutral, list):
-        raise TypeError("SO-ARM neutral must be exactly five joint radians as a JSON list")
-    programs = author_soarm_reference_programs(
-        robot_id="so101", calibration_id="simulation", neutral_joints_rad=neutral
-    )
-    return {
-        "schema_version": 1,
+    programs = {}
+    if not reachy_stackchan_only:
+        if soarm_neutral_file is None:
+            raise ValueError("three-robot authoring requires --soarm-neutral")
+        neutral = json.loads(soarm_neutral_file.read_text(encoding="utf-8"))
+        if not isinstance(neutral, list):
+            raise TypeError("SO-ARM neutral must be exactly five joint radians as a JSON list")
+        programs = author_soarm_reference_programs(
+            robot_id="so101", calibration_id="simulation", neutral_joints_rad=neutral
+        )
+    config = {
+        "schema_version": 3 if reachy_stackchan_only else 1,
         "motion_authority": "REVIEW_REQUIRED_NO_MOTION_AUTHORITY",
         "reachy_neutral_head": str(reachy_neutral_file.absolute()),
         "reachy": {
@@ -76,6 +81,11 @@ def author_config(
         "action_journal": str(action_journal.absolute()),
         "ownership_db": str(ownership_db.absolute()),
     }
+    if reachy_stackchan_only:
+        # No simulated SO-ARM profile, runtime, watchdog or program is kept.
+        config.pop("soarm101")
+        config["stackchan"]["sdk_version"] = "0.4.0"
+    return config
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -83,12 +93,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--reachy-manifest", type=Path, required=True)
     parser.add_argument("--reachy-recordings", type=Path, required=True)
     parser.add_argument("--reachy-neutral", type=Path, required=True)
-    parser.add_argument("--soarm-neutral", type=Path, required=True)
+    parser.add_argument("--soarm-neutral", type=Path)
+    parser.add_argument("--reachy-stackchan-only", action="store_true",
+                        help="author v3 two-robot config without SO-ARM simulation")
     parser.add_argument("--stackchan-port", required=True)
     parser.add_argument("--action-journal", type=Path, required=True)
     parser.add_argument("--ownership-db", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
+    if not args.reachy_stackchan_only and args.soarm_neutral is None:
+        parser.error("--soarm-neutral required for three-robot config")
     config = author_config(
         reachy_manifest=args.reachy_manifest,
         reachy_recordings=args.reachy_recordings,
@@ -97,11 +111,15 @@ def main(argv: list[str] | None = None) -> int:
         stackchan_port=args.stackchan_port,
         action_journal=args.action_journal,
         ownership_db=args.ownership_db,
+        reachy_stackchan_only=args.reachy_stackchan_only,
     )
     if args.output.exists():
         parser.error("will not overwrite an existing review or approval document")
     args.output.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-    print(f"Authored {len(config['soarm101']['programs'])} candidate SDK programs.")
+    if args.reachy_stackchan_only:
+        print("Authored Reachy+StackChan review candidate; no SO-ARM or simulator.")
+    else:
+        print(f"Authored {len(config['soarm101']['programs'])} candidate SDK programs.")
     print("Review the full paths and replace REVIEW_REQUIRED fields explicitly.")
     print("No robot has been connected or authorized by this script.")
     return 0
