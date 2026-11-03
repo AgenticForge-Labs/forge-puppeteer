@@ -7,6 +7,7 @@ journaling through the PR1 ConversationEnsemble.
 
 import hashlib
 import json
+import time
 from types import SimpleNamespace
 
 import anyio
@@ -175,3 +176,46 @@ async def test_reachy_and_stackchan_execute_same_conversation_through_native_ada
         # An actual firmwares's terminal "completed" isn't measured pose settling.
     finally:
         await stack.close()
+
+
+async def test_reachy_normal_transition_waits_for_inflight_native_head_move(tmp_path):
+    class SlowReachy(FakeReachySDK):
+        def goto_target(self, **kwargs):
+            self.commands.append(("head", kwargs))
+            time.sleep(0.15)
+
+    catalog = make_catalog(tmp_path)
+    robot = SlowReachy()
+    provider = ReachyPlaybackProvider(catalog, robot, motion_authorized=True)
+    pack = await reachy_pack_from_catalog("reachy", catalog, neutral_head=NEUTRAL)
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("reachy", provider)
+    ensemble = ConversationEnsemble(runtime, [pack])
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(presence(0, "speaking"))
+        await anyio.sleep(0.04)
+        result = await ensemble.observe(presence(1, "listening"))
+        assert result["performers"]["reachy"]["status"] != "blocked"
+        await anyio.sleep(0.2)
+        assert len([c for c in robot.commands if c[0] == "head"]) >= 2
+        assert not any(c[0] == "cancel_unconfirmed" for c in robot.commands)
+
+
+async def test_reachy_explicit_interruption_still_quarantines_unconfirmed_stop(tmp_path):
+    class SlowReachy(FakeReachySDK):
+        def goto_target(self, **kwargs):
+            self.commands.append(("head", kwargs))
+            time.sleep(0.15)
+
+    catalog = make_catalog(tmp_path)
+    provider = ReachyPlaybackProvider(catalog, SlowReachy(), motion_authorized=True)
+    pack = await reachy_pack_from_catalog("reachy", catalog, neutral_head=NEUTRAL)
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("reachy", provider)
+    ensemble = ConversationEnsemble(runtime, [pack])
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(presence(0, "speaking"))
+        await anyio.sleep(0.04)
+        event = presence(1, "listening").model_copy(update={"interrupted": True})
+        result = await ensemble.observe(event)
+        assert result["performers"]["reachy"]["status"] == "blocked"

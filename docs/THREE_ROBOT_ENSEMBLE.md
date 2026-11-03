@@ -90,6 +90,11 @@ Optional `speaking_axis` (`yaw` or `tilt`), `speaking_amplitude_rad` and
 radians. Defaults preserve the existing behavior. Choosing a larger value or
 axis requires separate attended physical review; configuration is not proof of
 physical qualification.
+An ordinary presence change allows an already-dispatched finite Reachy SDK
+segment up to 1.5 seconds to finish before switching patterns. Explicit
+interruption, disconnect, expiry and shutdown still use immediate STOP; the
+SDK cannot confirm physical STOP for an in-flight native head target, so an
+unconfirmed outcome quarantines Reachy until operator reconciliation.
 
 ## SO-ARM101 supervised physical trial
 
