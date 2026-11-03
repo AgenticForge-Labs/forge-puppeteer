@@ -141,3 +141,28 @@ actual gesture smoothness or voice/LLM tool use.
 PR 5 adds the Conversationalist 4G presence and expression bridge
 to this exact MCP room. Then a single local Codex handoff validates
 real robot behavior, safety, audio and final system operation.
+
+
+## Per-performer behavior discovery for Conversationalist
+
+The existing read-only `ensemble_state` MCP response now includes the
+operator-authored catalog for **each configured performer**:
+
+- `behavior_revision`: SHA-256 content revision of that performer's pack.
+- `expressions`: sorted names of finite, one-shot gestures present in the
+  pack. Reachy may include `yes`, `no`, `acknowledge`, `neutral` and
+  optional `happy`, `curious`, `confused`, `excited` when corresponding
+  verified recordings exist. StackChan and SO-ARM have their own mappings.
+- `presence_behaviors`: automatic modes available to this performer,
+  among `idle`, `listening` and `speaking`.
+
+These fields are **discovery, not permission**. UI clients must use the
+actual returned catalog, not assume that every device supports every action;
+they must not offer ambient loops as button-triggered expressions. A button
+request passes an exact selected performer ID through the existing
+`ensemble_expression` tool, subject to room ownership, the native SDK,
+operator approval, unavailable/busy/quarantine state and exact asset pins.
+An `accepted` response proves dispatch admission, **not physical completion**.
+
+This addition is software-only: the unchanged SDK motion paths, current
+conservative amplitudes and incomplete physical qualification still apply.
