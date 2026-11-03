@@ -104,7 +104,7 @@ class SpeechExpressionShaper:
         phases: dict[str, float] = {}
         for name in FREQUENCIES_HZ:
             digest = hashlib.sha256(
-                f"{performer_id}:{stream_id}:{name}".encode("utf-8")
+                f"{performer_id}:{stream_id}:{name}".encode()
             ).digest()
             phases[name] = math.tau * int.from_bytes(digest[:8], "big") / (2**64)
         self._phases = phases
