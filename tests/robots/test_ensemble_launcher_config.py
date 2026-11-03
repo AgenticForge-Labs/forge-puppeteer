@@ -19,6 +19,7 @@ from forge_puppeteer.mcp.ensemble_launcher import (
     SOARMEnsembleConfig,
     build_ensemble,
     soarm_native_binding,
+    stackchan_display_presets,
 )
 
 
