@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from ..behavior_contract import EnsemblePresence
 from ..conversation_ensemble import ConversationEnsemble
 from ..execution import ExecutionRuntime
+from ..speech_expression import SpeechEnvelopeWindow
 
 if TYPE_CHECKING:
     from mcp.server import MCPServer
@@ -40,6 +41,8 @@ def create_ensemble_server(
     except ImportError as exc:
         raise RuntimeError("Install forge-puppeteer[mcp] for ensemble tools") from exc
 
+    speech_window = SpeechEnvelopeWindow()
+
     @asynccontextmanager
     async def lifespan(_server):
         try:
@@ -59,7 +62,8 @@ def create_ensemble_server(
     @server.tool()
     async def ensemble_state() -> dict[str, object]:
         """Current room state and independent per-performer action evidence."""
-        return {"outcome": "observed", **ensemble.snapshot()}
+        return {"outcome": "observed", **ensemble.snapshot(),
+                "speech_envelope": speech_window.snapshot()}
 
     @server.tool()
     async def ensemble_presence(
@@ -75,7 +79,10 @@ def create_ensemble_server(
                 "sequence": sequence, "state": state,
                 "source": source, "interrupted": interrupted,
             })
-            return await ensemble.observe(event)
+            result = await ensemble.observe(event)
+            if event.interrupted or event.state == "disconnected":
+                speech_window.clear()
+            return result
         except Exception as exc:
             if isinstance(exc, ToolError):
                 raise
@@ -96,5 +103,28 @@ def create_ensemble_server(
             )
         except Exception:  # noqa: BLE001 - all provider failures map to a safe MCP error
             raise ToolError("invalid_or_unavailable_ensemble_expression") from None
+
+
+    @server.tool()
+    async def ensemble_speech_envelope(
+        session_id: str, frames: list[dict[str, object]],
+    ) -> dict[str, object]:
+        """Optional generated-PCM feature ingress; preview only, NO SDK motion.
+
+        This is a room-owned, content-free observation tool, not an LLM tool
+        or an extra actuator scheduler. Existing action/STOP authority is
+        unchanged. The feature source is not a measured speaker clock.
+        """
+        if not motion_enabled:
+            raise ToolError("ensemble_motion_not_operator_authorized")
+        if not session_id or session_id != ensemble.snapshot()["session_id"]:
+            return {"outcome": "denied", "reason": "inactive_or_foreign_room"}
+        try:
+            result = speech_window.accept(
+                frames, performer_ids=tuple(ensemble.packs),
+            )
+            return {"outcome": "observed", **result}
+        except Exception:
+            raise ToolError("invalid_or_stale_speech_envelope") from None
 
     return server
