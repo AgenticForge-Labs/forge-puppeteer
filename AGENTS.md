@@ -216,3 +216,9 @@ Never commit credentials, Wi-Fi/device secrets, private network addresses, token
   calibration. Never silently enlarge faces from dialogue or model output.
 - Do not require a firmware update to run existing native expressions, and do
   not infer physical approval of software-authored expressions from CI.
+
+
+- The StackChanSpeechFacePreview is a hardware-free candidate mapper and
+  MUST NOT be treated as a live face animation driver. It emits SDK-valid
+  native mouth cue shapes with bounded rate and release semantics; only the
+  existing ExecutionRuntime may dispatch after a separate operator grant.
