@@ -97,6 +97,30 @@ def test_reachy_only_configuration_needs_explicit_identity_and_authority(tmp_pat
             ReachyOnlyEnsembleConfig.model_validate(data | change)
 
 
+
+def test_reachy_expressive_requires_native_compound_grant_and_reviewed_neutral(tmp_path):
+    data = config_data(tmp_path)
+    data["reachy_expression_style"] = "expressive"
+    with pytest.raises(ValueError, match="pose_and_antennas"):
+        EnsembleConfig.model_validate(data)
+
+    data["reachy"]["allowed_tools"].append("pose_and_antennas")
+    with pytest.raises(ValueError, match="neutral antenna"):
+        EnsembleConfig.model_validate(data)
+
+    data["reachy_neutral_antennas_rad"] = [-0.17, 0.17]
+    cfg = EnsembleConfig.model_validate(data)
+    assert cfg.reachy_expression_style == "expressive"
+    assert cfg.reachy_neutral_antennas_rad == (-0.17, 0.17)
+
+    only = {k: v for k, v in data.items() if k not in {"stackchan", "soarm101"}}
+    only["schema_version"] = 2
+    assert ReachyOnlyEnsembleConfig.model_validate(only).reachy_expression_style == "expressive"
+    only["reachy_neutral_antennas_rad"] = [1.1, 0.1]
+    with pytest.raises(ValueError, match="antenna motion"):
+        ReachyOnlyEnsembleConfig.model_validate(only)
+
+
 def test_reachy_only_launcher_starts_without_other_device_providers(tmp_path, monkeypatch):
     import forge_puppeteer.mcp.ensemble_launcher as launcher
     from forge_puppeteer.behavior_contract import (
