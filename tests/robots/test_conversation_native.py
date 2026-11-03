@@ -126,6 +126,13 @@ def test_stackchan_poses_follow_native_tenths_and_valid_protocol_shape():
     assert pack.behaviors["no"].cues[0].parameters["yaw"]["angle"] == -80
     assert len(pack.behaviors["no"].cues) == 5
     assert pack.behaviors["neutral"].cues[1].parameters["pitch"]["angle"] == 450
+    assert {"happy", "curious", "confused", "concerned", "excited", "surprised", "sad"} <= set(
+        pack.behaviors
+    )
+    for name in ("concerned", "excited", "surprised", "sad"):
+        assert pack.behaviors[name].mode == "once"
+        assert pack.behaviors[name].cues[0].operation == "face"
+        assert all(c.operation in {"face", "head"} for c in pack.behaviors[name].cues)
     for pattern in pack.behaviors.values():
         for cue in pattern.cues:
             step = _step({"at_s": 0.0, "operation": cue.operation,
