@@ -156,6 +156,8 @@ class EnsembleConfig(BaseModel):
         for value in (self.action_journal, self.ownership_db, self.reachy_neutral_head):
             if not value or not Path(value).is_absolute():
                 raise ValueError("action history, ownership and Reachy neutral pose require absolute paths")
+        if Path(self.action_journal).resolve() == Path(self.ownership_db).resolve():
+            raise ValueError("action journal and ownership DB must be distinct")
         if self.reachy.restricted_actions:
             raise ValueError("head expression requires Reachy's normal native SDK mode")
         _check_reachy_expression_authority(
