@@ -134,6 +134,6 @@ class EnsemblePresence(ContractModel):
 
     @model_validator(mode="after")
     def interruption_state(self):
-        if self.interrupted and self.state not in {"idle", "disconnected"}:
-            raise ValueError("interrupted requires idle or disconnected")
+        if self.interrupted and self.state not in {"idle", "listening", "disconnected"}:
+            raise ValueError("interrupted requires idle, listening, or disconnected")
         return self

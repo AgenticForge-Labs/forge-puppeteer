@@ -113,6 +113,66 @@ def test_behavior_contracts_are_persona_free_pinned_and_bounded():
             performer_id="arm", revision=REV,
             behaviors={"yes": loop("fake_yes")},
         )
+    assert event("room", 1, "listening", interrupted=True).interrupted
+    with pytest.raises(ValueError):
+        event("room", 2, "speaking", interrupted=True)
+
+
+def test_normal_voice_transition_does_not_cancel_finite_gesture():
+    async def run():
+        started = anyio.Event()
+        finish = anyio.Event()
+
+        class SlowGesture(FakeSDK):
+            async def execute(self, request):
+                self.calls.append(request.operation)
+                if request.operation == "fake_no":
+                    started.set()
+                    await finish.wait()
+                return Completion("fake SDK completed")
+
+        sdk = SlowGesture()
+        runtime = ExecutionRuntime(PerformanceStage())
+        runtime.register("reachy", sdk)
+        ensemble = ConversationEnsemble(runtime, [pack("reachy")])
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "listening"))
+            await anyio.sleep(0.02)
+            assert (await ensemble.express("no", action_id="gesture-1"))["outcome"] == "accepted"
+            await started.wait()
+            result = await ensemble.observe(event("room", 1, "speaking"))
+            assert result["performers"]["reachy"]["status"] != "blocked"
+            assert sdk.stop_calls == 0
+            finish.set()
+            await anyio.sleep(0.05)
+            assert sdk.calls.count("fake_no") == 1
+            assert "fake_talk" in sdk.calls
+            assert sdk.stop_calls == 0
+    anyio.run(run)
+
+
+def test_explicit_interruption_still_stops_inflight_gesture():
+    async def run():
+        started = anyio.Event()
+        class SlowGesture(FakeSDK):
+            async def execute(self, request):
+                self.calls.append(request.operation)
+                if request.operation == "fake_no":
+                    started.set()
+                    await anyio.sleep_forever()
+                return Completion("fake SDK completed")
+        sdk = SlowGesture()
+        runtime = ExecutionRuntime(PerformanceStage())
+        runtime.register("reachy", sdk)
+        ensemble = ConversationEnsemble(runtime, [pack("reachy")])
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "listening"))
+            await anyio.sleep(0.02)
+            await ensemble.express("no", action_id="gesture-1")
+            await started.wait()
+            await ensemble.observe(event("room", 1, "listening", interrupted=True))
+            assert sdk.stop_calls == 1
+    anyio.run(run)
 
 
 def test_single_conversation_animates_three_performers_and_yes_no_resumes():

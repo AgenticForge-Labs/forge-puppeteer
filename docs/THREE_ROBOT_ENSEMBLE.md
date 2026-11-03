@@ -95,6 +95,10 @@ segment up to 1.5 seconds to finish before switching patterns. Explicit
 interruption, disconnect, expiry and shutdown still use immediate STOP; the
 SDK cannot confirm physical STOP for an in-flight native head target, so an
 unconfirmed outcome quarantines Reachy until operator reconciliation.
+An admitted finite gesture runs to completion across ordinary voice-state
+changes and then resumes the latest presence. A real interruption,
+disconnection, expiry or shutdown still preempts it immediately and retains
+the existing unknown-outcome quarantine if STOP cannot be confirmed.
 
 ## SO-ARM101 supervised physical trial
 

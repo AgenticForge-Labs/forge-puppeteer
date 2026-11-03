@@ -27,6 +27,7 @@ from .robot_contracts import ActionState
 @dataclass
 class _Slot:
     scope: anyio.CancelScope
+    expression_active: bool = False
     done: anyio.Event = field(default_factory=anyio.Event)
     status: str = "starting"
     evidence: str = "no native action dispatched"
@@ -154,8 +155,13 @@ class ConversationEnsemble:
             self._state = event.state
             transition = event.state != previous or event.interrupted
             if transition:
+                # A normal change in voice state (for example, speaking while
+                # acknowledging a requested gesture) must not preempt that
+                # finite gesture. Real interruption/disconnect remains urgent.
+                preserve_expressions = event.state != "disconnected" and not event.interrupted
                 await self._stop_slots(
-                    tuple(self._slots),
+                    tuple(name for name, slot in self._slots.items()
+                          if not (preserve_expressions and slot.expression_active)),
                     graceful=event.state != "disconnected" and not event.interrupted,
                 )
             if event.state == "disconnected":
@@ -167,7 +173,7 @@ class ConversationEnsemble:
                 # A busy performer is skipped, not stopped or auto-retired.
                 for name in self.packs:
                     newly_owned = self._acquire_owner(name)
-                    if transition or newly_owned:
+                    if (transition or newly_owned) and name not in self._slots:
                         self._spawn(name, event.state, f"{event.session_id}-{event.sequence}")
             return {"outcome": "accepted", **self.snapshot()}
 
@@ -246,7 +252,7 @@ class ConversationEnsemble:
         if pattern is None:
             return  # Missing device behavior is unsupported, never substituted.
         scope = anyio.CancelScope()
-        slot = _Slot(scope=scope)
+        slot = _Slot(scope=scope, expression_active=resume)
         self._slots[name] = slot
         self._tasks.start_soon(self._play, name, behavior, pattern, slot, action_id, resume)
 
@@ -281,6 +287,7 @@ class ConversationEnsemble:
         with slot.scope:
             try:
                 await self._execute_pattern(name, behavior, pattern, slot, action_id)
+                slot.expression_active = False
                 # An expression returns to the *latest* conversational presence
                 # only if it was not interrupted or blocked.
                 if resume and name not in self._blocked and not slot.scope.cancel_called:
