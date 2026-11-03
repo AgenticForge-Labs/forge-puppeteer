@@ -153,3 +153,24 @@ Address those in the owning SDK/firmware only, followed by
 attended, explicitly approved hardware validation. A firmware
 command-completed event must never be described as a
 measured physical stop.
+
+
+## Shared semantic expression repertoire
+
+The present StackChan behavior pack maps device-independent names to the
+existing SDK-supported native `face` and `head` cues. In addition to the
+core speaking/listening/idle/yes/no and happy/curious/confused behaviors,
+Puppeteer now authors concerned, excited, surprised and sad. The native SDK
+itself does **not** own emotion names or expose a stock emotion library; it
+owns only the feature values, native units, firmware capability discovery,
+serialization, STOP and physical device limits. The same semantic names can
+be implemented differently for Reachy, SO-ARM, or a future performer.
+
+The display-only 100%/170% face scale is deliberately **not** an emotion or
+motion amplitude; it belongs to the EXT CONTROL firmware/SDK and is a separate
+explicit operator choice. The prior enlarged 1.7× face is not required for
+these expressions. Existing firmware remains compatible and lacks this
+optional capability until the native SDK/firmware change is accepted.
+
+These new authored performances are software-only until their actual appearance
+and motion are observed and approved on a connected StackChan.
