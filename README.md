@@ -221,8 +221,10 @@ A software-only, device-neutral speech-expression shaper is now available in
 src/forge_puppeteer/speech_expression.py. It consumes Conversationalist's
 forge.speech_envelope.v1 generated-PCM activity/intensity features and derives
 bounded, **unitless** mouth, antenna and six-axis gesture texture inspired by
-the pinned Pollen Reachy Conversation App. It opens no hardware and sends no
-motor commands. These channels are not angles, poses, or certified trajectories.
+the pinned Pollen Reachy Conversation App. It opens no hardware and sends no motor commands. The existing room-owned
+MCP server now also advertises optional ensemble_speech_envelope for strictly
+validated, content-free feature ingestion and preview only; no native SDK or
+ExecutionRuntime motion is invoked by that tool. These channels are not angles, poses, or certified trajectories.
 
 See docs/SPEECH_DRIVEN_EMBODIMENT.md for the ordered integration plan:
 reviewed neutral/sleep shutdown, an opt-in LiveKit output PCM tap, an
