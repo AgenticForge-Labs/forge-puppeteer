@@ -293,39 +293,70 @@ def reachy_conversation_pack(
         # One SDK goto per sample synchronously interpolates head and antennas.
         # Discrete room-state timing is not synchronized to outgoing audio.
         # No vertical translation unless the operator explicitly qualifies it.
-        patterns["idle"] = _pattern(tuple(
-            head_cue(
-                index * 0.5,
-                z=breath_amplitude_m * math.sin(2 * math.pi * index / 20),
-                antenna_offset=antenna_sway_rad * math.sin(2 * math.pi * index / 4),
-            ) for index in range(20)
-        ), period_s=10.0)
+        # Layered, incommensurate harmonics rather than one sine, so the rest
+        # posture drifts instead of visibly oscillating on a fixed beat. All
+        # amplitudes stay inside the operator bounds and the adapter limits.
+        def idle_cue(index: int) -> BehaviorCue:
+            t = index * 0.5
+            return head_cue(
+                t,
+                z=breath_amplitude_m * math.sin(2 * math.pi * t / 12.0),
+                yaw=(
+                    0.018 * math.sin(2 * math.pi * t / 12.0)
+                    + 0.007 * math.sin(2 * math.pi * t / 4.3 + 0.6)
+                ),
+                pitch=(
+                    0.012 * math.sin(2 * math.pi * t / 9.0 + 1.1)
+                    + 0.005 * math.sin(2 * math.pi * t / 3.7)
+                ),
+                roll=0.006 * math.sin(2 * math.pi * t / 7.5 + 2.0),
+                antenna_offset=(
+                    antenna_sway_rad * 0.55 * math.sin(2 * math.pi * t / 12.0 + 0.4)
+                    + antenna_sway_rad * 0.20 * math.sin(2 * math.pi * t / 3.1 + 1.3)
+                ),
+                duration=0.7,
+            )
+
+        patterns["idle"] = _pattern(
+            tuple(idle_cue(index) for index in range(24)), period_s=12.0,
+        )
         if listening_mode != "hold":
+            # Asymmetric attentive nod: a small settle, a beat of stillness,
+            # then a second softer acknowledgement.
             patterns["listening"] = _pattern((
-                head_cue(0.0, pitch=listening_tilt_rad, yaw=-wobble_amplitude_rad * 0.35,
-                         antenna_offset=antenna_sway_rad * 0.35, duration=0.6),
-                head_cue(1.4, pitch=listening_tilt_rad * 0.75,
-                         yaw=wobble_amplitude_rad * 0.15,
-                         antenna_offset=antenna_sway_rad * 0.1, duration=0.6),
-            ), period_s=3.0)
+                head_cue(0.0, pitch=listening_tilt_rad,
+                         yaw=-wobble_amplitude_rad * 0.30,
+                         antenna_offset=antenna_sway_rad * 0.28, duration=0.7),
+                head_cue(1.5, pitch=listening_tilt_rad * 0.55,
+                         yaw=-wobble_amplitude_rad * 0.10,
+                         antenna_offset=antenna_sway_rad * 0.08, duration=0.7),
+                head_cue(3.1, pitch=listening_tilt_rad * 0.90,
+                         yaw=wobble_amplitude_rad * 0.18,
+                         antenna_offset=antenna_sway_rad * 0.34, duration=0.7),
+            ), period_s=4.2)
+        # Irregular spacing and mixed axes; a fixed four-beat loop reads as a
+        # metronome. Still a deterministic authored pattern, never audio-driven.
         patterns["speaking"] = _pattern((
-            head_cue(0.0, pitch=wobble_amplitude_rad,
-                     yaw=-wobble_amplitude_rad * 0.5,
-                     roll=-wobble_amplitude_rad * 0.6,
-                     antenna_offset=antenna_sway_rad, duration=0.6),
-            head_cue(0.6, pitch=-wobble_amplitude_rad * 0.45,
-                     yaw=wobble_amplitude_rad * 0.7,
-                     roll=wobble_amplitude_rad * 0.35,
-                     antenna_offset=-antenna_sway_rad * 0.5, duration=0.6),
-            head_cue(1.2, pitch=wobble_amplitude_rad * 0.7,
-                     yaw=-wobble_amplitude_rad * 0.65,
-                     roll=wobble_amplitude_rad * 0.55,
-                     antenna_offset=-antenna_sway_rad, duration=0.6),
-            head_cue(1.8, pitch=-wobble_amplitude_rad * 0.8,
-                     yaw=wobble_amplitude_rad * 0.25,
-                     roll=-wobble_amplitude_rad * 0.35,
-                     antenna_offset=antenna_sway_rad * 0.4, duration=0.6),
-        ), period_s=2.4)
+            head_cue(0.0, yaw=-wobble_amplitude_rad * 0.35,
+                     roll=-wobble_amplitude_rad * 0.50,
+                     antenna_offset=antenna_sway_rad * 0.50, duration=0.55),
+            head_cue(0.42, yaw=wobble_amplitude_rad * 0.55,
+                     pitch=wobble_amplitude_rad * 0.30,
+                     antenna_offset=-antenna_sway_rad * 0.30, duration=0.55),
+            head_cue(0.95, yaw=-wobble_amplitude_rad * 0.20,
+                     pitch=-wobble_amplitude_rad * 0.25,
+                     roll=wobble_amplitude_rad * 0.40,
+                     antenna_offset=antenna_sway_rad * 0.20, duration=0.65),
+            head_cue(1.55, yaw=wobble_amplitude_rad * 0.40,
+                     roll=-wobble_amplitude_rad * 0.30,
+                     antenna_offset=-antenna_sway_rad * 0.45, duration=0.65),
+            head_cue(2.25, yaw=-wobble_amplitude_rad * 0.50,
+                     pitch=wobble_amplitude_rad * 0.20,
+                     antenna_offset=antenna_sway_rad * 0.35, duration=0.65),
+            head_cue(3.05, yaw=wobble_amplitude_rad * 0.10,
+                     roll=wobble_amplitude_rad * 0.20,
+                     antenna_offset=-antenna_sway_rad * 0.10, duration=0.6),
+        ), period_s=3.6)
         patterns["neutral"] = _pattern((head_cue(0.0, antenna_offset=0.0, duration=0.8),))
     for name, recording in (
         ("happy", "cheerful1"), ("curious", "curious1"),

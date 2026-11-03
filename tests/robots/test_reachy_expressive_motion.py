@@ -37,20 +37,20 @@ def expressive_pack(**changes):
 def test_expressive_pack_coordinates_multiple_axes_without_changing_recorded_gestures():
     pack = expressive_pack()
     assert pack.revision == pack.content_revision()
-    assert pack.behaviors["speaking"].period_s == 2.4
+    assert pack.behaviors["speaking"].period_s == 3.6
     speaking = pack.behaviors["speaking"].cues
-    assert len(speaking) == 4
+    assert len(speaking) == 6
     assert all(c.operation == "pose_and_antennas" for c in speaking)
-    assert all(c.parameters["duration_s"] == 0.6 for c in speaking)
-    assert len({str(c.parameters["pose"]) for c in speaking}) == 4
-    assert len({tuple(c.parameters["angles_rad"]) for c in speaking}) >= 3
+    assert all(0.5 <= c.parameters["duration_s"] <= 0.7 for c in speaking)
+    assert len({str(c.parameters["pose"]) for c in speaking}) == 6
+    assert len({tuple(c.parameters["angles_rad"]) for c in speaking}) >= 4
     for name in ("yes", "no", "acknowledge", "curious"):
         assert pack.behaviors[name].cues[0].operation == "play_move"
         assert pack.behaviors[name].cues[0].asset_revision == REV
     assert pack.behaviors["yes"].cues[0].asset_id == "reachy/yes1"
     assert pack.behaviors["no"].cues[0].asset_id == "reachy/no1"
     idle = pack.behaviors["idle"]
-    assert len(idle.cues) == 20 and idle.period_s == 10
+    assert len(idle.cues) == 24 and idle.period_s == 12
     assert {c.parameters["pose"][2][3] for c in idle.cues} == {0.0}
     assert any(c.parameters["angles_rad"] != list(ANTENNAS) for c in idle.cues)
     assert pack.behaviors["neutral"].cues[0].parameters["angles_rad"] == list(ANTENNAS)
@@ -116,7 +116,7 @@ async def test_expressive_motion_uses_single_sdk_goto_for_head_and_antennas():
     assert len(robot.commands) == 1
     assert robot.commands[0]["head"] == request.parameters["pose"]
     assert robot.commands[0]["antennas"] == request.parameters["angles_rad"]
-    assert robot.commands[0]["duration"] == 0.6
+    assert robot.commands[0]["duration"] == 0.55
     assert robot.commands[0]["body_yaw"] is None
 
     bad = request.model_copy(update={"parameters": {
