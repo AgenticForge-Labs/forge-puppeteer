@@ -5,7 +5,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -97,6 +97,23 @@ def config(**overrides):
     return ServerConfig(**values)
 
 
+def install_fake_reachy_wake_helpers(monkeypatch, distance):
+    package = ModuleType("reachy_mini")
+    package.__path__ = []
+    reachy_module = ModuleType("reachy_mini.reachy_mini")
+    reachy_module.SLEEP_HEAD_POSE = object()
+    utils_package = ModuleType("reachy_mini.utils")
+    utils_package.__path__ = []
+    interpolation = ModuleType("reachy_mini.utils.interpolation")
+    interpolation.distance_between_poses = lambda *_args: distance
+    monkeypatch.setitem(sys.modules, "reachy_mini", package)
+    monkeypatch.setitem(sys.modules, "reachy_mini.reachy_mini", reachy_module)
+    monkeypatch.setitem(sys.modules, "reachy_mini.utils", utils_package)
+    monkeypatch.setitem(
+        sys.modules, "reachy_mini.utils.interpolation", interpolation,
+    )
+
+
 def test_reachy_launcher_rejects_implicit_or_unsafe_configuration(monkeypatch):
     import importlib.metadata
 
@@ -133,8 +150,12 @@ async def test_reachy_liveness_wrapper_preserves_sync_resource_lookup():
 
 
 @pytest.mark.anyio
-async def test_reachy_connection_rejects_wrong_daemon_hardware_identity(tmp_path):
+async def test_reachy_connection_rejects_wrong_daemon_hardware_identity(tmp_path, monkeypatch):
+    import importlib.metadata
+
     from forge_puppeteer.devices.reachy import ReachyCatalog
+
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "1.10.0rc5")
 
     root = tmp_path / "assets"
     manifest = make_snapshot(root)
@@ -166,10 +187,7 @@ async def test_sdk_wake_up_uses_sdk_sleep_check_and_wake_sequence(monkeypatch, t
     root = tmp_path / "assets"
     catalog = ReachyCatalog(root, make_snapshot(root), move_factory=Move)
     robot = FakeRobot()
-    monkeypatch.setattr(
-        "reachy_mini.utils.interpolation.distance_between_poses",
-        lambda *_args: (0.0, 0.0, 0.0),
-    )
+    install_fake_reachy_wake_helpers(monkeypatch, (0.0, 0.0, 0.0))
     adapter = ReachyPlaybackProvider(catalog, robot, motion_authorized=True)
     request = ActionRequest(
         id="startup", performer_id="reachy", caller_id="conversation",
@@ -188,10 +206,7 @@ async def test_sdk_wake_up_is_noop_outside_native_sleep_pose(monkeypatch, tmp_pa
     root = tmp_path / "assets"
     catalog = ReachyCatalog(root, make_snapshot(root), move_factory=Move)
     robot = FakeRobot()
-    monkeypatch.setattr(
-        "reachy_mini.utils.interpolation.distance_between_poses",
-        lambda *_args: (0.1, 0.5, 30.0),
-    )
+    install_fake_reachy_wake_helpers(monkeypatch, (0.1, 0.5, 30.0))
     adapter = ReachyPlaybackProvider(catalog, robot, motion_authorized=True)
     request = ActionRequest(
         id="startup", performer_id="reachy", caller_id="conversation",
