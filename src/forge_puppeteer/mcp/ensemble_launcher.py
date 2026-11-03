@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -27,6 +28,27 @@ from ..execution import ExecutionRuntime
 from ..runtime import PerformanceStage
 from .ensemble import create_ensemble_server
 from .launcher import ReachySDKProvider, ServerConfig, StackChanSDKProvider
+
+
+def _check_reachy_expression_authority(
+    style: str,
+    neutral_antennas_rad: tuple[float, float] | None,
+    granted_tools: list[str],
+    antenna_sway_rad: float,
+) -> None:
+    """Expressive motion requires an explicit compound SDK grant and reviewed neutral."""
+    if style != "expressive":
+        return
+    if "pose_and_antennas" not in granted_tools:
+        raise ValueError("expressive Reachy requires pose_and_antennas tool grant")
+    if neutral_antennas_rad is None:
+        raise ValueError("expressive Reachy requires operator-reviewed neutral antenna angles")
+    # Validate whole authored envelope before the SDK opens a device.
+    from ..devices.reachy import _ANTENNA_ANGLE_LIMIT_RAD
+    if any(not isinstance(v, (int, float)) or not math.isfinite(v)
+           or abs(v) + antenna_sway_rad > _ANTENNA_ANGLE_LIMIT_RAD
+           for v in neutral_antennas_rad):
+        raise ValueError("expressive Reachy antenna motion is not within adapter bounds")
 
 
 class ReviewedJointFrame(BaseModel):
@@ -96,6 +118,11 @@ class EnsembleConfig(BaseModel):
     ownership_db: str
     presence_ttl_s: float = Field(default=30, ge=1, le=3600)
     stop_timeout_s: float = Field(default=5, ge=0.1, le=60)
+    reachy_expression_style: Literal["classic", "expressive"] = "classic"
+    reachy_neutral_antennas_rad: tuple[float, float] | None = None
+    reachy_expressive_amplitude_rad: float = Field(default=0.09, ge=0, le=0.12)
+    reachy_antenna_sway_rad: float = Field(default=0.18, ge=0, le=0.26)
+    reachy_breath_amplitude_m: float = Field(default=0.0, ge=0, le=0.005)
 
     @model_validator(mode="after")
     def validate_ensemble(self):
@@ -111,6 +138,10 @@ class EnsembleConfig(BaseModel):
                 raise ValueError("action history, ownership and Reachy neutral pose require absolute paths")
         if self.reachy.restricted_actions:
             raise ValueError("head expression requires Reachy's normal native SDK mode")
+        _check_reachy_expression_authority(
+            self.reachy_expression_style, self.reachy_neutral_antennas_rad,
+            self.reachy.allowed_tools, self.reachy_antenna_sway_rad,
+        )
         reachy_tools = {"head_pose", "play_move", "device_stop"}
         stack_tools = {"head_move", "face_update", "device_stop"}
         if not reachy_tools <= set(self.reachy.allowed_tools):
@@ -141,6 +172,11 @@ class ReachyOnlyEnsembleConfig(BaseModel):
     speaking_amplitude_rad: float = Field(default=0.025, ge=0, le=0.07)
     listening_tilt_rad: float = Field(default=0.02, ge=0, le=0.07)
     listening_mode: Literal["tilt", "hold"] = "tilt"
+    reachy_expression_style: Literal["classic", "expressive"] = "classic"
+    reachy_neutral_antennas_rad: tuple[float, float] | None = None
+    reachy_expressive_amplitude_rad: float = Field(default=0.09, ge=0, le=0.12)
+    reachy_antenna_sway_rad: float = Field(default=0.18, ge=0, le=0.26)
+    reachy_breath_amplitude_m: float = Field(default=0.0, ge=0, le=0.005)
 
     @model_validator(mode="after")
     def validate_reachy(self):
@@ -148,6 +184,10 @@ class ReachyOnlyEnsembleConfig(BaseModel):
             raise ValueError("Reachy native SDK provider required")
         if self.reachy.restricted_actions:
             raise ValueError("head expression requires Reachy's normal native SDK mode")
+        _check_reachy_expression_authority(
+            self.reachy_expression_style, self.reachy_neutral_antennas_rad,
+            self.reachy.allowed_tools, self.reachy_antenna_sway_rad,
+        )
         if not {"head_pose", "play_move", "device_stop"} <= set(self.reachy.allowed_tools):
             raise ValueError("native Reachy expression requires head, playback and stop grants")
         for value in (self.action_journal, self.ownership_db, self.reachy_neutral_head):
@@ -293,10 +333,18 @@ def serve(config_path: str | Path) -> None:
             return await reachy_pack_from_catalog(
                 config.reachy.instance_id, reachy.catalog,
                 neutral_head=json.loads(Path(config.reachy_neutral_head).read_text()),
-                wobble_amplitude_rad=config.speaking_amplitude_rad,
+                wobble_amplitude_rad=(
+                    config.reachy_expressive_amplitude_rad
+                    if config.reachy_expression_style == "expressive"
+                    else config.speaking_amplitude_rad
+                ),
                 speaking_axis=config.speaking_axis,
                 listening_tilt_rad=config.listening_tilt_rad,
                 listening_mode=config.listening_mode,
+                expression_style=config.reachy_expression_style,
+                breath_amplitude_m=config.reachy_breath_amplitude_m,
+                neutral_antennas_rad=config.reachy_neutral_antennas_rad,
+                antenna_sway_rad=config.reachy_antenna_sway_rad,
             )
         pack = anyio.run(resolve_reachy)
         runtime = ExecutionRuntime(
@@ -319,6 +367,14 @@ def serve(config_path: str | Path) -> None:
         return await reachy_pack_from_catalog(
             config.reachy.instance_id, reachy.catalog,
             neutral_head=json.loads(Path(config.reachy_neutral_head).read_text()),
+            wobble_amplitude_rad=(
+                config.reachy_expressive_amplitude_rad
+                if config.reachy_expression_style == "expressive" else 0.025
+            ),
+            expression_style=config.reachy_expression_style,
+            breath_amplitude_m=config.reachy_breath_amplitude_m,
+            neutral_antennas_rad=config.reachy_neutral_antennas_rad,
+            antenna_sway_rad=config.reachy_antenna_sway_rad,
         )
     # NOTE: Reachy neutral is operator supplied, no fabricated physical zero.
     reachy_pack = anyio.run(resolve)

@@ -102,6 +102,18 @@ attended-experimental and requires a human lease, existing torque
 HOLD and an exact reviewed content revision allowlist. The default
 setup is simulation-only. See [Three native performers](docs/THREE_ROBOT_ENSEMBLE.md).
 
+### Reachy expressive motion (experimental, unmerged branch)
+
+An opt-in `expressive` profile on `agent/reachy-expressive-motion-v1`
+coordinates larger multi-axis head movements and antenna sway using one
+native SDK `goto_target` operation, with an explicitly reviewed neutral
+antenna pose and operator grant. The default `classic` motion profile,
+exact pinned yes/no recordings and device STOP/quarantine path are preserved.
+This is **not** audio-synchronized and has **not** passed physical
+qualification; it is not yet a released `main` capability. See
+[Reachy expressive motion](docs/REACHY_EXPRESSIVE_MOTION.md) for
+configuration, limits and attended Codex validation.
+
 ### Coming next: conversational embodiment
 
 We are keeping the first vocabulary intentionally small:

@@ -139,6 +139,24 @@ Never commit credentials, Wi-Fi/device secrets, private network addresses, token
   Conversationalist as an optional caller; Puppeteer remains standalone.
 
 
+## Candidate Reachy expressive pack (unmerged, awaiting hardware acceptance)
+
+- `agent/reachy-expressive-motion-v1` is a proposed opt-in expressive style.
+  Do not present it as merged or physically qualified.
+- `classic` is the unchanged default; yes/no use the existing SHA-pinned
+  `play_move` path and must not regress.
+- `pose_and_antennas` composes both bounded targets in one pinned SDK
+  `goto_target` through the **existing** ExecutionRuntime. It is not a
+  raw target MCP tool and requires an explicit operator grant.
+- An operator must independently review antenna neutral and head geometry.
+  Breathing defaults to zero displacement, and numerical bounds do not
+  establish safe clearance or physical settling.
+- Never launch the upstream Conversation App motion manager concurrently
+  with Puppeteer; retain uncertain STOP quarantine, no autorearm, no
+  auto-retry and honest `agent_state` timing provenance.
+- Physical acceptance and audio/playback synchronization are separate
+  gates. See `docs/REACHY_EXPRESSIVE_MOTION.md`.
+
 ## Three-performer native ensemble (PR 4/5)
 
 - `mcp/ensemble_launcher.py` is the operator-configured standalone MCP

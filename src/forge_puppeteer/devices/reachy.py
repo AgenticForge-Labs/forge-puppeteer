@@ -179,7 +179,7 @@ class ReachyPlaybackProvider:
         )]
         operations = ["list_assets", "play_move", "stop"]
         if not self.restricted_actions:
-            operations.extend(("head_pose", "antenna_targets"))
+            operations.extend(("head_pose", "antenna_targets", "pose_and_antennas"))
             controls.extend((ControlDescriptor(
                 id="reachy.head_pose",
                 description="Move the head to a bounded rigid pose",
@@ -202,6 +202,21 @@ class ReachyPlaybackProvider:
                 }, "required": ["angles_rad"], "additionalProperties": False},
                 resources=("antennas.left", "antennas.right"), unit="radians",
                 limits={"angle_abs_rad": _ANTENNA_ANGLE_LIMIT_RAD,
+                        "duration_s": list(_NATIVE_DURATION_LIMIT_S)},
+                concurrency_constraints=("serialized across all Reachy motion",),
+            ), ControlDescriptor(
+                id="reachy.pose_and_antennas",
+                description="Coordinate a bounded head pose and both antenna targets in one SDK goto",
+                effect="motion",
+                parameters_schema={"type": "object", "properties": {
+                    "pose": {"type": "array", "minItems": 4, "maxItems": 4},
+                    "angles_rad": {"type": "array", "minItems": 2, "maxItems": 2},
+                    "duration_s": {"type": "number", "minimum": 0.05, "maximum": 5.0},
+                }, "required": ["pose", "angles_rad"], "additionalProperties": False},
+                resources=("head.pose", "antennas.left", "antennas.right"),
+                unit="metres, rotation matrix and radians",
+                limits={"translation_abs_m": _HEAD_TRANSLATION_LIMIT_M,
+                        "antenna_abs_rad": _ANTENNA_ANGLE_LIMIT_RAD,
                         "duration_s": list(_NATIVE_DURATION_LIMIT_S)},
                 concurrency_constraints=("serialized across all Reachy motion",),
             )))
@@ -229,8 +244,8 @@ class ReachyPlaybackProvider:
     async def permitted(self, tool: str) -> bool:
         """Explicit local tool grant, intersected with current motion authority."""
         known = {"device_info", "device_state", "list_assets", "action_lookup"}
-        motion = {"play_move", "head_pose", "antenna_targets", "action_cancel", "device_stop"}
-        if self.restricted_actions and tool in {"head_pose", "antenna_targets"}:
+        motion = {"play_move", "head_pose", "antenna_targets", "pose_and_antennas", "action_cancel", "device_stop"}
+        if self.restricted_actions and tool in {"head_pose", "antenna_targets", "pose_and_antennas"}:
             return False
         return tool in known or (tool in motion and self.motion_authorized)
 
@@ -244,7 +259,7 @@ class ReachyPlaybackProvider:
         return _RESOURCES
 
     async def validate(self, request: ActionRequest) -> None:
-        if request.operation not in {"play_move", "head_pose", "antenna_targets"}:
+        if request.operation not in {"play_move", "head_pose", "antenna_targets", "pose_and_antennas"}:
             raise ValueError("unsupported Reachy operation")
         if not self.motion_authorized:
             raise PermissionError("Reachy motion authority is not granted")
@@ -310,9 +325,10 @@ class ReachyPlaybackProvider:
         import math
 
         params = request.parameters
-        if request.operation == "head_pose":
-            if set(params) - {"pose", "duration_s"} or "pose" not in params:
-                raise ValueError("head_pose requires pose and optional duration_s")
+        if request.operation in {"head_pose", "pose_and_antennas"}:
+            required = {"pose", "angles_rad"} if request.operation == "pose_and_antennas" else {"pose"}
+            if not required <= set(params) or set(params) - required - {"duration_s"}:
+                raise ValueError("head motion requires a pose and the exact operation parameters")
             pose = params["pose"]
             if not isinstance(pose, list) or len(pose) != 4 or any(
                 not isinstance(row, list) or len(row) != 4 for row in pose
@@ -340,8 +356,10 @@ class ReachyPlaybackProvider:
                 raise ValueError("pose translation exceeds adapter bounds")
             if any(abs(values[3][i] - (1.0 if i == 3 else 0.0)) > 0.001 for i in range(4)):
                 raise ValueError("pose must be a homogeneous transform")
-        else:
-            if set(params) - {"angles_rad", "duration_s"} or "angles_rad" not in params:
+        if request.operation in {"antenna_targets", "pose_and_antennas"}:
+            if request.operation == "antenna_targets" and (
+                set(params) - {"angles_rad", "duration_s"} or "angles_rad" not in params
+            ):
                 raise ValueError("antenna_targets requires angles_rad and optional duration_s")
             angles = params["angles_rad"]
             if not isinstance(angles, list) or len(angles) != 2:
@@ -361,6 +379,12 @@ class ReachyPlaybackProvider:
     @staticmethod
     def _native_sdk_args(request: ActionRequest) -> dict[str, Any]:
         duration = float(request.parameters.get("duration_s", 0.5))
+        if request.operation == "pose_and_antennas":
+            return {
+                "head": request.parameters["pose"],
+                "antennas": [float(x) for x in request.parameters["angles_rad"]],
+                "duration": duration, "body_yaw": None,
+            }
         if request.operation == "head_pose":
             return {"head": request.parameters["pose"], "duration": duration, "body_yaw": None}
         return {"antennas": [float(x) for x in request.parameters["angles_rad"]], "duration": duration, "body_yaw": None}

@@ -17,6 +17,8 @@ from .behavior_contract import BehaviorCue, BehaviorPattern, PerformerBehaviors
 _SHA_PREFIX = "sha256:"
 _MAX_REACHY_BREATH_M = 0.005
 _MAX_REACHY_WOBBLE_RAD = 0.07
+_MAX_REACHY_EXPRESSIVE_RAD = 0.12
+_MAX_REACHY_ANTENNA_SWAY_RAD = 0.26
 _MAX_STACKCHAN_YAW = 150
 _MAX_STACKCHAN_PITCH = 100
 
@@ -41,6 +43,7 @@ def _head(
     base: Sequence[Sequence[float]],
     *,
     pitch_rad: float = 0.0,
+    yaw_rad: float = 0.0,
     roll_rad: float = 0.0,
     vertical_m: float = 0.0,
 ) -> list[list[float]]:
@@ -50,19 +53,29 @@ def _head(
     authority. Physical +Z and clearance are not inferred from this formula.
     """
     cp, sp = math.cos(pitch_rad), math.sin(pitch_rad)
+    cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
     cr, sr = math.cos(roll_rad), math.sin(roll_rad)
     rotation = (
         (1.0, 0.0, 0.0),
         (0.0, cp, -sp),
         (0.0, sp, cp),
     )
+    ry = (
+        (cy, 0.0, sy),
+        (0.0, 1.0, 0.0),
+        (-sy, 0.0, cy),
+    )
     rz = (
         (cr, -sr, 0.0),
         (sr, cr, 0.0),
         (0.0, 0.0, 1.0),
     )
+    pitched_yawed = [
+        [sum(rotation[i][k] * ry[k][j] for k in range(3)) for j in range(3)]
+        for i in range(3)
+    ]
     local = [
-        [sum(rotation[i][k] * rz[k][j] for k in range(3)) for j in range(3)]
+        [sum(pitched_yawed[i][k] * rz[k][j] for k in range(3)) for j in range(3)]
         for i in range(3)
     ]
     result = [
@@ -91,6 +104,9 @@ def reachy_conversation_pack(
     speaking_axis: Literal["yaw", "tilt"] = "yaw",
     listening_tilt_rad: float = 0.02,
     listening_mode: Literal["tilt", "hold"] = "tilt",
+    expression_style: Literal["classic", "expressive"] = "classic",
+    neutral_antennas_rad: tuple[float, float] | None = None,
+    antenna_sway_rad: float = 0.18,
 ) -> PerformerBehaviors:
     """Author Reachy motion using its existing native SDK adapter operations.
 
@@ -104,8 +120,12 @@ def reachy_conversation_pack(
     if (not math.isfinite(breath_amplitude_m) or
             not 0 <= breath_amplitude_m <= _MAX_REACHY_BREATH_M):
         raise ValueError("Reachy breathing amplitude must be bounded and nonnegative")
+    max_wobble = (
+        _MAX_REACHY_EXPRESSIVE_RAD if expression_style == "expressive"
+        else _MAX_REACHY_WOBBLE_RAD
+    )
     if (not math.isfinite(wobble_amplitude_rad) or
-            not 0 <= wobble_amplitude_rad <= _MAX_REACHY_WOBBLE_RAD):
+            not 0 <= wobble_amplitude_rad <= max_wobble):
         raise ValueError("Reachy talking wobble amplitude must be bounded and nonnegative")
     if speaking_axis not in {"yaw", "tilt"}:
         raise ValueError("Reachy speaking axis must be yaw or tilt")
@@ -114,6 +134,21 @@ def reachy_conversation_pack(
         raise ValueError("Reachy listening tilt must be bounded and nonnegative")
     if listening_mode not in {"tilt", "hold"}:
         raise ValueError("Reachy listening mode must be tilt or hold")
+    if expression_style not in {"classic", "expressive"}:
+        raise ValueError("Reachy expression style must be classic or expressive")
+    if not math.isfinite(antenna_sway_rad) or not 0 <= antenna_sway_rad <= _MAX_REACHY_ANTENNA_SWAY_RAD:
+        raise ValueError("Reachy antenna sway must be bounded and nonnegative")
+    if expression_style == "expressive":
+        if (
+            neutral_antennas_rad is None or len(neutral_antennas_rad) != 2
+            or any(not isinstance(value, (int, float)) or isinstance(value, bool)
+                   or not math.isfinite(value) for value in neutral_antennas_rad)
+        ):
+            raise ValueError("expressive Reachy requires operator-reviewed antenna neutral")
+        from .devices.reachy import _ANTENNA_ANGLE_LIMIT_RAD
+        if any(abs(value) + antenna_sway_rad > _ANTENNA_ANGLE_LIMIT_RAD
+               for value in neutral_antennas_rad):
+            raise ValueError("Reachy expressive antenna targets exceed adapter limits")
     if not recording_revision.startswith(_SHA_PREFIX) or len(recording_revision) != 71:
         raise ValueError("Reachy recordings require a SHA-256 catalog revision")
     if any(ch not in "0123456789abcdef" for ch in recording_revision[7:]):
@@ -131,15 +166,28 @@ def reachy_conversation_pack(
     if not {"yes1", "no1"} <= available:
         raise ValueError("pinned Reachy catalog lacks yes1/no1 recordings")
 
-    def head_cue(at: float, *, pitch: float = 0.0, roll: float = 0.0,
-                 z: float = 0.0) -> BehaviorCue:
-        pose = _head(neutral, pitch_rad=pitch, roll_rad=roll, vertical_m=z)
+    def head_cue(at: float, *, pitch: float = 0.0, yaw: float = 0.0,
+                 roll: float = 0.0, z: float = 0.0,
+                 antenna_offset: float | None = None,
+                 duration: float = 0.5) -> BehaviorCue:
+        pose = _head(neutral, pitch_rad=pitch, yaw_rad=yaw,
+                     roll_rad=roll, vertical_m=z)
+        if antenna_offset is not None:
+            assert neutral_antennas_rad is not None  # checked above
+            angles = [
+                float(neutral_antennas_rad[0] + antenna_offset),
+                float(neutral_antennas_rad[1] - antenna_offset),
+            ]
+            operation = "pose_and_antennas"
+            parameters = {"pose": pose, "angles_rad": angles, "duration_s": duration}
+        else:
+            operation = "head_pose"
+            parameters = {"pose": pose, "duration_s": duration}
         ReachyPlaybackProvider._validate_native(ActionRequest(
             id="preflight", performer_id=performer_id, caller_id="author",
-            session_id="preview", operation="head_pose",
-            parameters={"pose": pose, "duration_s": 0.5},
+            session_id="preview", operation=operation, parameters=parameters,
         ))
-        return _cue(at, "head_pose", pose=pose, duration_s=0.5)
+        return _cue(at, operation, **parameters)
 
     patterns: dict[str, BehaviorPattern] = {
         # 0.1 Hz breathing from 20 monotonic samples per 10-second cycle.
@@ -166,6 +214,44 @@ def reachy_conversation_pack(
         "no": _pattern((_reachy_move(0.0, "no1", recording_revision),), source="recorded"),
         "acknowledge": _pattern((_reachy_move(0.0, "yes1", recording_revision),), source="recorded"),
     }
+    if expression_style == "expressive":
+        # One SDK goto per sample synchronously interpolates head and antennas.
+        # Discrete room-state timing is not synchronized to outgoing audio.
+        # No vertical translation unless the operator explicitly qualifies it.
+        patterns["idle"] = _pattern(tuple(
+            head_cue(
+                index * 0.5,
+                z=breath_amplitude_m * math.sin(2 * math.pi * index / 20),
+                antenna_offset=antenna_sway_rad * math.sin(2 * math.pi * index / 4),
+            ) for index in range(20)
+        ), period_s=10.0)
+        if listening_mode != "hold":
+            patterns["listening"] = _pattern((
+                head_cue(0.0, pitch=listening_tilt_rad, yaw=-wobble_amplitude_rad * 0.35,
+                         antenna_offset=antenna_sway_rad * 0.35, duration=0.6),
+                head_cue(1.4, pitch=listening_tilt_rad * 0.75,
+                         yaw=wobble_amplitude_rad * 0.15,
+                         antenna_offset=antenna_sway_rad * 0.1, duration=0.6),
+            ), period_s=3.0)
+        patterns["speaking"] = _pattern((
+            head_cue(0.0, pitch=wobble_amplitude_rad,
+                     yaw=-wobble_amplitude_rad * 0.5,
+                     roll=-wobble_amplitude_rad * 0.6,
+                     antenna_offset=antenna_sway_rad, duration=0.6),
+            head_cue(0.6, pitch=-wobble_amplitude_rad * 0.45,
+                     yaw=wobble_amplitude_rad * 0.7,
+                     roll=wobble_amplitude_rad * 0.35,
+                     antenna_offset=-antenna_sway_rad * 0.5, duration=0.6),
+            head_cue(1.2, pitch=wobble_amplitude_rad * 0.7,
+                     yaw=-wobble_amplitude_rad * 0.65,
+                     roll=wobble_amplitude_rad * 0.55,
+                     antenna_offset=-antenna_sway_rad, duration=0.6),
+            head_cue(1.8, pitch=-wobble_amplitude_rad * 0.8,
+                     yaw=wobble_amplitude_rad * 0.25,
+                     roll=-wobble_amplitude_rad * 0.35,
+                     antenna_offset=antenna_sway_rad * 0.4, duration=0.6),
+        ), period_s=2.4)
+        patterns["neutral"] = _pattern((head_cue(0.0, antenna_offset=0.0, duration=0.8),))
     for name, recording in (
         ("happy", "cheerful1"), ("curious", "curious1"),
         ("confused", "confused1"), ("excited", "enthusiastic1"),
@@ -188,6 +274,9 @@ async def reachy_pack_from_catalog(
     speaking_axis: Literal["yaw", "tilt"] = "yaw",
     listening_tilt_rad: float = 0.02,
     listening_mode: Literal["tilt", "hold"] = "tilt",
+    expression_style: Literal["classic", "expressive"] = "classic",
+    neutral_antennas_rad: tuple[float, float] | None = None,
+    antenna_sway_rad: float = 0.18,
 ) -> PerformerBehaviors:
     """Resolve available recordings only from an already-verified ReachyCatalog.
 
@@ -212,6 +301,9 @@ async def reachy_pack_from_catalog(
         speaking_axis=speaking_axis,
         listening_tilt_rad=listening_tilt_rad,
         listening_mode=listening_mode,
+        expression_style=expression_style,
+        neutral_antennas_rad=neutral_antennas_rad,
+        antenna_sway_rad=antenna_sway_rad,
     )
 
 
