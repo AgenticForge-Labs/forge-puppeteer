@@ -20,7 +20,7 @@ class StackChanSpeechFaceProfile:
     """Bounded presentation-only limits in native StackChan feature units."""
 
     max_mouth_weight: int = 75
-    min_interval_ms: int = 150
+    min_interval_ms: int = 200
 
     def __post_init__(self) -> None:
         if type(self.max_mouth_weight) is not int or not 0 <= self.max_mouth_weight <= 100:
