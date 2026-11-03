@@ -389,3 +389,32 @@ an interrupted action is recorded as unknown and reserves its performer until
 an independent stop is confirmed after restart. Keep the journal on durable,
 private local storage and do not point multiple server processes at the same
 SQLite file.
+
+### Attended reconciliation of unknown actions
+
+An unknown outcome is never converted to completed, cancelled, or confirmed
+stopped. If the operator has independently verified that every motion controller
+is stopped and has observed the robot settled, the operator may release the
+durable admission fence for one exact action with
+`forge-puppeteer-reconcile`. This is an explicit human reconciliation, not an
+SDK stop acknowledgment and not a device command. It preserves the original
+unknown action and stop evidence and adds an audit record. The action must be
+the sole unresolved activity for that performer; ambiguous ownership is refused.
+
+Example (substitute the paths and action ID from the trusted local config and
+action journal):
+
+```bash
+forge-puppeteer-reconcile \
+  --journal /absolute/path/actions.sqlite3 \
+  --ownership-db /absolute/path/ownership.sqlite3 \
+  --action-id '<exact unknown action ID>' \
+  --operator '<attending operator>' \
+  --observation 'Reachy observed stopped and settled; Pollen motion controller confirmed stopped' \
+  --confirm 'I OBSERVED THE ROBOT SETTLED AND ALL MOTION CONTROLLERS STOPPED'
+```
+
+Never run this command while a controller may still own the robot. It releases
+only the exact stale durable fence. A later runtime may accept new work only
+after its normal config, grant, calibration, readiness, and attended safety
+checks pass. Do not use reconciliation as a retry mechanism.
