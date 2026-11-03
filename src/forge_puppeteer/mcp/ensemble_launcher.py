@@ -118,6 +118,7 @@ class EnsembleConfig(BaseModel):
     ownership_db: str
     presence_ttl_s: float = Field(default=30, ge=1, le=3600)
     stop_timeout_s: float = Field(default=5, ge=0.1, le=60)
+    stackchan_speaking_mode: Literal["legacy_size", "native_weight"] = "legacy_size"
     reachy_expression_style: Literal["classic", "expressive"] = "classic"
     reachy_startup_behavior: Literal["none", "wake_up_if_sleeping"] = "none"
     reachy_neutral_antennas_rad: tuple[float, float] | None = None
@@ -388,7 +389,9 @@ def serve(config_path: str | Path) -> None:
         )
     # NOTE: Reachy neutral is operator supplied, no fabricated physical zero.
     reachy_pack = anyio.run(resolve)
-    stack_pack = stackchan_conversation_pack(config.stackchan.instance_id)
+    stack_pack = stackchan_conversation_pack(
+        config.stackchan.instance_id, speaking_mode=config.stackchan_speaking_mode,
+    )
     ensemble = ConversationEnsemble(
         runtime, (reachy_pack, stack_pack, arm_pack),
         presence_ttl_s=config.presence_ttl_s,

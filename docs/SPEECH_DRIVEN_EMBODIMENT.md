@@ -140,3 +140,27 @@ algorithms and contracts. No hardware motion is qualified by those merges.
 Audio-driven hardware enablement requires documented operator-reviewed
 envelope, capabilities, calibration, signed authority, safe STOP/hold, and
 attended speaker/movement measurements. UNKNOWN outcomes block retry/rearm.
+
+
+## StackChan preview renderer (software-only candidate)
+
+Puppeteer now includes a pure `StackChanSpeechFacePreview` that reduces
+50 ms normalized speech channels to at most 5 native-format mouth requests per
+second by default (200 ms spacing), returning an explicit closing-mouth
+candidate on activity release. Values are bounded by a reviewed per-renderer
+profile (default peak mouth weight 75); the native StackChan SDK parser validates the
+resulting `face` operation in offline tests. This module does not run an MCP
+client, open USB, dispatch through ExecutionRuntime, or claim speaker timing.
+
+Binding those candidates to actual firmware requires a separate operator
+grant, resource ownership, explicit START/STOP behavior, EMEET timing review,
+and attended StackChan visual acceptance. The new 100%/170% display setting
+belongs to the SDK/firmware independently and never alters envelope intensity.
+
+
+Puppeteer's StackChan speech-face preview now models the native stock
+SpeakingModifier's **mouth weight** channel (default bounded maximum 75),
+not a servo angle, mouth size, or actual phoneme. It remains disconnected
+from motion and from a production-calibrated speaker clock. Releasing speech
+proposes mouth weight 0, but verified stop/neutral remains the responsibility
+of the existing runtime and SDK when physical dispatch is eventually enabled.

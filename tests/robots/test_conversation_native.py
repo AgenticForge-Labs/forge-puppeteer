@@ -126,6 +126,22 @@ def test_stackchan_poses_follow_native_tenths_and_valid_protocol_shape():
     assert pack.behaviors["no"].cues[0].parameters["yaw"]["angle"] == -80
     assert len(pack.behaviors["no"].cues) == 5
     assert pack.behaviors["neutral"].cues[1].parameters["pitch"]["angle"] == 450
+    assert {"happy", "curious", "confused", "concerned", "excited", "surprised", "sad"} <= set(
+        pack.behaviors
+    )
+    for name in ("concerned", "excited", "surprised", "sad"):
+        assert pack.behaviors[name].mode == "once"
+        assert pack.behaviors[name].cues[0].operation == "face"
+        assert all(c.operation in {"face", "head"} for c in pack.behaviors[name].cues)
+    # Pinned stock BlinkModifier and IdleExpressionModifier operate on eye
+    # weight and position; these are deterministic native face-only cues.
+    for name in ("blink", "glance_left", "glance_right"):
+        assert pack.behaviors[name].mode == "once"
+        assert {cue.operation for cue in pack.behaviors[name].cues} == {"face"}
+        assert all("mouth" not in cue.parameters for cue in pack.behaviors[name].cues)
+    assert pack.behaviors["blink"].cues[0].parameters["left_eye"]["weight"] == 25
+    assert pack.behaviors["glance_left"].cues[0].parameters["left_eye"] == {"x": -15, "y": 0}
+    assert pack.behaviors["glance_right"].cues[-1].parameters["right_eye"] == {"x": 0, "y": 0}
     for pattern in pack.behaviors.values():
         for cue in pattern.cues:
             step = _step({"at_s": 0.0, "operation": cue.operation,
@@ -230,3 +246,23 @@ def test_checked_in_reachy_dataset_lock_contains_native_yes_no_and_license():
     assert "no1.json" in manifest["files"]
     for name in manifest["files"]:
         assert "/resolve/" + manifest["dataset_revision"] in recording_url(manifest, name)
+
+
+def test_stackchan_native_weight_speech_option_uses_stock_mouth_primitive():
+    from stackchan_control.assets import _step
+
+    # The existing size-based profile is backward compatible; native weight
+    # is opt-in for a reviewed performer configuration.
+    legacy = stackchan_conversation_pack("stackchan")
+    native = stackchan_conversation_pack("stackchan", speaking_mode="native_weight")
+    assert legacy.behaviors["speaking"].cues[1].parameters["mouth"] == {"size": 42}
+    speaking = native.behaviors["speaking"]
+    assert speaking.mode == "loop"
+    assert [cue.parameters["mouth"]["weight"] for cue in speaking.cues] == [
+        45, 75, 55, 0,
+    ]
+    assert all(cue.operation == "face" for cue in speaking.cues)
+    for cue in speaking.cues:
+        _step({"at_s": 0.0, "operation": cue.operation, "parameters": cue.parameters})
+    with pytest.raises(ValueError, match="speaking mode"):
+        stackchan_conversation_pack("stackchan", speaking_mode="unapproved")

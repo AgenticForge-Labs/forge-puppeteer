@@ -232,3 +232,37 @@ authenticated room-owned MCP ingestion path, capability-specific Reachy /
 StackChan / SO-ARM101 renderers, Platform OTel, and separate EMEET/physical
 acceptance. Do not confuse these merged-or-proposed software components with
 live speech-reactive physical movement.
+
+
+### Expanded StackChan expression vocabulary
+
+StackChan's existing native eye/mouth and yaw/pitch controls now provide
+additional **Puppeteer-authored semantic behaviors**: concerned, excited,
+surprised and sad, alongside listening, speaking, idle, yes, no, acknowledge,
+neutral, happy, curious and confused. These are automatically discoverable as
+finite expressions in the same per-performer `ensemble_state` catalog, not
+new hardware methods or an LLM's unvalidated direct-servo vocabulary.
+
+The proposed facial appearance is software-authored and validated against
+native SDK parameter formats, but requires human visual review on the display.
+The standard face remains independent of its **optional 1.7×** display-only
+firmware setting, currently being added in stackchan-control-sdk PR #7.
+No expression automatically requests a face scale change, additional lighting
+capability or arm/head motion grant.
+
+
+StackChan also has an **inactive, pure speech-face preview renderer** mapping
+the same normalized outgoing audio features to bounded mouth-size candidates
+at a rate-limited cadence. It is not connected to physical USB dispatch.
+The existing action journal, SDK capability checks, and STOP admission remain
+mandatory before any future live face animation.
+
+
+The current three-robot operator configuration also supports
+`stackchan_speaking_mode: "native_weight"` as an **optional** native
+StackChan speaking pattern, following the pinned upstream SpeakingModifier's
+mouth-weight approach while retaining Puppeteer's deterministic scheduler.
+The default remains `legacy_size` to preserve already-reviewed behavior.
+Blink and left/right eye glances are added as finite face-only expressions.
+None of these choices enlarges the screen; the new firmware scale option is
+independent and remains unapproved on the connected unit.

@@ -325,6 +325,7 @@ def stackchan_conversation_pack(
     yaw_amplitude: int = 80,
     pitch_amplitude: int = 45,
     head_speed: int = 180,
+    speaking_mode: Literal["legacy_size", "native_weight"] = "legacy_size",
 ) -> PerformerBehaviors:
     """Native SDK face/head/eyes patterns; units are tenths of a degree.
 
@@ -335,18 +336,34 @@ def stackchan_conversation_pack(
 
     validate_stackchan_center(yaw_center, pitch_center, yaw_amplitude,
                                pitch_amplitude, head_speed)
+    if speaking_mode not in {"legacy_size", "native_weight"}:
+        raise ValueError("unsupported StackChan speaking mode")
 
-    def face(at: float, *, mouth: int = 0, eyes: int | None = None) -> BehaviorCue:
-        payload: dict[str, object] = {"mouth": {"size": mouth}}
-        if eyes is not None:
-            payload.update({"left_eye": {"weight": eyes}, "right_eye": {"weight": eyes}})
+    def face(
+        at: float, *, mouth: int | None = 0,
+        eyes: int | None = None, eye_x: int | None = None,
+    ) -> BehaviorCue:
+        payload: dict[str, object] = {}
+        if mouth is not None:
+            payload["mouth"] = {"size": mouth}
+        if eyes is not None or eye_x is not None:
+            feature: dict[str, int] = {}
+            if eyes is not None:
+                feature["weight"] = eyes
+            if eye_x is not None:
+                # Native firmware applies coordinates as an x/y pair.
+                feature.update({"x": eye_x, "y": 0})
+            payload["left_eye"] = dict(feature)
+            payload["right_eye"] = dict(feature)
+        if not payload:
+            raise ValueError("StackChan face cue must update at least one feature")
         return _cue(at, "face", **payload)
 
     def head(at: float, *, yaw: int = 0, pitch: int = 0) -> BehaviorCue:
         return _cue(at, "head", yaw={"angle": yaw_center + yaw, "speed": head_speed},
                     pitch={"angle": pitch_center + pitch, "speed": head_speed})
 
-    return PerformerBehaviors.author(performer_id, {
+    behaviors = {
         "idle": _pattern((
             face(0.0, mouth=0, eyes=45), head(0.35),
             head(1.2, yaw=yaw_amplitude // 2), head(2.15),
@@ -382,4 +399,53 @@ def stackchan_conversation_pack(
         "happy": _pattern((face(0.0, mouth=35, eyes=80), head(0.35, yaw=yaw_amplitude // 2))),
         "curious": _pattern((face(0.0, mouth=0, eyes=70), head(0.35, pitch=pitch_amplitude))),
         "confused": _pattern((face(0.0, mouth=0, eyes=30), head(0.35, yaw=-yaw_amplitude // 2))),
-    })
+        # These share the device-independent expression vocabulary. StackChan
+        # renders them using its native eyes/mouth and head primitives; their
+        # final visual appearance must still be reviewed on the actual screen.
+        "concerned": _pattern((
+            face(0.0, mouth=5, eyes=25),
+            head(0.35, pitch=-pitch_amplitude // 2),
+        )),
+        "excited": _pattern((
+            face(0.0, mouth=65, eyes=85),
+            head(0.2, pitch=pitch_amplitude),
+            head(0.5, pitch=-pitch_amplitude // 2),
+            head(0.8),
+        )),
+        "surprised": _pattern((
+            face(0.0, mouth=75, eyes=95),
+            head(0.35, pitch=pitch_amplitude // 2),
+        )),
+        "sad": _pattern((
+            face(0.0, mouth=5, eyes=20),
+            head(0.35, pitch=-pitch_amplitude // 2),
+        )),
+        # Deterministic counterparts of the pinned stock BlinkModifier and
+        # IdleExpressionModifier. They update only face resources, not motors,
+        # and restore the explicitly authored default eye baseline/position.
+        "blink": _pattern((
+            face(0.0, mouth=None, eyes=25),
+            face(0.2, mouth=None, eyes=45),
+        )),
+        "glance_left": _pattern((
+            face(0.0, mouth=None, eye_x=-15),
+            face(0.4, mouth=None, eye_x=0),
+        )),
+        "glance_right": _pattern((
+            face(0.0, mouth=None, eye_x=15),
+            face(0.4, mouth=None, eye_x=0),
+        )),
+    }
+    if speaking_mode == "native_weight":
+        # Optional deterministic equivalent of the stock SpeakingModifier,
+        # which opens/closes mouth WEIGHT rather than mouth SIZE.
+        # Still a Puppeteer-authorized loop through the native SDK, never the
+        # firmware's random head-motion modifier or a second motor scheduler.
+        behaviors["speaking"] = _pattern((
+            _cue(0.0, "face", mouth={"weight": 45},
+                 left_eye={"weight": 50}, right_eye={"weight": 50}),
+            _cue(0.22, "face", mouth={"weight": 75}),
+            _cue(0.44, "face", mouth={"weight": 55}),
+            _cue(0.66, "face", mouth={"weight": 0}),
+        ), period_s=0.9)
+    return PerformerBehaviors.author(performer_id, behaviors)
