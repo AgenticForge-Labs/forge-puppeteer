@@ -8,11 +8,14 @@ bounds may enable physical use; SDK calibration, live limits and STOP prevail.
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Sequence
 from typing import Literal
 
 from .behavior_contract import BehaviorCue, BehaviorPattern, PerformerBehaviors
+
+_log = logging.getLogger(__name__)
 
 _SHA_PREFIX = "sha256:"
 _MAX_REACHY_BREATH_M = 0.005
@@ -21,6 +24,67 @@ _MAX_REACHY_EXPRESSIVE_RAD = 0.12
 _MAX_REACHY_ANTENNA_SWAY_RAD = 0.26
 _MAX_STACKCHAN_YAW = 150
 _MAX_STACKCHAN_PITCH = 100
+
+# Reviewed motion envelope for replaying the pinned emotion recordings.
+# Measured on the actual dataset: several gestures swing the head tens of
+# degrees at high angular rate (no1 peaks near 196 deg/s, confused1 and
+# curious1 reach 45 deg of yaw at ~150 deg/s while also turning the body up to
+# ~60 deg). On this robot that lets the underside of the head contact the body.
+# A recording outside this envelope is not offered as a gesture; the pack
+# authors a bounded substitute where the semantic cue is still required.
+_SAFE_RECORDED_YAW_RATE_DEG_S = 120.0
+_SAFE_RECORDED_YAW_DEG = 30.0
+_SAFE_RECORDED_BODY_YAW_DEG = 45.0
+
+
+def _head_yaw_deg(head: Sequence[Sequence[float]]) -> float:
+    return math.degrees(math.atan2(float(head[1][0]), float(head[0][0])))
+
+
+def recorded_move_envelope(
+    move: object, *, samples: int = 120,
+) -> dict[str, float] | None:
+    """Measure a pinned recording against the reviewed replay envelope.
+
+    Sampling is a coarse bound on the authored trajectory, not measured motor
+    output; the SDK still owns limits, collision checking and STOP.
+    """
+    evaluate = getattr(move, "evaluate", None)
+    duration = float(getattr(move, "duration", 0.0))
+    if not callable(evaluate) or duration <= 0:
+        # Without the pinned SDK's trajectory API there is nothing to measure;
+        # hardware-free fakes keep working and real SDK moves are always
+        # measurable.
+        return None
+    count = max(2, min(samples, int(duration * 20) + 2))
+    previous: tuple[float, float] | None = None
+    max_yaw = max_rate = max_body = 0.0
+    for index in range(count):
+        # Stay strictly inside the recording: the pinned SDK raises when asked
+        # to evaluate exactly at its final timestamp.
+        at = duration * index / count
+        head, _antennas, body_yaw = evaluate(at)
+        if head is None:
+            continue
+        yaw = _head_yaw_deg(head)
+        body = abs(math.degrees(float(body_yaw))) if body_yaw is not None else 0.0
+        max_yaw = max(max_yaw, abs(yaw))
+        max_body = max(max_body, body)
+        if previous is not None:
+            delta_t = at - previous[0]
+            if delta_t > 0:
+                max_rate = max(max_rate, abs(yaw - previous[1]) / delta_t)
+        previous = (at, yaw)
+    return {"yaw_deg": max_yaw, "yaw_rate_deg_s": max_rate, "body_yaw_deg": max_body}
+
+
+def recorded_move_is_safe(envelope: dict[str, float]) -> bool:
+    return (
+        envelope["yaw_deg"] <= _SAFE_RECORDED_YAW_DEG
+        and envelope["yaw_rate_deg_s"] <= _SAFE_RECORDED_YAW_RATE_DEG_S
+        and envelope["body_yaw_deg"] <= _SAFE_RECORDED_BODY_YAW_DEG
+    )
+
 
 
 def _cue(at_s: float, operation: str, **parameters: object) -> BehaviorCue:
@@ -164,8 +228,8 @@ def reachy_conversation_pack(
         parameters={"pose": neutral, "duration_s": 0.5},
     ))
     available = frozenset(available_recordings)
-    if not {"yes1", "no1"} <= available:
-        raise ValueError("pinned Reachy catalog lacks yes1/no1 recordings")
+    if "yes1" not in available:
+        raise ValueError("pinned Reachy catalog lacks the yes1 recording")
 
     def head_cue(at: float, *, pitch: float = 0.0, yaw: float = 0.0,
                  roll: float = 0.0, z: float = 0.0,
@@ -212,7 +276,17 @@ def reachy_conversation_pack(
         ), period_s=1.5),
         "neutral": _pattern((head_cue(0.0),)),
         "yes": _pattern((_reachy_move(0.0, "yes1", recording_revision),), source="recorded"),
-        "no": _pattern((_reachy_move(0.0, "no1", recording_revision),), source="recorded"),
+        # The pinned no1 recording shakes the head at nearly 200 deg/s while
+        # pitched down, which brings the underside of the head into the body on
+        # this robot. When it is filtered by the replay envelope, keep the
+        # semantic refusal as a bounded authored shake instead.
+        "no": _pattern((_reachy_move(0.0, "no1", recording_revision),), source="recorded")
+        if "no1" in available else _pattern((
+            head_cue(0.0, yaw=0.12, duration=0.3),
+            head_cue(0.35, yaw=-0.12, duration=0.3),
+            head_cue(0.7, yaw=0.08, duration=0.3),
+            head_cue(1.05, yaw=0.0, duration=0.3),
+        )),
         "acknowledge": _pattern((_reachy_move(0.0, "yes1", recording_revision),), source="recorded"),
     }
     if expression_style == "expressive":
@@ -256,6 +330,12 @@ def reachy_conversation_pack(
     for name, recording in (
         ("happy", "cheerful1"), ("curious", "curious1"),
         ("confused", "confused1"), ("excited", "enthusiastic1"),
+        # Wider reviewed set from the same pinned dataset revision. Each name
+        # is mapped to one exact recording; unmapped emotions stay absent
+        # rather than being guessed from a filename.
+        ("sad", "sad1"), ("surprised", "surprised1"),
+        ("calm", "serenity1"), ("proud", "proud1"),
+        ("grateful", "grateful1"), ("thoughtful", "thoughtful1"),
     ):
         if recording in available:
             patterns[name] = _pattern(
@@ -301,10 +381,28 @@ async def reachy_pack_from_catalog(
     if any(not item.id.startswith("reachy/") or
            item.revision != catalog.revision for item in assets):
         raise ValueError("Reachy catalog asset revision is inconsistent")
+    approved: list[str] = []
+    rejected: dict[str, dict[str, float]] = {}
+    for item in assets:
+        name = item.id[7:]
+        envelope = recorded_move_envelope(catalog.get(item.id, item.revision))
+        if envelope is None or recorded_move_is_safe(envelope):
+            approved.append(name)
+        else:
+            rejected[name] = envelope
+    if rejected:
+        _log.warning(
+            "recorded Reachy moves excluded by the replay motion envelope: %s",
+            ", ".join(
+                f"{name} (yaw {values['yaw_deg']:.1f} deg, "
+                f"{values['yaw_rate_deg_s']:.0f} deg/s, body {values['body_yaw_deg']:.1f} deg)"
+                for name, values in sorted(rejected.items())
+            ),
+        )
     return reachy_conversation_pack(
         performer_id, neutral_head=neutral_head,
         recording_revision=catalog.revision,
-        available_recordings=[item.id[7:] for item in assets],
+        available_recordings=approved,
         breath_amplitude_m=breath_amplitude_m,
         wobble_amplitude_rad=wobble_amplitude_rad,
         speaking_axis=speaking_axis,
@@ -342,10 +440,13 @@ def stackchan_conversation_pack(
     def face(
         at: float, *, mouth: int | None = 0,
         eyes: int | None = None, eye_x: int | None = None,
+        mouth_weight: int | None = None,
     ) -> BehaviorCue:
         payload: dict[str, object] = {}
         if mouth is not None:
             payload["mouth"] = {"size": mouth}
+            if mouth_weight is not None:
+                payload["mouth"]["weight"] = mouth_weight
         if eyes is not None or eye_x is not None:
             feature: dict[str, int] = {}
             if eyes is not None:
@@ -363,16 +464,21 @@ def stackchan_conversation_pack(
         return _cue(at, "head", yaw={"angle": yaw_center + yaw, "speed": head_speed},
                     pitch={"angle": pitch_center + pitch, "speed": head_speed})
 
+    # An interrupted native_weight speaking loop can leave the mouth open at a
+    # non-zero weight, and size-based cues never clear it. Resting states
+    # therefore explicitly return the mouth to closed, so the face settles to
+    # neutral after speech ends. Legacy size mode is unchanged.
+    rest_mouth_weight = 0 if speaking_mode == "native_weight" else None
     behaviors = {
         "idle": _pattern((
-            face(0.0, mouth=0, eyes=45), head(0.35),
+            face(0.0, mouth=0, eyes=45, mouth_weight=rest_mouth_weight), head(0.35),
             head(1.2, yaw=yaw_amplitude // 2), head(2.15),
-            face(2.65, mouth=0, eyes=40),
+            face(2.65, mouth=0, eyes=40, mouth_weight=rest_mouth_weight),
         ), period_s=3.2),
         "listening": _pattern((
-            face(0.0, mouth=0, eyes=70),
+            face(0.0, mouth=0, eyes=70, mouth_weight=rest_mouth_weight),
             head(0.25, pitch=pitch_amplitude),
-            face(1.3, mouth=0, eyes=65),
+            face(1.3, mouth=0, eyes=65, mouth_weight=rest_mouth_weight),
         ), period_s=2.1),
         "speaking": _pattern((
             face(0.0, mouth=12, eyes=50),
@@ -395,7 +501,7 @@ def stackchan_conversation_pack(
             head(1.28),
         )),
         "acknowledge": _pattern((head(0.0, pitch=pitch_amplitude), head(0.35))),
-        "neutral": _pattern((face(0.0, mouth=0, eyes=45), head(0.25))),
+        "neutral": _pattern((face(0.0, mouth=0, eyes=45, mouth_weight=rest_mouth_weight), head(0.25))),
         "happy": _pattern((face(0.0, mouth=35, eyes=80), head(0.35, yaw=yaw_amplitude // 2))),
         "curious": _pattern((face(0.0, mouth=0, eyes=70), head(0.35, pitch=pitch_amplitude))),
         "confused": _pattern((face(0.0, mouth=0, eyes=30), head(0.35, yaw=-yaw_amplitude // 2))),

@@ -226,3 +226,48 @@ def test_native_head_and_antenna_controls_validate_and_wait_for_sdk_completion(t
         asyncio.run(provider.validate(ActionRequest(**base, operation="antenna_targets", parameters={"angles_rad": [1.21, 0]})))
     with pytest.raises(PermissionError, match="authority"):
         asyncio.run(ReachyPlaybackProvider(catalog, robot).validate(head))
+
+
+def test_stop_confirms_recorded_move_cancellation_when_playback_loop_returns(tmp_path):
+    """A cancelled recorded move must not quarantine the performer.
+
+    The pinned SDK documents that cancel_move stops async_play_move at its next
+    loop iteration. The loop returning is the SDK's own acknowledgment that no
+    further targets are streamed, so a preempted multi-second gesture is a
+    confirmed command stop rather than an unknown outcome.
+    """
+    root = tmp_path / "pack"
+    catalog = ReachyCatalog(root, snapshot(root, ["hello"]), move_factory=Move)
+
+    class Robot:
+        def __init__(self):
+            self.started = asyncio.Event()
+            self.cancelled = asyncio.Event()
+
+        async def async_play_move(self, move, *, sound=True):
+            self.started.set()
+            await self.cancelled.wait()
+
+        def cancel_move(self):
+            self.cancelled.set()
+
+    robot = Robot()
+    request = ActionRequest(
+        id="action-cancel", performer_id="reachy", caller_id="test", session_id="s",
+        operation="play_move", asset_id="reachy/hello", asset_revision=catalog.revision,
+    )
+    provider = ReachyPlaybackProvider(catalog, robot, motion_authorized=True)
+
+    async def scenario():
+        task = asyncio.create_task(provider.execute(request))
+        await robot.started.wait()
+        stopped = await provider.stop()
+        await task
+        return stopped
+
+    stopped = asyncio.run(scenario())
+    assert stopped.confirmed
+    assert "playback loop returned after cancellation request" in stopped.evidence
+    assert "physical settling unmeasured" in stopped.evidence
+    # A confirmed stop must not leave the provider refusing later actions.
+    asyncio.run(provider.validate(request))
