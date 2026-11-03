@@ -349,7 +349,13 @@ class ReachySDKProvider:
 
     async def validate(self, request: ActionRequest) -> None:
         """Honor operator tool grants for internal choreography as well as MCP."""
-        if request.operation not in self.grants:
+        if request.operation == "return_to_neutral":
+            # This fixed target is internal choreography. The operator's explicit
+            # wake_up grant authorizes the SDK startup and its captured return pose;
+            # no arbitrary target is exposed through the MCP tool catalog.
+            if "wake_up" not in self.grants:
+                raise PermissionError("Reachy neutral return requires the explicit wake_up grant")
+        elif request.operation not in self.grants:
             raise PermissionError("Reachy operation is not operator-granted")
         if self._adapter is None:
             raise RuntimeError("Reachy SDK session is not active")

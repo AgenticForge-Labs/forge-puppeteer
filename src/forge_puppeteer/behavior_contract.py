@@ -92,17 +92,20 @@ class PerformerBehaviors(ContractModel):
     revision: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     behaviors: dict[str, BehaviorPattern] = Field(min_length=1)
     startup: BehaviorPattern | None = None
+    neutral_behavior: str | None = Field(default=None, min_length=1, max_length=64)
 
     @classmethod
     def author(
         cls, performer_id: str, behaviors: dict[str, BehaviorPattern],
         *, startup: BehaviorPattern | None = None,
+        neutral_behavior: str | None = None,
     ):
         """Build a content-addressed pack without asking authors to invent hashes."""
         body = {
             "schema": BEHAVIOR_SCHEMA,
             "performer_id": performer_id,
             "behaviors": {name: pattern.model_dump(mode="json") for name, pattern in behaviors.items()},
+            "neutral_behavior": neutral_behavior,
         }
         if startup is not None:
             body["startup"] = startup.model_dump(mode="json")
@@ -112,6 +115,7 @@ class PerformerBehaviors(ContractModel):
         return cls(
             performer_id=performer_id, revision=revision,
             behaviors=behaviors, startup=startup,
+            neutral_behavior=neutral_behavior,
         )
 
     def content_revision(self) -> str:
@@ -136,6 +140,10 @@ class PerformerBehaviors(ContractModel):
             raise ValueError("hold mode is supported only for idle or listening")
         if self.startup is not None and self.startup.mode != "once":
             raise ValueError("startup behavior must be a finite one-shot pattern")
+        if self.neutral_behavior is not None:
+            neutral = self.behaviors.get(self.neutral_behavior)
+            if neutral is None or neutral.mode != "once":
+                raise ValueError("neutral behavior must name an authored finite behavior")
         for name in ("yes", "no", "acknowledge"):
             pattern = self.behaviors.get(name)
             if pattern is not None and pattern.mode != "once":

@@ -108,6 +108,8 @@ def reachy_conversation_pack(
     neutral_antennas_rad: tuple[float, float] | None = None,
     antenna_sway_rad: float = 0.18,
     wake_up_if_sleeping: bool = False,
+    wake_up_always: bool = False,
+    return_to_neutral_after_expression: bool = False,
 ) -> PerformerBehaviors:
     """Author Reachy motion using its existing native SDK adapter operations.
 
@@ -137,6 +139,12 @@ def reachy_conversation_pack(
         raise ValueError("Reachy listening mode must be tilt or hold")
     if expression_style not in {"classic", "expressive"}:
         raise ValueError("Reachy expression style must be classic or expressive")
+    if type(wake_up_if_sleeping) is not bool or type(wake_up_always) is not bool:
+        raise ValueError("Reachy startup selection must be boolean")
+    if type(return_to_neutral_after_expression) is not bool:
+        raise ValueError("Reachy post-expression neutral return must be boolean")
+    if return_to_neutral_after_expression and not wake_up_always:
+        raise ValueError("Reachy neutral return requires the forced SDK startup sequence")
     if not math.isfinite(antenna_sway_rad) or not 0 <= antenna_sway_rad <= _MAX_REACHY_ANTENNA_SWAY_RAD:
         raise ValueError("Reachy antenna sway must be bounded and nonnegative")
     if expression_style == "expressive":
@@ -215,10 +223,10 @@ def reachy_conversation_pack(
         "no": _pattern((_reachy_move(0.0, "no1", recording_revision),), source="recorded"),
         "acknowledge": _pattern((_reachy_move(0.0, "yes1", recording_revision),), source="recorded"),
     }
-    if expression_style == "classic" and breath_amplitude_m == 0:
-        # A zero-amplitude idle loop submits the same neutral target every
-        # half-second. Keep classic idle truly motionless instead of creating
-        # needless SDK work and an avoidable in-flight action at shutdown.
+    if (expression_style == "classic" and breath_amplitude_m == 0
+            and return_to_neutral_after_expression):
+        # The shared state machine returns finite expressions through this
+        # performer's neutral behavior, so zero-breath idle can stay still.
         patterns["idle"] = BehaviorPattern(source="procedural", mode="hold", cues=())
     if expression_style == "expressive":
         # One SDK goto per sample synchronously interpolates head and antennas.
@@ -267,14 +275,22 @@ def reachy_conversation_pack(
                 (_reachy_move(0.0, recording, recording_revision),),
                 source="recorded",
             )
+    if return_to_neutral_after_expression:
+        patterns["neutral"] = BehaviorPattern(
+            source="sequence", mode="once",
+            cues=(_cue(0.0, "return_to_neutral"),),
+        )
     startup = (
         BehaviorPattern(
             source="sequence", mode="once",
-            cues=(_cue(0.0, "wake_up"),),
+            cues=(_cue(0.0, "wake_up", **({"force": True} if wake_up_always else {})),),
         )
-        if wake_up_if_sleeping else None
+        if wake_up_if_sleeping or wake_up_always else None
     )
-    return PerformerBehaviors.author(performer_id, patterns, startup=startup)
+    return PerformerBehaviors.author(
+        performer_id, patterns, startup=startup,
+        neutral_behavior="neutral" if return_to_neutral_after_expression else None,
+    )
 
 
 async def reachy_pack_from_catalog(
@@ -291,6 +307,8 @@ async def reachy_pack_from_catalog(
     neutral_antennas_rad: tuple[float, float] | None = None,
     antenna_sway_rad: float = 0.18,
     wake_up_if_sleeping: bool = False,
+    wake_up_always: bool = False,
+    return_to_neutral_after_expression: bool = False,
 ) -> PerformerBehaviors:
     """Resolve available recordings only from an already-verified ReachyCatalog.
 
@@ -319,6 +337,8 @@ async def reachy_pack_from_catalog(
         neutral_antennas_rad=neutral_antennas_rad,
         antenna_sway_rad=antenna_sway_rad,
         wake_up_if_sleeping=wake_up_if_sleeping,
+        wake_up_always=wake_up_always,
+        return_to_neutral_after_expression=return_to_neutral_after_expression,
     )
 
 

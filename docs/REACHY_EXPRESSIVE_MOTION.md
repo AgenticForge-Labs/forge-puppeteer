@@ -47,12 +47,32 @@ The optional `reachy_startup_behavior: "wake_up_if_sleeping"` adds one
 Puppeteer-owned startup action to the behavior pack. It runs on the first
 presence event in the room, not when the daemon starts, and requires an
 operator-granted `wake_up` operation. The adapter uses the pinned SDK's own
-sleep-pose check and `robot.wake_up()` sequence; it does not derive neutral
-from the pose found at connection time. The neutral head transform should be
-the SDK startup identity transform, which is also the target of that sequence.
-With Puppeteer's `media_backend="no_media"`, the SDK wake-up sound is
-unavailable; head and antenna movement are still handled by the SDK sequence.
-SDK return is action evidence, not a physical settling or STOP acknowledgment.
+sleep-pose check and `robot.wake_up()` sequence. Select `"wake_up"` when the
+operator wants the same SDK sequence to run even when the current pose is
+outside the SDK sleep-pose tolerance. Both modes use the SDK-defined startup
+pose, not a pose inferred at connection time. With Puppeteer's
+`media_backend="no_media"`, the SDK wake-up sound is unavailable; head and
+antenna movement are still handled by the SDK sequence. When the sequence
+returns, Puppeteer samples Reachy's present head transform and antenna joint
+positions. That per-session sample is the neutral target; it is based on where
+the robot ended startup, not a guessed or connection-time pose. Sampling does
+not independently prove physical settling. The pinned SDK startup sequence
+also targets body yaw 0.0 rad; Puppeteer retains that target because recorded
+expressions can change body yaw and `None` would leave it there.
+
+`reachy_return_to_neutral_after_expression: true` authors a `neutral_behavior`
+in the performer's behavior pack and requires
+`reachy_startup_behavior: "wake_up"` plus the explicit `wake_up` grant.
+Puppeteer's shared conversation
+state machine runs each finite expression, runs that performer's neutral
+behavior, then resumes the latest semantic presence state. The neutral step
+has its own journal action and action ID under the same exclusive performer
+owner. Reachy's adapter maps the fixed `return_to_neutral` operation to the
+head and antenna feedback sampled after startup plus the SDK startup body-yaw
+target; callers cannot provide raw targets. Other performers can author their
+own neutral behavior and use the same state-machine transition. SDK completion
+remains distinct from measured physical settling. With this option, zero-breath
+classic idle is a hold.
 
 Keep daemon startup wake disabled (`--no-wake-up-on-start`) so only the
 Puppeteer adapter owns the startup movement. A missing or incompatible daemon

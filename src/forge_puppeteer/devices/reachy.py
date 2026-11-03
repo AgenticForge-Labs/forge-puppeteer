@@ -20,6 +20,10 @@ PINNED_REACHY_SDK_VERSION = "1.10.0rc5"
 _HEAD_TRANSLATION_LIMIT_M = 0.10
 _ANTENNA_ANGLE_LIMIT_RAD = 1.20
 _NATIVE_DURATION_LIMIT_S = (0.05, 5.0)
+# The pinned SDK's ReachyMini.wake_up() calls goto_target without a body_yaw
+# argument, whose pinned default is 0.0 rad. A return must restore that target;
+# None would preserve a body's yaw left by recordings such as no1.
+_SDK_STARTUP_BODY_YAW_RAD = 0.0
 
 
 class ReachyCatalog:
@@ -160,6 +164,9 @@ class ReachyPlaybackProvider:
         self._active = False
         self._active_operation: str | None = None
         self._quarantined = False
+        self._startup_neutral_head: Any | None = None
+        self._startup_neutral_antennas: tuple[float, float] | None = None
+        self._startup_neutral_body_yaw: float | None = None
 
     async def describe(self) -> DeviceDescriptor:
         from ..robot_contracts import ControlDescriptor
@@ -247,6 +254,13 @@ class ReachyPlaybackProvider:
             "active_operation": self._active_operation,
             "authority": "granted" if self.motion_authorized else "denied",
             "quarantined": self._quarantined,
+            "neutral_baseline": (
+                "captured_after_sdk_startup"
+                if self._startup_neutral_head is not None
+                and self._startup_neutral_antennas is not None
+                and self._startup_neutral_body_yaw is not None
+                else "unavailable"
+            ),
         }
 
     async def permitted(self, tool: str) -> bool:
@@ -267,7 +281,10 @@ class ReachyPlaybackProvider:
         return _RESOURCES
 
     async def validate(self, request: ActionRequest) -> None:
-        if request.operation not in {"play_move", "head_pose", "antenna_targets", "pose_and_antennas", "wake_up"}:
+        if request.operation not in {
+            "play_move", "head_pose", "antenna_targets", "pose_and_antennas",
+            "wake_up", "return_to_neutral",
+        }:
             raise ValueError("unsupported Reachy operation")
         if not self.motion_authorized:
             raise PermissionError("Reachy motion authority is not granted")
@@ -277,7 +294,7 @@ class ReachyPlaybackProvider:
             raise PermissionError("restricted Reachy mode allows only operator-approved recorded moves")
         if request.operation == "play_move":
             if set(request.parameters) - {"sound"} or (
-                "sound" in request.parameters and not isinstance(request.parameters["sound"], bool)
+                "sound" in request.parameters and type(request.parameters["sound"]) is not bool
             ):
                 raise ValueError("play_move accepts only an optional boolean sound parameter")
             if request.parameters.get("sound", False):
@@ -288,8 +305,18 @@ class ReachyPlaybackProvider:
                 raise PermissionError("Reachy move is not in the operator-approved asset allowlist")
             self.catalog.get(request.asset_id, request.asset_revision)
         elif request.operation == "wake_up":
-            if self.restricted_actions or request.parameters:
+            if (self.restricted_actions
+                    or set(request.parameters) - {"force"}
+                    or ("force" in request.parameters
+                        and type(request.parameters["force"]) is not bool)):
                 raise PermissionError("Reachy wake_up is unavailable in restricted move-only mode")
+        elif request.operation == "return_to_neutral":
+            if self.restricted_actions or request.parameters:
+                raise PermissionError("Reachy neutral return is unavailable in restricted move-only mode")
+            if (self._startup_neutral_head is None
+                    or self._startup_neutral_antennas is None
+                    or self._startup_neutral_body_yaw is None):
+                raise RuntimeError("SDK startup neutral has not been captured in this performer session")
         else:
             self._validate_native(request)
         with self._lock:
@@ -310,23 +337,22 @@ class ReachyPlaybackProvider:
                 evidence = "SDK playback loop returned; physical settling unmeasured"
             elif request.operation == "wake_up":
                 import asyncio
-                evidence = await asyncio.to_thread(self._wake_up_if_sleeping)
+                evidence = await asyncio.to_thread(
+                    self._wake_up_if_sleeping,
+                    request.parameters.get("force", False),
+                )
+            elif request.operation == "return_to_neutral":
+                await self._goto_target(self._captured_startup_neutral_sdk_args())
+                evidence = (
+                    "SDK target from the captured startup neutral completed; "
+                    "physical settling not independently measured"
+                )
             else:
                 # The pinned SDK's goto_target waits for its daemon task to finish,
                 # but returns no measured-pose evidence. Keep its blocking call off
                 # the event loop so stop and unrelated runtime work can proceed.
-                import asyncio
-
                 args = self._native_sdk_args(request)
-                sdk_task = asyncio.create_task(asyncio.to_thread(self.robot.goto_target, **args))
-                try:
-                    await asyncio.shield(sdk_task)
-                except asyncio.CancelledError:
-                    # The SDK offers no task handle/cancel operation for goto_target.
-                    # Keep ownership until the worker really returns; cancellation
-                    # cannot imply the physical task stopped.
-                    await sdk_task
-                    raise
+                await self._goto_target(args)
                 evidence = "SDK goto task completed; physical pose not independently measured"
         finally:
             with self._lock:
@@ -334,7 +360,7 @@ class ReachyPlaybackProvider:
                 self._active_operation = None
         return Completion(evidence)
 
-    def _wake_up_if_sleeping(self) -> str:
+    def _wake_up_if_sleeping(self, force: bool = False) -> str:
         """Use the pinned SDK's sleep pose and wake-up choreography unchanged."""
         from reachy_mini.reachy_mini import SLEEP_HEAD_POSE
         from reachy_mini.utils.interpolation import distance_between_poses
@@ -342,11 +368,60 @@ class ReachyPlaybackProvider:
         translation_m, rotation_rad, *_ = distance_between_poses(
             self.robot.get_current_head_pose(), SLEEP_HEAD_POSE,
         )
-        if translation_m > 0.05 or rotation_rad > 0.35:
+        if not force and (translation_m > 0.05 or rotation_rad > 0.35):
             return "SDK wake-up skipped; current head pose is outside the SDK sleep-pose tolerance"
         self.robot.enable_motors()
         self.robot.wake_up()
-        return "SDK wake-up sequence returned; physical settling unmeasured"
+        self._capture_startup_neutral()
+        return "SDK wake-up sequence returned; present head and antenna positions captured as this session's neutral"
+
+    def _capture_startup_neutral(self) -> None:
+        """Capture measured SDK pose only after the operator-selected startup sequence."""
+        import numpy as np
+
+        head_pose = np.asarray(self.robot.get_current_head_pose(), dtype=float)
+        antennas = [float(value) for value in self.robot.get_present_antenna_joint_positions()]
+        if head_pose.shape != (4, 4) or len(antennas) != 2:
+            raise ValueError("SDK startup neutral feedback has an unexpected shape")
+        request = ActionRequest(
+            id="startup-neutral-validation", performer_id="reachy",
+            caller_id="puppeteer", session_id="startup",
+            operation="pose_and_antennas",
+            parameters={"pose": head_pose.tolist(), "angles_rad": antennas, "duration_s": 2.0},
+        )
+        self._validate_native(request)
+        with self._lock:
+            self._startup_neutral_head = head_pose.copy()
+            self._startup_neutral_antennas = (antennas[0], antennas[1])
+            self._startup_neutral_body_yaw = _SDK_STARTUP_BODY_YAW_RAD
+
+    def _captured_startup_neutral_sdk_args(self) -> dict[str, Any]:
+        with self._lock:
+            if (self._startup_neutral_head is None
+                    or self._startup_neutral_antennas is None
+                    or self._startup_neutral_body_yaw is None):
+                raise RuntimeError("SDK startup neutral is unavailable")
+            head = self._startup_neutral_head.copy()
+            antennas = list(self._startup_neutral_antennas)
+            body_yaw = self._startup_neutral_body_yaw
+        return {
+            "head": head,
+            "antennas": antennas,
+            "duration": 2.0,
+            "body_yaw": body_yaw,
+        }
+
+    async def _goto_target(self, args: dict[str, Any]) -> None:
+        import asyncio
+
+        sdk_task = asyncio.create_task(asyncio.to_thread(self.robot.goto_target, **args))
+        try:
+            await asyncio.shield(sdk_task)
+        except asyncio.CancelledError:
+            # The SDK has no goto task handle or cancellation acknowledgment.
+            # Keep ownership until the worker returns; cancellation cannot imply STOP.
+            await sdk_task
+            raise
 
     @staticmethod
     def _validate_native(request: ActionRequest) -> None:

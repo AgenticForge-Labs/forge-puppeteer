@@ -125,15 +125,28 @@ def test_reachy_expressive_requires_native_compound_grant_and_reviewed_neutral(t
 
 def test_reachy_startup_behavior_requires_explicit_wake_up_grant(tmp_path):
     data = config_data(tmp_path)
-    data["reachy_startup_behavior"] = "wake_up_if_sleeping"
+    data["reachy_startup_behavior"] = "wake_up"
     with pytest.raises(ValueError, match="explicit wake_up grant"):
         EnsembleConfig.model_validate(data)
     data["reachy"]["allowed_tools"].append("wake_up")
-    assert EnsembleConfig.model_validate(data).reachy_startup_behavior == "wake_up_if_sleeping"
+    assert EnsembleConfig.model_validate(data).reachy_startup_behavior == "wake_up"
+
+    data["reachy_startup_behavior"] = "none"
+    data["reachy_return_to_neutral_after_expression"] = True
+    with pytest.raises(ValueError, match="forced SDK startup capture"):
+        EnsembleConfig.model_validate(data)
+    data["reachy_startup_behavior"] = "wake_up"
+    data["reachy"]["allowed_tools"] = [
+        tool for tool in data["reachy"]["allowed_tools"] if tool != "wake_up"
+    ]
+    with pytest.raises(ValueError, match="explicit wake_up grant"):
+        EnsembleConfig.model_validate(data)
+    data["reachy"]["allowed_tools"].append("wake_up")
+    assert EnsembleConfig.model_validate(data).reachy_return_to_neutral_after_expression is True
 
     only = {k: v for k, v in data.items() if k not in {"stackchan", "soarm101"}}
     only["schema_version"] = 2
-    assert ReachyOnlyEnsembleConfig.model_validate(only).reachy_startup_behavior == "wake_up_if_sleeping"
+    assert ReachyOnlyEnsembleConfig.model_validate(only).reachy_return_to_neutral_after_expression is True
 
 
 def test_reachy_only_launcher_starts_without_other_device_providers(tmp_path, monkeypatch):

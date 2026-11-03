@@ -119,7 +119,8 @@ class EnsembleConfig(BaseModel):
     presence_ttl_s: float = Field(default=30, ge=1, le=3600)
     stop_timeout_s: float = Field(default=5, ge=0.1, le=60)
     reachy_expression_style: Literal["classic", "expressive"] = "classic"
-    reachy_startup_behavior: Literal["none", "wake_up_if_sleeping"] = "none"
+    reachy_startup_behavior: Literal["none", "wake_up_if_sleeping", "wake_up"] = "none"
+    reachy_return_to_neutral_after_expression: bool = False
     reachy_neutral_antennas_rad: tuple[float, float] | None = None
     reachy_expressive_amplitude_rad: float = Field(default=0.09, ge=0, le=0.12)
     reachy_antenna_sway_rad: float = Field(default=0.18, ge=0, le=0.26)
@@ -147,9 +148,13 @@ class EnsembleConfig(BaseModel):
         stack_tools = {"head_move", "face_update", "device_stop"}
         if not reachy_tools <= set(self.reachy.allowed_tools):
             raise ValueError("native Reachy expression requires head, playback and stop grants")
-        if (self.reachy_startup_behavior == "wake_up_if_sleeping"
+        if ((self.reachy_startup_behavior in {"wake_up_if_sleeping", "wake_up"}
+             or self.reachy_return_to_neutral_after_expression)
                 and "wake_up" not in self.reachy.allowed_tools):
             raise ValueError("Reachy wake-up startup requires the explicit wake_up grant")
+        if (self.reachy_return_to_neutral_after_expression
+                and self.reachy_startup_behavior != "wake_up"):
+            raise ValueError("Reachy automatic neutral return requires forced SDK startup capture")
         if not stack_tools <= set(self.stackchan.allowed_tools):
             raise ValueError("native StackChan expression requires head, face and stop grants")
         if self.stackchan.physical_authority != "I_AUTHORIZE_STACKCHAN_CONTROL":
@@ -177,7 +182,8 @@ class ReachyOnlyEnsembleConfig(BaseModel):
     listening_tilt_rad: float = Field(default=0.02, ge=0, le=0.07)
     listening_mode: Literal["tilt", "hold"] = "tilt"
     reachy_expression_style: Literal["classic", "expressive"] = "classic"
-    reachy_startup_behavior: Literal["none", "wake_up_if_sleeping"] = "none"
+    reachy_startup_behavior: Literal["none", "wake_up_if_sleeping", "wake_up"] = "none"
+    reachy_return_to_neutral_after_expression: bool = False
     reachy_neutral_antennas_rad: tuple[float, float] | None = None
     reachy_expressive_amplitude_rad: float = Field(default=0.09, ge=0, le=0.12)
     reachy_antenna_sway_rad: float = Field(default=0.18, ge=0, le=0.26)
@@ -195,9 +201,13 @@ class ReachyOnlyEnsembleConfig(BaseModel):
         )
         if not {"head_pose", "play_move", "device_stop"} <= set(self.reachy.allowed_tools):
             raise ValueError("native Reachy expression requires head, playback and stop grants")
-        if (self.reachy_startup_behavior == "wake_up_if_sleeping"
+        if ((self.reachy_startup_behavior in {"wake_up_if_sleeping", "wake_up"}
+             or self.reachy_return_to_neutral_after_expression)
                 and "wake_up" not in self.reachy.allowed_tools):
             raise ValueError("Reachy wake-up startup requires the explicit wake_up grant")
+        if (self.reachy_return_to_neutral_after_expression
+                and self.reachy_startup_behavior != "wake_up"):
+            raise ValueError("Reachy automatic neutral return requires forced SDK startup capture")
         for value in (self.action_journal, self.ownership_db, self.reachy_neutral_head):
             if not value or not Path(value).is_absolute():
                 raise ValueError("action history, ownership and Reachy neutral pose require absolute paths")
@@ -354,6 +364,8 @@ def serve(config_path: str | Path) -> None:
                 neutral_antennas_rad=config.reachy_neutral_antennas_rad,
                 antenna_sway_rad=config.reachy_antenna_sway_rad,
                 wake_up_if_sleeping=config.reachy_startup_behavior == "wake_up_if_sleeping",
+                wake_up_always=config.reachy_startup_behavior == "wake_up",
+                return_to_neutral_after_expression=config.reachy_return_to_neutral_after_expression,
             )
         pack = anyio.run(resolve_reachy)
         runtime = ExecutionRuntime(
@@ -385,6 +397,8 @@ def serve(config_path: str | Path) -> None:
             neutral_antennas_rad=config.reachy_neutral_antennas_rad,
             antenna_sway_rad=config.reachy_antenna_sway_rad,
             wake_up_if_sleeping=config.reachy_startup_behavior == "wake_up_if_sleeping",
+            wake_up_always=config.reachy_startup_behavior == "wake_up",
+            return_to_neutral_after_expression=config.reachy_return_to_neutral_after_expression,
         )
     # NOTE: Reachy neutral is operator supplied, no fabricated physical zero.
     reachy_pack = anyio.run(resolve)

@@ -59,8 +59,13 @@ recording_revision=..., available_recordings=...)` creates:
 
 - `idle`: a bounded sinusoidal breathing pattern around an explicit,
   operator-reviewed 4x4 neutral head transform when breathing is enabled.
-  Classic idle with zero breathing amplitude is a no-motion hold, avoiding
-  repeated identical SDK targets. Expressive idle can still sway antennas.
+  Classic idle with zero breathing amplitude can be a no-motion hold when the
+  performer pack declares a neutral behavior that the shared state machine
+  runs after finite expressions. Without that reset, the neutral-target loop
+  remains the recovery path. After a confirmed interrupt stop, the state
+  machine also runs the authored neutral behavior before resuming presence;
+  an unknown stop keeps the performer quarantined. Expressive idle can still
+  sway antennas.
   Native SDK interpolation controls individual targets. Default vertical
   amplitude is **zero** until physical frame/clearance qualification.
 - `listening`: gentle pitched head attention pose, finite native SDK target
@@ -70,7 +75,9 @@ recording_revision=..., available_recordings=...)` creates:
   speech-derived audio/phoneme timing or emotional prosody.
 - `yes`, `no` and `acknowledge`: exact pinned SDK recordings
   `yes1` and `no1`, with associated audio disabled.
-- `neutral`: explicit return to the reviewed head transform.
+- `neutral`: explicit, performer-authored return behavior. A pack can nominate
+  it as `neutral_behavior`; the shared state machine then waits for it after
+  each finite expression before resuming the latest presence state.
 - Optional `happy`, `curious`, `confused` and `excited` recordings,
   only when those exact recording names are present in the verified catalog.
 
