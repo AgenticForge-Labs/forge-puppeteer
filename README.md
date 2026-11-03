@@ -256,3 +256,13 @@ the same normalized outgoing audio features to bounded mouth-size candidates
 at a rate-limited cadence. It is not connected to physical USB dispatch.
 The existing action journal, SDK capability checks, and STOP admission remain
 mandatory before any future live face animation.
+
+
+The current three-robot operator configuration also supports
+`stackchan_speaking_mode: "native_weight"` as an **optional** native
+StackChan speaking pattern, following the pinned upstream SpeakingModifier's
+mouth-weight approach while retaining Puppeteer's deterministic scheduler.
+The default remains `legacy_size` to preserve already-reviewed behavior.
+Blink and left/right eye glances are added as finite face-only expressions.
+None of these choices enlarges the screen; the new firmware scale option is
+independent and remains unapproved on the connected unit.
