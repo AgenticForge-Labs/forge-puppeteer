@@ -61,8 +61,8 @@ after independently qualifying the neutral head transform, physical Z axis
 and clearance. Larger amplitudes are not equivalent to safe amplitudes:
 SDK and mechanism limits are authoritative over Puppeteer bounds.
 
-The suggested expressive defaults use up to 0.05 radians in the lead
-head axis and 0.18 radians antenna sway around an explicitly reviewed
+The suggested expressive defaults use up to 0.09 radians (approximately
+5.2 degrees) in the lead head axis and 0.18 radians antenna sway around an explicitly reviewed
 neutral. Coordinated minor yaw and roll offsets produce more visible,
 less repetitive talking movement. Patterns interpolate at 0.6 s steps;
 they are **not** connected to outgoing audio volume, phonemes or actual
