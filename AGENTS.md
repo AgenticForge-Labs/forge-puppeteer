@@ -195,6 +195,9 @@ Never commit credentials, Wi-Fi/device secrets, private network addresses, token
   bypass the existing ExecutionRuntime and SDK authority.
 - An unconfirmed STOP or unsensed neutral/sleep state blocks any new physical
   reactive movement; never automatically retry or rearm.
+- The optional ensemble_speech_envelope MCP tool can collect bounded features
+  only inside the existing room. It must never dispatch physical actions,
+  rearm unknown devices, or run a second task scheduler.
 - Per-performer mapping remains separately operator-authored and
   SDK-preflighted. SO-ARM101 may only use exact approved finite choreography,
   never an arbitrary per-hop joint stream.
