@@ -245,3 +245,33 @@ python -m pytest tests/test_external_control.py tests/test_capability_schemas.py
 cd ~/code/forge-puppeteer
 python -m pytest tests/robots/test_stackchan_provider.py tests/robots/test_stackchan_mcp.py tests/robots/test_packaged_launcher_stackchan.py -q
 ```
+
+
+## Optional display presets inside the three-robot room
+
+The standalone StackChan MCP gateway supports `face_scale_update` through
+the SDK 0.4.0 operation. For a shared Conversationalist room, **do not run
+another StackChan gateway against the same USB device**. The existing
+`ConversationEnsemble` may expose `ensemble_presentation` with
+`performer_id`, source-controlled `preset` and unique `action_id`.
+The preset never accepts a raw percent, SDK method name or servo target.
+
+This is disabled by default. A trusted three-robot ensemble config can set
+`stackchan_display_presets_enabled: true` **only** when its nested StackChan
+config pins `sdk_version: "0.4.0"` and explicitly lists
+`face_scale_update` in `allowed_tools` with existing physical authority.
+The only authored presets are `normal` (100%) and `enlarged` (170%), both
+display-only. Neither is added to the emotion/expression catalog.
+
+The room-owned scheduler preflights the provider before it yields the current
+StackChan ambient cue. Missing SDK methods, old firmware, denied grants or
+unavailable performers return a denied/unsupported result without issuing
+an unrelated STOP. Successful admission follows the existing
+`ExecutionRuntime`, action journal and native SDK generation fence, and
+then resumes the latest presence behavior. Unknown outcomes keep the
+same quarantine semantics as other actions. Reachy and SO-ARM are not
+affected. No startup action is performed automatically.
+
+Firmware completion does not establish visual acceptance of the scaled
+LVGL face. Physical display testing and any installation remain explicitly
+attended and deferred.
