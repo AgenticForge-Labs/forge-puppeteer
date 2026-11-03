@@ -80,6 +80,16 @@ own neutral behavior and use the same state-machine transition. SDK completion
 remains distinct from measured physical settling. With this option, zero-breath
 classic idle is a hold.
 
+For the pinned Reachy SDK 1.10.0rc5, `ReachyMini.goto_target()` waits for the
+daemon's `TaskProgress.finished` event. The daemon emits that event after its
+time-based `GotoMove` loop returns; that loop submits interpolated targets on
+each tick and does not wait for measured joints to settle at the endpoint.
+Therefore an action record marked `completed` proves the SDK task loop ended,
+not that the head, antennas or body yaw reached the neutral target. A physical
+neutral claim requires a separate measured-pose convergence check with a
+reviewed tolerance and a clear interruption outcome. The adapter currently
+records this distinction and does not independently qualify settling.
+
 Keep daemon startup wake disabled (`--no-wake-up-on-start`) so only the
 Puppeteer adapter owns the startup movement. A missing or incompatible daemon
 fails readiness checks before the performer is exposed. Do not enable the
