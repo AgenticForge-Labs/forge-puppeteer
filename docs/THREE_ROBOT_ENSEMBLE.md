@@ -105,9 +105,9 @@ changes and then resumes the latest presence. A real interruption,
 disconnection, expiry or shutdown still preempts it immediately and retains
 the existing unknown-outcome quarantine if STOP cannot be confirmed.
 
-## Experimental Reachy expressive profile (not yet merged)
+## Experimental Reachy expressive profile (merged, hardware pending)
 
-The branch `agent/reachy-expressive-motion-v1` proposes
+PR #16 (merge `c83efcbbf470f9f72052d2090398f1092e6670dd`) adds
 `reachy_expression_style: "expressive"` for both launcher schemas.
 It requires a reviewed `reachy_neutral_antennas_rad` pair and an explicit
 Reachy `pose_and_antennas` operation grant. Its lead head-motion
@@ -119,8 +119,8 @@ official pinned recorded yes/no are unchanged.
 The compound head + antennas cue enters the same ExecutionRuntime, and
 the same pinned SDK `goto_target`, as existing motion. It does not
 create a new motor scheduler, grant raw LLM servo commands, or independently
-confirm physical STOP. **This branch is awaiting physical acceptance; the
-feature is not merged into `main`**. See
+confirm physical STOP. **The code is merged into `main`, but the expressive
+motion envelope is not physically qualified.** See
 [Reachy expressive motion](REACHY_EXPRESSIVE_MOTION.md).
 
 ## SO-ARM101 supervised physical trial
