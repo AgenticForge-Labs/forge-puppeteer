@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 import anyio
 
 from .behavior_contract import (
+    BehaviorCue,
     BehaviorPattern,
     EnsemblePresence,
     PerformerBehaviors,
@@ -244,6 +245,76 @@ class ConversationEnsemble:
                 self._gesture_ids.discard(self._gesture_order.popleft())
             for name in names:
                 self._spawn(name, expression, action_id, resume=True)
+            return {"outcome": "accepted", **self.snapshot()}
+
+    async def present(
+        self,
+        performer_id: str,
+        preset_id: str,
+        *,
+        action_id: str,
+        cue: BehaviorCue,
+    ) -> dict[str, object]:
+        """Run one trusted, preauthored visual preset through the normal runtime.
+
+        The caller (not an MCP argument) supplies a source-controlled native
+        cue. A preflight occurs BEFORE interrupting the ambient behavior, so
+        missing grants/firmware never cause unnecessary STOP or new motion.
+        Only the existing action journal and owner coordinate the execution.
+        """
+        if (
+            not performer_id or not preset_id or not action_id
+            or len(action_id) > 128 or len(preset_id) > 64
+        ):
+            raise ValueError("bounded presentation identity and action ID required")
+        pattern = BehaviorPattern(
+            source="procedural", mode="once", cues=(cue,),
+        )
+        session_id = self._session
+        if self._tasks is None or session_id is None or performer_id not in self.packs:
+            return {"outcome": "denied", "reason": "inactive_or_unknown_performer", **self.snapshot()}
+        if performer_id in self._blocked or performer_id not in self._owned:
+            return {"outcome": "denied", "reason": "performer_unavailable", **self.snapshot()}
+        # Validation may make a bounded SDK read. It must not hold the ensemble
+        # presence lock, which handles urgent disconnect/interruption events.
+        preflight = ActionRequest(
+            id=f"{action_id}:{performer_id}:0:0",
+            performer_id=performer_id, caller_id=self.caller_id,
+            session_id=session_id, operation=cue.operation,
+            parameters=dict(cue.parameters), cue_id=f"presentation:{preset_id}:0:0",
+            asset_id=cue.asset_id, asset_revision=cue.asset_revision,
+        )
+        try:
+            await self.runtime._provider(performer_id).validate(preflight)
+        except (ValueError, TypeError, RuntimeError, PermissionError):
+            return {"outcome": "unsupported", "reason": "presentation_preflight_denied", **self.snapshot()}
+        async with self._lock:
+            if (
+                self._tasks is None or self._session != session_id
+                or self._state == "disconnected"
+            ):
+                return {"outcome": "denied", "reason": "session_changed", **self.snapshot()}
+            if action_id in self._gesture_ids:
+                return {"outcome": "duplicate", **self.snapshot()}
+            if performer_id in self._blocked or performer_id not in self._owned:
+                return {"outcome": "denied", "reason": "performer_unavailable", **self.snapshot()}
+            await self._stop_slots((performer_id,), graceful=True)
+            if performer_id in self._blocked:
+                return {"outcome": "denied", "reason": "unconfirmed_prior_stop", **self.snapshot()}
+            self._gesture_ids.add(action_id)
+            self._gesture_order.append(action_id)
+            if len(self._gesture_order) > 256:
+                self._gesture_ids.discard(self._gesture_order.popleft())
+            slot = _Slot(
+                scope=anyio.CancelScope(),
+                behavior=f"presentation:{preset_id}",
+                expression_active=True,
+            )
+            self._slots[performer_id] = slot
+            self._tasks.start_soon(
+                self._play, performer_id, f"presentation:{preset_id}",
+                pattern, slot, action_id, True,
+            )
             return {"outcome": "accepted", **self.snapshot()}
 
     def _acquire_owner(self, name: str) -> bool:
