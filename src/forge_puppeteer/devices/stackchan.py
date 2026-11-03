@@ -46,6 +46,7 @@ def _sdk():
 _NATIVE_TO_TOOL = {
     "head": "head_move",
     "face": "face_update",
+    "face_scale": "face_scale_update",
     "lights": "lights_update",
     "neohex": "neohex_update",
     "play_asset": "play_asset",
@@ -53,6 +54,7 @@ _NATIVE_TO_TOOL = {
 _CAPABILITY_TO_OPERATION = {
     "motion.update.position_only": "head",
     "avatar.update": "face",
+    "display.face_scale": "face_scale",
     "lights.update": "lights",
     "external_lights.update": "neohex",
 }
@@ -189,6 +191,7 @@ class StackChanProvider:
         required = {
             "head_move": "motion.update.position_only",
             "face_update": "avatar.update",
+            "face_scale_update": "display.face_scale",
             "lights_update": "lights.update",
             "neohex_update": "external_lights.update",
         }
@@ -196,7 +199,11 @@ class StackChanProvider:
             return False
         robot = self._connected()
         firmware = await _call(self._invoke, robot, robot.discover)
-        return required[tool] in firmware.get("capabilities", ())
+        return (
+            required[tool] in firmware.get("capabilities", ())
+            and (tool != "face_scale_update" or hasattr(robot, "set_face_scale"))
+            and required[tool] in _sdk()[3]
+        )
 
     async def list_assets(self) -> tuple[AssetDescriptor, ...]:
         assets = await _call(self._assets)
@@ -220,6 +227,7 @@ class StackChanProvider:
         # effects, limits and resource identities.
         from ..mcp.stackchan import (
             FaceParameters,
+            FaceScaleParameters,
             HeadParameters,
             LightParameters,
             NeoHexParameters,
@@ -228,6 +236,7 @@ class StackChanProvider:
         model_for = {
             "head": HeadParameters,
             "face": FaceParameters,
+            "face_scale": FaceScaleParameters,
             "lights": LightParameters,
             "neohex": NeoHexParameters,
         }
@@ -235,6 +244,8 @@ class StackChanProvider:
         controls = []
         for native_id, operation in _CAPABILITY_TO_OPERATION.items():
             if (native_id not in firmware["capabilities"]
+                    or native_id not in capabilities
+                    or (operation == "face_scale" and not hasattr(robot, "set_face_scale"))
                     or _NATIVE_TO_TOOL[operation] not in self._allowed_tools):
                 continue
             native = capabilities[native_id]
@@ -288,6 +299,11 @@ class StackChanProvider:
             return asset
         if request.asset_id is not None or request.asset_revision is not None:
             raise ValueError("native operation cannot specify an asset")
+        if request.operation == "face_scale":
+            from ..mcp.stackchan import FaceScaleParameters
+
+            # Strict, closed schema: display-only; never an asset or servo cue.
+            return FaceScaleParameters.model_validate(request.parameters).percent
         if request.operation == "neohex":
             _, _, _, _, _, _, _, neohex = _sdk()
             params = request.parameters
@@ -311,16 +327,22 @@ class StackChanProvider:
         firmware = await _call(self._invoke, robot, robot.discover)
         state = (
             await _call(self._invoke, robot, robot.state)
-            if request.operation != "neohex" else {}
+            if request.operation not in {"neohex", "face_scale"} else {}
         )
         steps = (
             prepared.steps if request.operation == "play_asset" else
-            () if request.operation == "neohex" else (prepared,)
+            () if request.operation in {"neohex", "face_scale"} else (prepared,)
         )
         if request.operation == "neohex" and (
             "external_lights.update" not in firmware["capabilities"]
         ):
             raise ValueError("NeoHEX unavailable in firmware")
+        if request.operation == "face_scale" and (
+            "display.face_scale" not in firmware["capabilities"]
+            or "display.face_scale" not in _sdk()[3]
+            or not hasattr(robot, "set_face_scale")
+        ):
+            raise ValueError("face scale unavailable in installed SDK or firmware")
         required = {
             "head": "motion.update.position_only",
             "face": "avatar.update",
@@ -354,6 +376,7 @@ class StackChanProvider:
             resources = {
                 "head": ("head.pose",),
                 "face": ("face",),
+                "face_scale": ("face.display",),
                 "lights": ("lights.builtin",),
                 "neohex": ("lights.neohex",),
             }[request.operation]
@@ -393,6 +416,11 @@ class StackChanProvider:
             elif request.operation == "face":
                 events = await _call(
                     self._invoke, robot, robot.update_face, prepared.update,
+                    expected_generation=generation,
+                )
+            elif request.operation == "face_scale":
+                events = await _call(
+                    self._invoke, robot, robot.set_face_scale, prepared,
                     expected_generation=generation,
                 )
             elif request.operation == "lights":
