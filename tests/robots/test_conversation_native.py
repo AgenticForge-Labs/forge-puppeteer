@@ -266,3 +266,20 @@ def test_stackchan_native_weight_speech_option_uses_stock_mouth_primitive():
         _step({"at_s": 0.0, "operation": cue.operation, "parameters": cue.parameters})
     with pytest.raises(ValueError, match="speaking mode"):
         stackchan_conversation_pack("stackchan", speaking_mode="unapproved")
+
+
+def test_native_weight_resting_states_close_the_mouth_after_interrupted_speech():
+    # An interrupted speaking loop can leave mouth weight non-zero. Resting
+    # states must explicitly return it to closed so the face settles neutral.
+    native = stackchan_conversation_pack("stackchan", speaking_mode="native_weight")
+    for name in ("idle", "listening", "neutral"):
+        face_cues = [c for c in native.behaviors[name].cues if c.operation == "face"]
+        assert face_cues, name
+        assert all(c.parameters["mouth"]["weight"] == 0 for c in face_cues), name
+        assert all(c.parameters["mouth"]["size"] == 0 for c in face_cues), name
+
+    # The legacy size profile does not use the weight primitive at all.
+    legacy = stackchan_conversation_pack("stackchan")
+    for name in ("idle", "listening", "neutral"):
+        face_cues = [c for c in legacy.behaviors[name].cues if c.operation == "face"]
+        assert all("weight" not in c.parameters.get("mouth", {}) for c in face_cues), name

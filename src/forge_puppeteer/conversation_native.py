@@ -342,10 +342,13 @@ def stackchan_conversation_pack(
     def face(
         at: float, *, mouth: int | None = 0,
         eyes: int | None = None, eye_x: int | None = None,
+        mouth_weight: int | None = None,
     ) -> BehaviorCue:
         payload: dict[str, object] = {}
         if mouth is not None:
             payload["mouth"] = {"size": mouth}
+            if mouth_weight is not None:
+                payload["mouth"]["weight"] = mouth_weight
         if eyes is not None or eye_x is not None:
             feature: dict[str, int] = {}
             if eyes is not None:
@@ -363,16 +366,21 @@ def stackchan_conversation_pack(
         return _cue(at, "head", yaw={"angle": yaw_center + yaw, "speed": head_speed},
                     pitch={"angle": pitch_center + pitch, "speed": head_speed})
 
+    # An interrupted native_weight speaking loop can leave the mouth open at a
+    # non-zero weight, and size-based cues never clear it. Resting states
+    # therefore explicitly return the mouth to closed, so the face settles to
+    # neutral after speech ends. Legacy size mode is unchanged.
+    rest_mouth_weight = 0 if speaking_mode == "native_weight" else None
     behaviors = {
         "idle": _pattern((
-            face(0.0, mouth=0, eyes=45), head(0.35),
+            face(0.0, mouth=0, eyes=45, mouth_weight=rest_mouth_weight), head(0.35),
             head(1.2, yaw=yaw_amplitude // 2), head(2.15),
-            face(2.65, mouth=0, eyes=40),
+            face(2.65, mouth=0, eyes=40, mouth_weight=rest_mouth_weight),
         ), period_s=3.2),
         "listening": _pattern((
-            face(0.0, mouth=0, eyes=70),
+            face(0.0, mouth=0, eyes=70, mouth_weight=rest_mouth_weight),
             head(0.25, pitch=pitch_amplitude),
-            face(1.3, mouth=0, eyes=65),
+            face(1.3, mouth=0, eyes=65, mouth_weight=rest_mouth_weight),
         ), period_s=2.1),
         "speaking": _pattern((
             face(0.0, mouth=12, eyes=50),
@@ -395,7 +403,7 @@ def stackchan_conversation_pack(
             head(1.28),
         )),
         "acknowledge": _pattern((head(0.0, pitch=pitch_amplitude), head(0.35))),
-        "neutral": _pattern((face(0.0, mouth=0, eyes=45), head(0.25))),
+        "neutral": _pattern((face(0.0, mouth=0, eyes=45, mouth_weight=rest_mouth_weight), head(0.25))),
         "happy": _pattern((face(0.0, mouth=35, eyes=80), head(0.35, yaw=yaw_amplitude // 2))),
         "curious": _pattern((face(0.0, mouth=0, eyes=70), head(0.35, pitch=pitch_amplitude))),
         "confused": _pattern((face(0.0, mouth=0, eyes=30), head(0.35, yaw=-yaw_amplitude // 2))),
