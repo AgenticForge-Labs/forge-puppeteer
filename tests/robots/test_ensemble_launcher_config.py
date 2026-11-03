@@ -142,6 +142,9 @@ def test_reachy_startup_behavior_requires_explicit_wake_up_grant(tmp_path):
     with pytest.raises(ValueError, match="explicit wake_up grant"):
         EnsembleConfig.model_validate(data)
     data["reachy"]["allowed_tools"].append("wake_up")
+    with pytest.raises(ValueError, match="explicit pose_and_antennas grant"):
+        EnsembleConfig.model_validate(data)
+    data["reachy"]["allowed_tools"].append("pose_and_antennas")
     assert EnsembleConfig.model_validate(data).reachy_return_to_neutral_after_expression is True
 
     only = {k: v for k, v in data.items() if k not in {"stackchan", "soarm101"}}

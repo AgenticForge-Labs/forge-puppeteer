@@ -155,6 +155,9 @@ class EnsembleConfig(BaseModel):
         if (self.reachy_return_to_neutral_after_expression
                 and self.reachy_startup_behavior != "wake_up"):
             raise ValueError("Reachy automatic neutral return requires forced SDK startup capture")
+        if (self.reachy_return_to_neutral_after_expression
+                and "pose_and_antennas" not in self.reachy.allowed_tools):
+            raise ValueError("Reachy automatic neutral return requires the explicit pose_and_antennas grant")
         if not stack_tools <= set(self.stackchan.allowed_tools):
             raise ValueError("native StackChan expression requires head, face and stop grants")
         if self.stackchan.physical_authority != "I_AUTHORIZE_STACKCHAN_CONTROL":
@@ -208,6 +211,9 @@ class ReachyOnlyEnsembleConfig(BaseModel):
         if (self.reachy_return_to_neutral_after_expression
                 and self.reachy_startup_behavior != "wake_up"):
             raise ValueError("Reachy automatic neutral return requires forced SDK startup capture")
+        if (self.reachy_return_to_neutral_after_expression
+                and "pose_and_antennas" not in self.reachy.allowed_tools):
+            raise ValueError("Reachy automatic neutral return requires the explicit pose_and_antennas grant")
         for value in (self.action_journal, self.ownership_db, self.reachy_neutral_head):
             if not value or not Path(value).is_absolute():
                 raise ValueError("action history, ownership and Reachy neutral pose require absolute paths")

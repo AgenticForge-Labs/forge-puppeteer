@@ -62,7 +62,10 @@ expressions can change body yaw and `None` would leave it there.
 
 `reachy_return_to_neutral_after_expression: true` authors a `neutral_behavior`
 in the performer's behavior pack and requires
-`reachy_startup_behavior: "wake_up"` plus the explicit `wake_up` grant.
+`reachy_startup_behavior: "wake_up"` plus explicit `wake_up` and
+`pose_and_antennas` grants in the reviewed Reachy tool allowlist. The combined
+target grant remains a configuration capability for the internal authored
+neutral behavior; it does not register a raw-target MCP function.
 Puppeteer's shared conversation
 state machine runs each finite expression, runs that performer's neutral
 behavior, then resumes the latest semantic presence state. Motion-bearing

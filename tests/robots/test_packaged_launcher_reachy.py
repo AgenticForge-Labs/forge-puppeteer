@@ -255,7 +255,7 @@ async def test_operator_selected_wake_up_runs_sdk_sequence_from_any_pose(monkeyp
 
 
 @pytest.mark.anyio
-async def test_internal_neutral_return_uses_wake_up_grant_without_exposing_a_tool():
+async def test_internal_neutral_return_requires_both_grants_without_exposing_a_tool():
     from forge_puppeteer.execution import ActionRequest
 
     seen = []
@@ -275,6 +275,11 @@ async def test_internal_neutral_return_uses_wake_up_grant_without_exposing_a_too
     assert seen == []
 
     provider.grants = frozenset({"wake_up"})
+    with pytest.raises(PermissionError, match="explicit pose_and_antennas grant"):
+        await provider.validate(request)
+    assert seen == []
+
+    provider.grants = frozenset({"wake_up", "pose_and_antennas"})
     await provider.validate(request)
     assert seen == ["return_to_neutral"]
     assert "return_to_neutral" not in provider._TOOLS
