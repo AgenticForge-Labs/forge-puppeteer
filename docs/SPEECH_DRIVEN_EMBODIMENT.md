@@ -156,3 +156,11 @@ Binding those candidates to actual firmware requires a separate operator
 grant, resource ownership, explicit START/STOP behavior, EMEET timing review,
 and attended StackChan visual acceptance. The new 100%/170% display setting
 belongs to the SDK/firmware independently and never alters envelope intensity.
+
+
+Puppeteer's StackChan speech-face preview now models the native stock
+SpeakingModifier's **mouth weight** channel (default bounded maximum 75),
+not a servo angle, mouth size, or actual phoneme. It remains disconnected
+from motion and from a production-calibrated speaker clock. Releasing speech
+proposes mouth weight 0, but verified stop/neutral remains the responsibility
+of the existing runtime and SDK when physical dispatch is eventually enabled.
