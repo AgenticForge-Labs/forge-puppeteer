@@ -126,6 +126,16 @@ space measurement, RT audio playback start/finish callback, or physical
 timing synchronization. Those require explicit operator validation and, for
 SO-ARM, its SDK's distinct deterministic choreography PR 3.
 
+## Experimental coordinated expression profile
+
+The opt-in `expressive` Reachy style proposed on
+`agent/reachy-expressive-motion-v1` adds SDK-native compound
+head/antenna interpolation rather than replacing the existing
+`classic` pack or imported recordings. It is not merged or hardware-
+qualified as of this branch. It requires an approved antenna neutral,
+a new explicit operator grant, and preserves zero-default Z breathing.
+See [Reachy expressive motion](REACHY_EXPRESSIVE_MOTION.md).
+
 ## Test / release gate
 
 CI installs `stackchan-control` from verified
