@@ -122,6 +122,7 @@ class EnsembleConfig(BaseModel):
     reachy_neutral_antennas_rad: tuple[float, float] | None = None
     reachy_expressive_amplitude_rad: float = Field(default=0.05, ge=0, le=0.07)
     reachy_antenna_sway_rad: float = Field(default=0.18, ge=0, le=0.26)
+    reachy_breath_amplitude_m: float = Field(default=0.0, ge=0, le=0.005)
 
     @model_validator(mode="after")
     def validate_ensemble(self):
@@ -175,6 +176,7 @@ class ReachyOnlyEnsembleConfig(BaseModel):
     reachy_neutral_antennas_rad: tuple[float, float] | None = None
     reachy_expressive_amplitude_rad: float = Field(default=0.05, ge=0, le=0.07)
     reachy_antenna_sway_rad: float = Field(default=0.18, ge=0, le=0.26)
+    reachy_breath_amplitude_m: float = Field(default=0.0, ge=0, le=0.005)
 
     @model_validator(mode="after")
     def validate_reachy(self):
@@ -340,6 +342,7 @@ def serve(config_path: str | Path) -> None:
                 listening_tilt_rad=config.listening_tilt_rad,
                 listening_mode=config.listening_mode,
                 expression_style=config.reachy_expression_style,
+                breath_amplitude_m=config.reachy_breath_amplitude_m,
                 neutral_antennas_rad=config.reachy_neutral_antennas_rad,
                 antenna_sway_rad=config.reachy_antenna_sway_rad,
             )
@@ -369,6 +372,7 @@ def serve(config_path: str | Path) -> None:
                 if config.reachy_expression_style == "expressive" else 0.025
             ),
             expression_style=config.reachy_expression_style,
+            breath_amplitude_m=config.reachy_breath_amplitude_m,
             neutral_antennas_rad=config.reachy_neutral_antennas_rad,
             antenna_sway_rad=config.reachy_antenna_sway_rad,
         )
