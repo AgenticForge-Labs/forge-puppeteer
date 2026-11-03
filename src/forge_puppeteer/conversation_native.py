@@ -17,6 +17,7 @@ from .behavior_contract import BehaviorCue, BehaviorPattern, PerformerBehaviors
 _SHA_PREFIX = "sha256:"
 _MAX_REACHY_BREATH_M = 0.005
 _MAX_REACHY_WOBBLE_RAD = 0.07
+_MAX_REACHY_EXPRESSIVE_RAD = 0.12
 _MAX_REACHY_ANTENNA_SWAY_RAD = 0.26
 _MAX_STACKCHAN_YAW = 150
 _MAX_STACKCHAN_PITCH = 100
@@ -119,8 +120,12 @@ def reachy_conversation_pack(
     if (not math.isfinite(breath_amplitude_m) or
             not 0 <= breath_amplitude_m <= _MAX_REACHY_BREATH_M):
         raise ValueError("Reachy breathing amplitude must be bounded and nonnegative")
+    max_wobble = (
+        _MAX_REACHY_EXPRESSIVE_RAD if expression_style == "expressive"
+        else _MAX_REACHY_WOBBLE_RAD
+    )
     if (not math.isfinite(wobble_amplitude_rad) or
-            not 0 <= wobble_amplitude_rad <= _MAX_REACHY_WOBBLE_RAD):
+            not 0 <= wobble_amplitude_rad <= max_wobble):
         raise ValueError("Reachy talking wobble amplitude must be bounded and nonnegative")
     if speaking_axis not in {"yaw", "tilt"}:
         raise ValueError("Reachy speaking axis must be yaw or tilt")
