@@ -27,7 +27,9 @@ Physical qualification is separate from source merge and CI.
 2. This Puppeteer branch implements a deterministic *dimensionless*
    6-axis/antenna/mouth expression texture using the pinned Reachy frequencies.
    Separate seeded phases prevent identical lockstep while preserving
-   a common speech-driven envelope. There is **no actuator adapter** here.
+   a common speech-driven envelope. Its optional room-owned MCP ingestion tool
+   validates at most eight hops per batch and exposes read-only preview state.
+   There is **no actuator adapter** here.
 3. Puppeteer PR #19 merged a human-observed, offline reconciliation procedure
    that preserves historical UNKNOWN action outcomes and quarantine evidence.
 4. Puppeteer PR #20 remains an unmerged and physically unqualified measured
