@@ -201,7 +201,7 @@ class StackChanProvider:
         firmware = await _call(self._invoke, robot, robot.discover)
         return (
             required[tool] in firmware.get("capabilities", ())
-            and (tool != "face_scale_update" or hasattr(robot, "set_face_scale"))
+            and (tool != "face_scale_update" or callable(getattr(robot, "set_face_scale", None)))
             and required[tool] in _sdk()[3]
         )
 
@@ -302,7 +302,13 @@ class StackChanProvider:
         if request.operation == "face_scale":
             from ..mcp.stackchan import FaceScaleParameters
 
-            # Strict, closed schema: display-only; never an asset or servo cue.
+            # Pydantic literals may accept numeric equivalents. Guard strict
+            # wire types here before any SDK capability lookup or submission.
+            if (
+                set(request.parameters) != {"percent"}
+                or type(request.parameters["percent"]) is not int
+            ):
+                raise ValueError("face scale requires exactly one integer percent")
             return FaceScaleParameters.model_validate(request.parameters).percent
         if request.operation == "neohex":
             _, _, _, _, _, _, _, neohex = _sdk()
