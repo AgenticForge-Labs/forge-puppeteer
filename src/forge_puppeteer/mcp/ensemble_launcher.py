@@ -21,6 +21,7 @@ from typing import Literal
 import anyio
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..behavior_contract import BehaviorCue
 from ..conversation_ensemble import ConversationEnsemble
 from ..conversation_native import reachy_pack_from_catalog, stackchan_conversation_pack
 from ..conversation_soarm import EXPECTED, soarm_conversation_pack
@@ -112,6 +113,7 @@ class EnsembleConfig(BaseModel):
     motion_authority: Literal["I_AUTHORIZE_ENSEMBLE_ROBOT_MOTION"]
     reachy: ServerConfig
     stackchan: ServerConfig
+    stackchan_display_presets_enabled: bool = False
     reachy_neutral_head: str
     soarm101: SOARMEnsembleConfig
     action_journal: str
@@ -153,6 +155,13 @@ class EnsembleConfig(BaseModel):
             raise ValueError("Reachy wake-up startup requires the explicit wake_up grant")
         if not stack_tools <= set(self.stackchan.allowed_tools):
             raise ValueError("native StackChan expression requires head, face and stop grants")
+        if self.stackchan_display_presets_enabled and (
+            self.stackchan.sdk_version != "0.4.0"
+            or "face_scale_update" not in self.stackchan.allowed_tools
+        ):
+            raise ValueError(
+                "StackChan display presets require native SDK 0.4.0 and face_scale_update grant"
+            )
         if self.stackchan.physical_authority != "I_AUTHORIZE_STACKCHAN_CONTROL":
             raise ValueError("StackChan expression requires operator physical authorization")
         if (self.soarm101.mode == "attended_physical_trial"
@@ -334,6 +343,18 @@ def load_config(path: str | Path) -> EnsembleConfig | ReachyOnlyEnsembleConfig:
     return EnsembleConfig.model_validate(data)
 
 
+def stackchan_display_presets(config: EnsembleConfig) -> dict[str, dict[str, BehaviorCue]]:
+    """Trusted display-only presets, independent of emotion and speech packs."""
+    if not config.stackchan_display_presets_enabled:
+        return {}
+    return {
+        config.stackchan.instance_id: {
+            "normal": BehaviorCue(at_s=0.0, operation="face_scale", parameters={"percent": 100}),
+            "enlarged": BehaviorCue(at_s=0.0, operation="face_scale", parameters={"percent": 170}),
+        },
+    }
+
+
 def serve(config_path: str | Path) -> None:
     config = load_config(config_path)
     if isinstance(config, ReachyOnlyEnsembleConfig):
@@ -400,6 +421,7 @@ def serve(config_path: str | Path) -> None:
     create_ensemble_server(
         runtime, ensemble, connected=connected,
         motion_enabled=True,
+        presentation_presets=stackchan_display_presets(config),
     ).run(transport="stdio")
 
 
