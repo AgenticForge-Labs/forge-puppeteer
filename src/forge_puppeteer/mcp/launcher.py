@@ -94,7 +94,7 @@ class ServerConfig(BaseModel):
                     "restricted Reachy mode requires allowed_tools: "
                     + ", ".join(sorted(missing_tools))
                 )
-            if set(self.allowed_tools) & {"head_pose", "antenna_targets"}:
+            if set(self.allowed_tools) & {"head_pose", "antenna_targets", "pose_and_antennas"}:
                 raise ValueError("restricted Reachy mode cannot enable arbitrary head_pose or antenna_targets")
             for name, value in (
                 ("ownership_db", self.ownership_db),
@@ -223,7 +223,7 @@ class ReachySDKProvider:
 
     _TOOLS = frozenset({
         "device_info", "device_state", "list_assets", "action_lookup",
-        "play_move", "head_pose", "antenna_targets", "action_cancel", "device_stop",
+        "play_move", "head_pose", "antenna_targets", "pose_and_antennas", "action_cancel", "device_stop",
     })
 
     def __init__(self, config: ServerConfig, *, robot_factory=None, catalog_factory=None):
@@ -242,9 +242,9 @@ class ReachySDKProvider:
         unknown = set(config.allowed_tools) - self._TOOLS
         if unknown:
             raise ValueError(f"unsupported Reachy allowed_tools: {sorted(unknown)}")
-        if config.restricted_actions and set(config.allowed_tools) & {"head_pose", "antenna_targets"}:
+        if config.restricted_actions and set(config.allowed_tools) & {"head_pose", "antenna_targets", "pose_and_antennas"}:
             raise ValueError("restricted Reachy mode cannot grant arbitrary native targets")
-        if set(config.allowed_tools) & {"play_move", "head_pose", "antenna_targets", "action_cancel", "device_stop"} and config.physical_authority != "I_AUTHORIZE_REACHY_CONTROL":
+        if set(config.allowed_tools) & {"play_move", "head_pose", "antenna_targets", "pose_and_antennas", "action_cancel", "device_stop"} and config.physical_authority != "I_AUTHORIZE_REACHY_CONTROL":
             raise ValueError("Reachy motion tools require explicit physical authority")
         try:
             from importlib.metadata import version
@@ -308,6 +308,14 @@ class ReachySDKProvider:
 
     async def permitted(self, tool: str) -> bool:
         return tool in self.grants
+
+    async def validate(self, request: ActionRequest) -> None:
+        """Honor operator tool grants for internal choreography as well as MCP."""
+        if request.operation not in self.grants:
+            raise PermissionError("Reachy operation is not operator-granted")
+        if self._adapter is None:
+            raise RuntimeError("Reachy SDK session is not active")
+        await self._adapter.validate(request)
 
     def __getattr__(self, name):
         adapter = self._adapter
