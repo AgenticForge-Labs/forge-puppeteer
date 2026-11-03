@@ -53,12 +53,12 @@ outside the SDK sleep-pose tolerance. Both modes use the SDK-defined startup
 pose, not a pose inferred at connection time. With Puppeteer's
 `media_backend="no_media"`, the SDK wake-up sound is unavailable; head and
 antenna movement are still handled by the SDK sequence. When the sequence
-returns, Puppeteer samples Reachy's present head transform and antenna joint
-positions. That per-session sample is the neutral target; it is based on where
-the robot ended startup, not a guessed or connection-time pose. Sampling does
-not independently prove physical settling. The pinned SDK startup sequence
-also targets body yaw 0.0 rad; Puppeteer retains that target because recorded
-expressions can change body yaw and `None` would leave it there.
+returns, Puppeteer waits for measured head, antenna and body-yaw feedback to
+converge to the SDK startup target before sampling the present head transform
+and antenna positions as the per-session neutral. This prevents a transient
+post-interpolation sample from becoming neutral. The pinned SDK startup
+sequence also targets body yaw 0.0 rad; Puppeteer retains that target because
+recorded expressions can change body yaw and `None` would leave it there.
 
 `reachy_return_to_neutral_after_expression: true` authors a `neutral_behavior`
 in the performer's behavior pack and requires
@@ -85,10 +85,15 @@ daemon's `TaskProgress.finished` event. The daemon emits that event after its
 time-based `GotoMove` loop returns; that loop submits interpolated targets on
 each tick and does not wait for measured joints to settle at the endpoint.
 Therefore an action record marked `completed` proves the SDK task loop ended,
-not that the head, antennas or body yaw reached the neutral target. A physical
-neutral claim requires a separate measured-pose convergence check with a
-reviewed tolerance and a clear interruption outcome. The adapter currently
-records this distinction and does not independently qualify settling.
+not that the head, antennas or body yaw reached the neutral target. Puppeteer
+now samples the SDK head and antenna feedback plus the daemon's measured body
+yaw after startup and neutral returns. It requires three consecutive samples
+within 10 mm head translation, 0.05 rad head rotation, and 0.05 rad per antenna
+and body yaw, within two seconds. Missing feedback or a timeout leaves the
+action outcome unknown and quarantines the performer; the adapter does not
+retry or claim that STOP was confirmed. These are software acceptance bounds,
+not calibration values or proof that the tolerances are suitable for this
+physical robot. Attended hardware qualification is still required.
 
 Keep daemon startup wake disabled (`--no-wake-up-on-start`) so only the
 Puppeteer adapter owns the startup movement. A missing or incompatible daemon

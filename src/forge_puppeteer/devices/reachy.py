@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
@@ -20,6 +20,12 @@ PINNED_REACHY_SDK_VERSION = "1.10.0rc5"
 _HEAD_TRANSLATION_LIMIT_M = 0.10
 _ANTENNA_ANGLE_LIMIT_RAD = 1.20
 _NATIVE_DURATION_LIMIT_S = (0.05, 5.0)
+_NEUTRAL_POSITION_TOLERANCE_M = 0.01
+_NEUTRAL_ROTATION_TOLERANCE_RAD = 0.05
+_NEUTRAL_JOINT_TOLERANCE_RAD = 0.05
+_NEUTRAL_SETTLE_TIMEOUT_S = 2.0
+_NEUTRAL_SETTLE_SAMPLE_S = 0.05
+_NEUTRAL_SETTLE_STABLE_SAMPLES = 3
 # The pinned SDK's ReachyMini.wake_up() calls goto_target without a body_yaw
 # argument, whose pinned default is 0.0 rad. A return must restore that target;
 # None would preserve a body's yaw left by recordings such as no1.
@@ -135,8 +141,9 @@ class ReachyPlaybackProvider:
     """Opt-in adapter for the pinned SDK's recorded-move playback loop.
 
     A caller supplies an already-created SDK client; this provider never opens a
-    daemon connection. Playback completion means only that the SDK coroutine
-    returned. The SDK exposes no measured settling/completion signal.
+    daemon connection. SDK task completion marks only the end of its timed
+    interpolation loop. Startup and authored-neutral returns additionally wait
+    for measured feedback; recorded-move playback has no measured settle check.
     """
 
     # Normal presence changes may let an already-dispatched, finite SDK
@@ -152,12 +159,25 @@ class ReachyPlaybackProvider:
         motion_authorized: bool = False,
         restricted_actions: bool = False,
         approved_moves: frozenset[tuple[str, str]] | None = None,
+        state_reader: Callable[[], Mapping[str, Any]] | None = None,
+        settle_timeout_s: float = _NEUTRAL_SETTLE_TIMEOUT_S,
     ):
         self.catalog = catalog
         self.robot = robot
         self.motion_authorized = motion_authorized
         self.restricted_actions = restricted_actions
         self.approved_moves = frozenset(approved_moves or ())
+        import math
+
+        if (
+            isinstance(settle_timeout_s, bool)
+            or not isinstance(settle_timeout_s, (int, float))
+            or not math.isfinite(settle_timeout_s)
+            or not 0 < settle_timeout_s <= 30
+        ):
+            raise ValueError("neutral settle timeout must be between 0 and 30 seconds")
+        self.state_reader = state_reader
+        self.settle_timeout_s = settle_timeout_s
         if self.restricted_actions and not self.approved_moves:
             raise ValueError("restricted Reachy actions require an exact approved move allowlist")
         self._lock = threading.Lock()
@@ -310,9 +330,13 @@ class ReachyPlaybackProvider:
                     or ("force" in request.parameters
                         and type(request.parameters["force"]) is not bool)):
                 raise PermissionError("Reachy wake_up is unavailable in restricted move-only mode")
+            if self.state_reader is None:
+                raise RuntimeError("measured state reader is required to verify Reachy startup")
         elif request.operation == "return_to_neutral":
             if self.restricted_actions or request.parameters:
                 raise PermissionError("Reachy neutral return is unavailable in restricted move-only mode")
+            if self.state_reader is None:
+                raise RuntimeError("measured state reader is required to verify Reachy neutral")
             if (self._startup_neutral_head is None
                     or self._startup_neutral_antennas is None
                     or self._startup_neutral_body_yaw is None):
@@ -337,16 +361,33 @@ class ReachyPlaybackProvider:
                 evidence = "SDK playback loop returned; physical settling unmeasured"
             elif request.operation == "wake_up":
                 import asyncio
-                evidence = await asyncio.to_thread(
-                    self._wake_up_if_sleeping,
-                    request.parameters.get("force", False),
-                )
+                try:
+                    evidence = await asyncio.to_thread(
+                        self._wake_up_if_sleeping,
+                        request.parameters.get("force", False),
+                    )
+                    if evidence.startswith("SDK wake-up sequence returned"):
+                        evidence += "; " + await self._wait_for_target_feedback(
+                            self._sdk_startup_targets()
+                        )
+                        await asyncio.to_thread(self._capture_startup_neutral)
+                        evidence += "; startup feedback captured as this session's neutral"
+                except Exception:
+                    with self._lock:
+                        self._quarantined = True
+                    raise
             elif request.operation == "return_to_neutral":
-                await self._goto_target(self._captured_startup_neutral_sdk_args())
-                evidence = (
-                    "SDK target from the captured startup neutral completed; "
-                    "physical settling not independently measured"
-                )
+                target = self._captured_startup_neutral_sdk_args()
+                await self._goto_target(target)
+                try:
+                    evidence = await self._wait_for_target_feedback(target)
+                except Exception:
+                    # A finished SDK interpolation loop is not proof that the
+                    # servos reached the target. Keep this performer quarantined
+                    # and let ExecutionRuntime preserve the outcome as unknown.
+                    with self._lock:
+                        self._quarantined = True
+                    raise
             else:
                 # The pinned SDK's goto_target waits for its daemon task to finish,
                 # but returns no measured-pose evidence. Keep its blocking call off
@@ -360,6 +401,100 @@ class ReachyPlaybackProvider:
                 self._active_operation = None
         return Completion(evidence)
 
+    @staticmethod
+    def _sdk_startup_targets() -> dict[str, Any]:
+        """Return the pinned SDK startup target for feedback verification."""
+        import numpy as np
+        from reachy_mini.reachy_mini import (
+            INIT_ANTENNAS_JOINT_POSITIONS,
+            INIT_HEAD_POSE,
+        )
+
+        return {
+            "head": np.asarray(INIT_HEAD_POSE, dtype=float),
+            "antennas": list(INIT_ANTENNAS_JOINT_POSITIONS),
+            "body_yaw": _SDK_STARTUP_BODY_YAW_RAD,
+        }
+
+    async def _wait_for_target_feedback(self, target: dict[str, Any]) -> str:
+        """Require measured head, antenna and body feedback to settle at target."""
+        import asyncio
+        import math
+        import time
+
+        import numpy as np
+
+        if self.state_reader is None:
+            raise RuntimeError("measured state reader is unavailable")
+        deadline = time.monotonic() + self.settle_timeout_s
+        stable_samples = 0
+        last_error: tuple[float, float, float, float] | None = None
+        while time.monotonic() < deadline:
+            head, antennas, state = await asyncio.gather(
+                asyncio.to_thread(self.robot.get_current_head_pose),
+                asyncio.to_thread(self.robot.get_present_antenna_joint_positions),
+                asyncio.to_thread(self.state_reader),
+            )
+            if time.monotonic() > deadline:
+                break
+            current_head = np.asarray(head, dtype=float)
+            current_antennas = np.asarray(antennas, dtype=float)
+            target_head = np.asarray(target["head"], dtype=float)
+            target_antennas = np.asarray(target["antennas"], dtype=float)
+            body_yaw = state.get("body_yaw") if isinstance(state, Mapping) else None
+            if (
+                not isinstance(state, Mapping)
+                or state.get("control_mode") != "enabled"
+                or current_head.shape != (4, 4)
+                or current_antennas.shape != (2,)
+                or isinstance(body_yaw, bool)
+                or not isinstance(body_yaw, (int, float))
+                or not math.isfinite(float(body_yaw))
+                or not np.isfinite(current_head).all()
+                or not np.isfinite(current_antennas).all()
+            ):
+                raise RuntimeError("Reachy measured neutral feedback is invalid")
+
+            relative_rotation = current_head[:3, :3].T @ target_head[:3, :3]
+            rotation_cos = (float(np.trace(relative_rotation)) - 1.0) / 2.0
+            position_error_m = float(np.linalg.norm(current_head[:3, 3] - target_head[:3, 3]))
+            rotation_error_rad = math.acos(max(-1.0, min(1.0, rotation_cos)))
+            antenna_error_rad = float(np.max(np.abs(current_antennas - target_antennas)))
+            body_yaw_error_rad = abs(float(body_yaw) - float(target["body_yaw"]))
+            last_error = (
+                position_error_m, rotation_error_rad,
+                antenna_error_rad, body_yaw_error_rad,
+            )
+            if (
+                position_error_m <= _NEUTRAL_POSITION_TOLERANCE_M
+                and rotation_error_rad <= _NEUTRAL_ROTATION_TOLERANCE_RAD
+                and antenna_error_rad <= _NEUTRAL_JOINT_TOLERANCE_RAD
+                and body_yaw_error_rad <= _NEUTRAL_JOINT_TOLERANCE_RAD
+            ):
+                stable_samples += 1
+                if stable_samples >= _NEUTRAL_SETTLE_STABLE_SAMPLES:
+                    return (
+                        "Measured Reachy feedback settled at requested target "
+                        f"({stable_samples} samples; head position error "
+                        f"{position_error_m:.4f} m, head rotation error "
+                        f"{rotation_error_rad:.4f} rad, antenna error "
+                        f"{antenna_error_rad:.4f} rad, body-yaw error "
+                        f"{body_yaw_error_rad:.4f} rad)"
+                    )
+            else:
+                stable_samples = 0
+            await asyncio.sleep(_NEUTRAL_SETTLE_SAMPLE_S)
+
+        if last_error is None:
+            raise RuntimeError("Reachy neutral feedback was not received")
+        raise RuntimeError(
+            "Reachy measured feedback did not settle at requested target "
+            f"within {self.settle_timeout_s:.2f} s "
+            f"(head position {last_error[0]:.4f} m, head rotation "
+            f"{last_error[1]:.4f} rad, antenna {last_error[2]:.4f} rad, "
+            f"body yaw {last_error[3]:.4f} rad)"
+        )
+
     def _wake_up_if_sleeping(self, force: bool = False) -> str:
         """Use the pinned SDK's sleep pose and wake-up choreography unchanged."""
         from reachy_mini.reachy_mini import SLEEP_HEAD_POSE
@@ -372,8 +507,7 @@ class ReachyPlaybackProvider:
             return "SDK wake-up skipped; current head pose is outside the SDK sleep-pose tolerance"
         self.robot.enable_motors()
         self.robot.wake_up()
-        self._capture_startup_neutral()
-        return "SDK wake-up sequence returned; present head and antenna positions captured as this session's neutral"
+        return "SDK wake-up sequence returned"
 
     def _capture_startup_neutral(self) -> None:
         """Capture measured SDK pose only after the operator-selected startup sequence."""
