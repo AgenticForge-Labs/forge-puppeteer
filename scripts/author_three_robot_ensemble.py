@@ -11,8 +11,6 @@ import argparse
 import json
 from pathlib import Path
 
-from forge_puppeteer.conversation_soarm import author_soarm_reference_programs
-
 
 def author_config(
     *,
@@ -32,6 +30,8 @@ def author_config(
         neutral = json.loads(soarm_neutral_file.read_text(encoding="utf-8"))
         if not isinstance(neutral, list):
             raise TypeError("SO-ARM neutral must be exactly five joint radians as a JSON list")
+        from forge_puppeteer.conversation_soarm import author_soarm_reference_programs
+
         programs = author_soarm_reference_programs(
             robot_id="so101", calibration_id="simulation", neutral_joints_rad=neutral
         )
