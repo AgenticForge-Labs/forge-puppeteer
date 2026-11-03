@@ -5,7 +5,7 @@ import math
 import pytest
 from pydantic import ValidationError
 
-from forge_puppeteer.speech_expression import SpeechEnvelopeHop, SpeechExpressionShaper
+from forge_puppeteer.speech_expression import SpeechEnvelopeHop, SpeechExpressionShaper, SpeechEnvelopeWindow
 
 
 def sample(sequence=0, intensity=0.8, active=True, stream_id="utterance-1"):
@@ -101,3 +101,38 @@ def test_duplicate_gap_or_wrong_stream_never_rearms_shaper():
     with pytest.raises(ValueError, match="identity"):
         shaper.render(SpeechEnvelopeHop.model_validate(sample(1, stream_id="other")))
     assert shaper.render(SpeechEnvelopeHop.model_validate(sample(1))).sequence == 1
+
+
+def test_room_envelope_window_is_preview_only_and_bounded():
+    window = SpeechEnvelopeWindow()
+    assert window.snapshot() == {
+        "available": False, "physical_motion_dispatched": False,
+    }
+    result = window.accept([sample(0), sample(1)], performer_ids=(
+        "reachy", "stackchan", "soarm101",
+    ))
+    assert result["frames_accepted"] == 2
+    assert result["physical_motion_dispatched"] is False
+    preview = window.snapshot()
+    assert preview["available"] is True
+    assert preview["last_sequence"] == 1
+    assert preview["performers"] == ["reachy", "soarm101", "stackchan"]
+    assert preview["timing_source"] == "generated_pcm"
+    assert preview["physical_motion_dispatched"] is False
+    window.clear()
+    assert window.snapshot()["available"] is False
+
+
+def test_bad_batch_never_partially_updates_speech_window():
+    window = SpeechEnvelopeWindow()
+    window.accept([sample(0)], performer_ids=("reachy",))
+    with pytest.raises(ValueError, match="gap"):
+        window.accept([sample(1), sample(3)], performer_ids=("reachy",))
+    assert window.snapshot()["last_sequence"] == 0
+    with pytest.raises(ValueError, match="one to eight"):
+        window.accept([sample(i) for i in range(9)], performer_ids=("reachy",))
+    with pytest.raises(ValidationError):
+        window.accept([sample(1), {**sample(2), "transcript": "private"}],
+                      performer_ids=("reachy",))
+    assert window.snapshot()["last_sequence"] == 0
+    assert window.accept([sample(1)], performer_ids=("reachy",))["last_sequence"] == 1
