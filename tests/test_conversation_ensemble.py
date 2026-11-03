@@ -87,6 +87,37 @@ def event(session, sequence, state, *, event_id=None, interrupted=False):
     )
 
 
+
+def test_status_discovers_only_authored_performer_actions():
+    reachy = PerformerBehaviors.author("reachy", {
+        **pack("reachy").behaviors,
+        "happy": once("fake_yes"),
+        "neutral": once("fake_yes"),
+    })
+    stackchan = PerformerBehaviors.author("stackchan", {
+        "idle": loop("fake_idle"),
+        "listening": loop("fake_listen"),
+        "yes": once("fake_yes"),
+    })
+    runtime = ExecutionRuntime(PerformanceStage(FakeClock()))
+    ensemble = ConversationEnsemble(runtime, [reachy, stackchan])
+    snapshot = ensemble.snapshot()
+    catalog = snapshot["performers"]
+    assert catalog["reachy"]["expressions"] == [
+        "happy", "neutral", "no", "yes",
+    ]
+    assert catalog["stackchan"]["expressions"] == ["yes"]
+    assert catalog["reachy"]["presence_behaviors"] == [
+        "idle", "listening", "speaking",
+    ]
+    assert catalog["stackchan"]["presence_behaviors"] == ["idle", "listening"]
+    assert catalog["reachy"]["behavior_revision"] == reachy.revision
+    assert catalog["stackchan"]["behavior_revision"] == stackchan.revision
+    assert snapshot["state"] == "disconnected"
+    assert "speaking" not in catalog["reachy"]["expressions"]
+
+
+
 def test_behavior_contracts_are_persona_free_pinned_and_bounded():
     one = pack("reachy")
     assert one.schema == "forge.behavior.v1"
