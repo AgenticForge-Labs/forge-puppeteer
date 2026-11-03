@@ -1,9 +1,9 @@
 # Reachy Mini expressive motion — hardware qualification plan
 
-**Status:** Candidate implementation on `agent/reachy-expressive-motion-v1`.
-This document is not evidence of hardware acceptance. Do not claim this motion
-style is released or safe until the branch is reviewed, locally validated and
-merged into `main`.
+**Status:** Software implementation merged into `main` via PR #16,
+commit `c83efcbbf470f9f72052d2090398f1092e6670dd`.
+This document is **not** evidence of physical qualification or safe motion;
+operator-reviewed hardware validation remains outstanding.
 
 ## Scope and architecture
 
