@@ -34,7 +34,7 @@ def test_native_mouth_preview_never_opens_hardware_or_moves_servos():
     first = preview.render(shaping.render(hop(0)))
     assert first is not None and first.operation == "face"
     assert set(first.parameters) == {"mouth"}
-    assert 0 <= first.parameters["mouth"]["size"] <= 42
+    assert 0 <= first.parameters["mouth"]["weight"] <= 75
     assert _step({"at_s": 0, "operation": first.operation, "parameters": first.parameters})
     assert preview.render(shaping.render(hop(1))) is None
     assert preview.render(shaping.render(hop(2))) is None
@@ -48,16 +48,16 @@ def test_inactive_transition_closes_mouth_without_waiting_for_update_interval():
     assert preview.render(shaper.render(hop(0))) is not None
     closing = preview.render(shaper.render(hop(1, intensity=0.0, active=False)))
     assert closing is not None
-    assert closing.parameters == {"mouth": {"size": 0}}
+    assert closing.parameters == {"mouth": {"weight": 0}}
 
 
 def test_unqualified_physical_parameters_are_rejected_while_rendering_is_inert():
     with pytest.raises(ValueError):
-        StackChanSpeechFaceProfile(max_mouth_size=101)
+        StackChanSpeechFaceProfile(max_mouth_weight=101)
     with pytest.raises(ValueError):
         StackChanSpeechFaceProfile(min_interval_ms=50)
     with pytest.raises(ValueError):
-        StackChanSpeechFaceProfile(max_mouth_size=True)
+        StackChanSpeechFaceProfile(max_mouth_weight=True)
     shaper = SpeechExpressionShaper(performer_id="stackchan", stream_id="tts-1")
     preview = StackChanSpeechFacePreview(stream_id="tts-1")
     frame = shaper.render(hop(0))
