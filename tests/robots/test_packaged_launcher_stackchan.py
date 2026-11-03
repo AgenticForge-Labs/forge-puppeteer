@@ -164,6 +164,26 @@ def test_read_only_stackchan_config_requires_no_motion_declaration(monkeypatch):
         ))
 
 
+def test_face_scale_requires_new_sdk_version_and_physical_authority(monkeypatch):
+    import importlib.metadata
+
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "0.3.0")
+    with pytest.raises(ValueError, match="0.4.0"):
+        StackChanSDKProvider(config(
+            allowed_tools=["device_info", "face_scale_update"],
+        ))
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "0.4.0")
+    with pytest.raises(ValueError, match="physical_authority"):
+        StackChanSDKProvider(config(
+            sdk_version="0.4.0", physical_authority=None,
+            allowed_tools=["device_info", "face_scale_update"],
+        ))
+    enabled = StackChanSDKProvider(config(
+        sdk_version="0.4.0", allowed_tools=["device_info", "face_scale_update"],
+    ))
+    assert enabled.grants == {"device_info", "face_scale_update"}
+
+
 def test_neohex_requires_explicit_known_tool_grant(monkeypatch):
     import importlib.metadata
 
