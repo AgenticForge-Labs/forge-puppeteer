@@ -76,6 +76,35 @@ forge-puppeteer-ensemble --config /absolute/path/to/operator-reviewed-ensemble.j
 No automatic Pollen Conversation App is launched. It must not
 control Reachy's motion concurrently with Puppeteer.
 
+### Reachy-only attended deployment
+
+For a session with only Reachy, use the same launcher with `schema_version: 2`
+and omit `stackchan` and `soarm101`. Supply the same `motion_authority`,
+`reachy`, `reachy_neutral_head`, `action_journal` and `ownership_db` fields as
+the three-performer configuration. The Reachy SDK identity, explicit motion
+grant, reviewed neutral transform and pinned recording catalog are still
+required. No other robot SDK session is started. This does not authorize or
+qualify physical motion; the operator must review each behavior separately.
+Optional `speaking_axis` (`yaw` or `tilt`), `speaking_amplitude_rad` and
+`listening_tilt_rad` select bounded motion; each amplitude is at most 0.07
+radians. Defaults preserve the existing behavior. Choosing a larger value or
+axis requires separate attended physical review; configuration is not proof of
+physical qualification.
+`listening_mode: "hold"` selects a no-command listening state instead of
+repeating a tilt. After the preceding transition finishes, it sends no motion
+commands while listening; it does not independently hold motors, establish
+physical settling, or bypass an unconfirmed-stop quarantine. The default is
+`"tilt"` for compatibility.
+An ordinary presence change allows an already-dispatched finite Reachy SDK
+segment up to 1.5 seconds to finish before switching patterns. Explicit
+interruption, disconnect, expiry and shutdown still use immediate STOP; the
+SDK cannot confirm physical STOP for an in-flight native head target, so an
+unconfirmed outcome quarantines Reachy until operator reconciliation.
+An admitted finite gesture runs to completion across ordinary voice-state
+changes and then resumes the latest presence. A real interruption,
+disconnection, expiry or shutdown still preempts it immediately and retains
+the existing unknown-outcome quarantine if STOP cannot be confirmed.
+
 ## SO-ARM101 supervised physical trial
 
 The default SO-ARM launch mode is SDK simulation. A physical trial

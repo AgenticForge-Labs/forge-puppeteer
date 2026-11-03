@@ -125,6 +125,39 @@ class EnsembleConfig(BaseModel):
         return self
 
 
+class ReachyOnlyEnsembleConfig(BaseModel):
+    """Explicit single-performer deployment; no other device is opened."""
+
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal[2]
+    motion_authority: Literal["I_AUTHORIZE_ENSEMBLE_ROBOT_MOTION"]
+    reachy: ServerConfig
+    reachy_neutral_head: str
+    action_journal: str
+    ownership_db: str
+    presence_ttl_s: float = Field(default=30, ge=1, le=3600)
+    stop_timeout_s: float = Field(default=5, ge=0.1, le=60)
+    speaking_axis: Literal["yaw", "tilt"] = "yaw"
+    speaking_amplitude_rad: float = Field(default=0.025, ge=0, le=0.07)
+    listening_tilt_rad: float = Field(default=0.02, ge=0, le=0.07)
+    listening_mode: Literal["tilt", "hold"] = "tilt"
+
+    @model_validator(mode="after")
+    def validate_reachy(self):
+        if self.reachy.backend != "reachy_sdk" or self.reachy.device != "reachy":
+            raise ValueError("Reachy native SDK provider required")
+        if self.reachy.restricted_actions:
+            raise ValueError("head expression requires Reachy's normal native SDK mode")
+        if not {"head_pose", "play_move", "device_stop"} <= set(self.reachy.allowed_tools):
+            raise ValueError("native Reachy expression requires head, playback and stop grants")
+        for value in (self.action_journal, self.ownership_db, self.reachy_neutral_head):
+            if not value or not Path(value).is_absolute():
+                raise ValueError("action history, ownership and Reachy neutral pose require absolute paths")
+        if Path(self.action_journal).resolve() == Path(self.ownership_db).resolve():
+            raise ValueError("action history and ownership paths must differ")
+        return self
+
+
 def soarm_native_binding(config: SOARMEnsembleConfig):
     """Build ONLY exact source-controlled reviewed programs and native policy."""
     from soarm101_motion.choreography import (
@@ -245,12 +278,40 @@ def build_ensemble(config: EnsembleConfig):
     return reachy, stackchan, arm, arm_pack, runtime, connected
 
 
-def load_config(path: str | Path) -> EnsembleConfig:
-    return EnsembleConfig.model_validate_json(Path(path).read_text(encoding="utf-8"))
+def load_config(path: str | Path) -> EnsembleConfig | ReachyOnlyEnsembleConfig:
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(data, dict) and type(data.get("schema_version")) is int and data["schema_version"] == 2:
+        return ReachyOnlyEnsembleConfig.model_validate(data)
+    return EnsembleConfig.model_validate(data)
 
 
 def serve(config_path: str | Path) -> None:
     config = load_config(config_path)
+    if isinstance(config, ReachyOnlyEnsembleConfig):
+        reachy = ReachySDKProvider(config.reachy)
+        async def resolve_reachy():
+            return await reachy_pack_from_catalog(
+                config.reachy.instance_id, reachy.catalog,
+                neutral_head=json.loads(Path(config.reachy_neutral_head).read_text()),
+                wobble_amplitude_rad=config.speaking_amplitude_rad,
+                speaking_axis=config.speaking_axis,
+                listening_tilt_rad=config.listening_tilt_rad,
+                listening_mode=config.listening_mode,
+            )
+        pack = anyio.run(resolve_reachy)
+        runtime = ExecutionRuntime(
+            PerformanceStage(), journal_path=config.action_journal,
+            ownership_path=config.ownership_db, stop_timeout=config.stop_timeout_s,
+        )
+        runtime.register(config.reachy.instance_id, reachy)
+        ensemble = ConversationEnsemble(
+            runtime, (pack,), presence_ttl_s=config.presence_ttl_s,
+            stop_timeout_s=config.stop_timeout_s,
+        )
+        create_ensemble_server(
+            runtime, ensemble, connected=reachy.connected, motion_enabled=True,
+        ).run(transport="stdio")
+        return
     # This is intentionally a deliberate, potentially physical operator action:
     # no local discovery, no automatic launch of the Conversation App.
     reachy, _stackchan, _arm, arm_pack, runtime, connected = build_ensemble(config)

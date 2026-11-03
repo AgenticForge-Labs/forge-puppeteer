@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from typing import Literal
 
 from .behavior_contract import BehaviorCue, BehaviorPattern, PerformerBehaviors
 
@@ -87,6 +88,9 @@ def reachy_conversation_pack(
     available_recordings: Sequence[str],
     breath_amplitude_m: float = 0.0,
     wobble_amplitude_rad: float = 0.025,
+    speaking_axis: Literal["yaw", "tilt"] = "yaw",
+    listening_tilt_rad: float = 0.02,
+    listening_mode: Literal["tilt", "hold"] = "tilt",
 ) -> PerformerBehaviors:
     """Author Reachy motion using its existing native SDK adapter operations.
 
@@ -103,6 +107,13 @@ def reachy_conversation_pack(
     if (not math.isfinite(wobble_amplitude_rad) or
             not 0 <= wobble_amplitude_rad <= _MAX_REACHY_WOBBLE_RAD):
         raise ValueError("Reachy talking wobble amplitude must be bounded and nonnegative")
+    if speaking_axis not in {"yaw", "tilt"}:
+        raise ValueError("Reachy speaking axis must be yaw or tilt")
+    if (not math.isfinite(listening_tilt_rad) or
+            not 0 <= listening_tilt_rad <= _MAX_REACHY_WOBBLE_RAD):
+        raise ValueError("Reachy listening tilt must be bounded and nonnegative")
+    if listening_mode not in {"tilt", "hold"}:
+        raise ValueError("Reachy listening mode must be tilt or hold")
     if not recording_revision.startswith(_SHA_PREFIX) or len(recording_revision) != 71:
         raise ValueError("Reachy recordings require a SHA-256 catalog revision")
     if any(ch not in "0123456789abcdef" for ch in recording_revision[7:]):
@@ -141,13 +152,13 @@ def reachy_conversation_pack(
             )
             for index in range(20)
         ), period_s=10.0),
-        "listening": _pattern((
-            head_cue(0.0, pitch=0.02),
-            head_cue(1.4, pitch=0.015),
+        "listening": BehaviorPattern(source="procedural", mode="hold", cues=()) if listening_mode == "hold" else _pattern((
+            head_cue(0.0, pitch=listening_tilt_rad),
+            head_cue(1.4, pitch=listening_tilt_rad * 0.75),
         ), period_s=3.0),
         "speaking": _pattern((
-            head_cue(0.0, roll=wobble_amplitude_rad),
-            head_cue(0.55, roll=-wobble_amplitude_rad),
+            head_cue(0.0, **{("pitch" if speaking_axis == "tilt" else "roll"): wobble_amplitude_rad}),
+            head_cue(0.55, **{("pitch" if speaking_axis == "tilt" else "roll"): -wobble_amplitude_rad}),
             head_cue(1.1),
         ), period_s=1.5),
         "neutral": _pattern((head_cue(0.0),)),
@@ -174,6 +185,9 @@ async def reachy_pack_from_catalog(
     neutral_head: Sequence[Sequence[float]],
     breath_amplitude_m: float = 0.0,
     wobble_amplitude_rad: float = 0.025,
+    speaking_axis: Literal["yaw", "tilt"] = "yaw",
+    listening_tilt_rad: float = 0.02,
+    listening_mode: Literal["tilt", "hold"] = "tilt",
 ) -> PerformerBehaviors:
     """Resolve available recordings only from an already-verified ReachyCatalog.
 
@@ -195,6 +209,9 @@ async def reachy_pack_from_catalog(
         available_recordings=[item.id[7:] for item in assets],
         breath_amplitude_m=breath_amplitude_m,
         wobble_amplitude_rad=wobble_amplitude_rad,
+        speaking_axis=speaking_axis,
+        listening_tilt_rad=listening_tilt_rad,
+        listening_mode=listening_mode,
     )
 
 

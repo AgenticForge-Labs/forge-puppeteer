@@ -56,9 +56,15 @@ async def test_real_stdio_mcp_one_room_controls_three_mock_devices():
         })
         assert not conflict.is_error
         assert conflict.structured_content["outcome"] == "denied"
+        interrupted = await session.call_tool("ensemble_presence", {
+            "session_id": "4g-room", "event_id": "interrupt", "sequence": 1,
+            "state": "listening", "interrupted": True,
+        })
+        assert not interrupted.is_error
+        assert interrupted.structured_content["outcome"] == "accepted"
         disconnected = await session.call_tool("ensemble_presence", {
-            "session_id": "4g-room", "event_id": "e1",
-            "sequence": 1, "state": "disconnected",
+            "session_id": "4g-room", "event_id": "e2",
+            "sequence": 2, "state": "disconnected",
         })
         assert disconnected.structured_content["state"] == "disconnected"
 

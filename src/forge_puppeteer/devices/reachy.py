@@ -135,6 +135,11 @@ class ReachyPlaybackProvider:
     returned. The SDK exposes no measured settling/completion signal.
     """
 
+    # Normal presence changes may let an already-dispatched, finite SDK
+    # segment finish before switching loops. Explicit interruption, disconnect,
+    # expiry and shutdown still bypass this grace and use the STOP path.
+    finish_before_interrupt_s = 1.5
+
     def __init__(
         self,
         catalog: ReachyCatalog,
