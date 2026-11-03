@@ -72,7 +72,7 @@ class StackChanSpeechFacePreview:
             return None
 
         weight = (
-            int(round(self.profile.max_mouth_weight * channels.mouth))
+            round(self.profile.max_mouth_weight * channels.mouth)
             if channels.active else 0
         )
         self._last_emitted_ms = channels.offset_ms
