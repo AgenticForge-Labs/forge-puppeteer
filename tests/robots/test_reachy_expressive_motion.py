@@ -70,6 +70,18 @@ def test_expressive_pack_rejects_unreviewed_or_out_of_bounds_targets(changes):
         expressive_pack(**changes)
 
 
+def test_expressive_movement_envelope_is_explicitly_larger_than_classic():
+    strong = expressive_pack(wobble_amplitude_rad=0.09)
+    assert strong.behaviors["speaking"].cues[0].operation == "pose_and_antennas"
+    with pytest.raises(ValueError, match="talking wobble"):
+        expressive_pack(wobble_amplitude_rad=0.13)
+    with pytest.raises(ValueError, match="talking wobble"):
+        reachy_conversation_pack(
+            "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+            available_recordings=("yes1", "no1"), wobble_amplitude_rad=0.09,
+        )
+
+
 def test_classic_pack_preserves_single_axis_and_nonmoving_default_breathing():
     pack = reachy_conversation_pack(
         "reachy", neutral_head=NEUTRAL, recording_revision=REV,
