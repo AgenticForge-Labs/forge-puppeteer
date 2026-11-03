@@ -232,3 +232,20 @@ authenticated room-owned MCP ingestion path, capability-specific Reachy /
 StackChan / SO-ARM101 renderers, Platform OTel, and separate EMEET/physical
 acceptance. Do not confuse these merged-or-proposed software components with
 live speech-reactive physical movement.
+
+
+### Expanded StackChan expression vocabulary
+
+StackChan's existing native eye/mouth and yaw/pitch controls now provide
+additional **Puppeteer-authored semantic behaviors**: concerned, excited,
+surprised and sad, alongside listening, speaking, idle, yes, no, acknowledge,
+neutral, happy, curious and confused. These are automatically discoverable as
+finite expressions in the same per-performer `ensemble_state` catalog, not
+new hardware methods or an LLM's unvalidated direct-servo vocabulary.
+
+The proposed facial appearance is software-authored and validated against
+native SDK parameter formats, but requires human visual review on the display.
+The standard face remains independent of its **optional 1.7×** display-only
+firmware setting, currently being added in stackchan-control-sdk PR #7.
+No expression automatically requests a face scale change, additional lighting
+capability or arm/head motion grant.
