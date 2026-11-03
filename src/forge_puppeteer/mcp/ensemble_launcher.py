@@ -140,6 +140,7 @@ class ReachyOnlyEnsembleConfig(BaseModel):
     speaking_axis: Literal["yaw", "tilt"] = "yaw"
     speaking_amplitude_rad: float = Field(default=0.025, ge=0, le=0.07)
     listening_tilt_rad: float = Field(default=0.02, ge=0, le=0.07)
+    listening_mode: Literal["tilt", "hold"] = "tilt"
 
     @model_validator(mode="after")
     def validate_reachy(self):
@@ -295,6 +296,7 @@ def serve(config_path: str | Path) -> None:
                 wobble_amplitude_rad=config.speaking_amplitude_rad,
                 speaking_axis=config.speaking_axis,
                 listening_tilt_rad=config.listening_tilt_rad,
+                listening_mode=config.listening_mode,
             )
         pack = anyio.run(resolve_reachy)
         runtime = ExecutionRuntime(

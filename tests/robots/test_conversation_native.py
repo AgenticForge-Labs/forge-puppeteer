@@ -78,6 +78,15 @@ def test_reachy_operator_can_select_bounded_tilt_speaking_and_listening():
             )
 
 
+def test_reachy_listening_hold_has_no_motion_cues():
+    pack = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1", "no1"), listening_mode="hold",
+    )
+    assert pack.behaviors["listening"].mode == "hold"
+    assert pack.behaviors["listening"].cues == ()
+
+
 @pytest.mark.parametrize("bad", [-1, 0.01, float("nan"), float("inf")])
 def test_reachy_rejects_unqualified_amplitude(bad):
     with pytest.raises(ValueError):

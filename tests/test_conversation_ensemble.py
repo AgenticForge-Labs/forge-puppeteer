@@ -175,6 +175,44 @@ def test_explicit_interruption_still_stops_inflight_gesture():
     anyio.run(run)
 
 
+def test_listening_hold_sends_no_motion_and_resumes_on_speaking():
+    async def run():
+        sdk = FakeSDK()
+        runtime = ExecutionRuntime(PerformanceStage())
+        runtime.register("reachy", sdk)
+        base = pack("reachy").behaviors
+        behaviors = {**base, "listening": BehaviorPattern(
+            source="procedural", mode="hold", cues=(),
+        )}
+        ensemble = ConversationEnsemble(runtime, [PerformerBehaviors.author("reachy", behaviors)])
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "speaking"))
+            await anyio.sleep(0.03)
+            await ensemble.observe(event("room", 1, "listening"))
+            await anyio.sleep(0.03)
+            before = list(sdk.calls)
+            assert ensemble.snapshot()["performers"]["reachy"]["evidence"] == "no_motion_command_dispatched"
+            await anyio.sleep(0.25)
+            assert sdk.calls == before
+            await ensemble.observe(event("room", 2, "speaking"))
+            await anyio.sleep(0.03)
+            assert len(sdk.calls) > len(before)
+            assert sdk.calls[-1] == "fake_talk"
+    anyio.run(run)
+
+
+def test_hold_is_only_allowed_for_cueless_listening():
+    hold = BehaviorPattern(source="procedural", mode="hold", cues=())
+    with pytest.raises(ValueError):
+        PerformerBehaviors.author("reachy", {"speaking": hold})
+    with pytest.raises(ValueError):
+        BehaviorPattern(source="procedural", mode="hold", cues=(BehaviorCue(at_s=0, operation="x"),))
+    with pytest.raises(ValueError):
+        BehaviorPattern(source="recorded", mode="hold", cues=())
+    with pytest.raises(ValueError):
+        BehaviorPattern(source="procedural", mode="loop", cues=(), period_s=1)
+
+
 def test_single_conversation_animates_three_performers_and_yes_no_resumes():
     async def run():
         providers = {name: FakeSDK() for name in ("reachy", "stackchan", "soarm101")}

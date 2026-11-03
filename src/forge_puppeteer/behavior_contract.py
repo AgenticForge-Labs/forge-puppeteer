@@ -18,7 +18,7 @@ from .robot_contracts import ContractModel
 BEHAVIOR_SCHEMA = "forge.behavior.v1"
 Presence = Literal["idle", "listening", "speaking", "disconnected"]
 TimingSource = Literal["agent_state", "playback", "manual"]
-Mode = Literal["once", "loop"]
+Mode = Literal["once", "loop", "hold"]
 Source = Literal["procedural", "recorded", "sequence"]
 
 
@@ -51,13 +51,19 @@ class BehaviorPattern(ContractModel):
 
     source: Source
     mode: Mode
-    cues: tuple[BehaviorCue, ...] = Field(min_length=1, max_length=64)
+    cues: tuple[BehaviorCue, ...] = Field(max_length=64)
     period_s: float | None = Field(default=None, ge=0.2, le=120)
     max_cycles: int = Field(default=360, ge=1, le=3600)
     max_duration_s: float = Field(default=3600, gt=0, le=3600)
 
     @model_validator(mode="after")
     def validate_pattern(self):
+        if self.mode == "hold":
+            if self.source != "procedural" or self.cues or self.period_s is not None:
+                raise ValueError("hold must be procedural with no cues or period")
+            return self
+        if not self.cues:
+            raise ValueError("movement patterns require at least one cue")
         offsets = [cue.at_s for cue in self.cues]
         if offsets != sorted(offsets) or len(offsets) != len(set(offsets)):
             raise ValueError("behavior cue offsets must be strictly increasing")
@@ -111,8 +117,12 @@ class PerformerBehaviors(ContractModel):
             raise ValueError("invalid semantic behavior name")
         for name in ("idle", "listening", "speaking"):
             pattern = self.behaviors.get(name)
-            if pattern is not None and pattern.mode != "loop":
-                raise ValueError(f"{name} must be an interruptible loop")
+            allowed = {"loop", "hold"} if name == "listening" else {"loop"}
+            if pattern is not None and pattern.mode not in allowed:
+                raise ValueError(f"{name} must be an interruptible loop or supported hold")
+        if any(name != "listening" and pattern.mode == "hold"
+               for name, pattern in self.behaviors.items()):
+            raise ValueError("hold mode is supported only for listening")
         for name in ("yes", "no", "acknowledge"):
             pattern = self.behaviors.get(name)
             if pattern is not None and pattern.mode != "once":

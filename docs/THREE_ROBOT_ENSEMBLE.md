@@ -90,6 +90,11 @@ Optional `speaking_axis` (`yaw` or `tilt`), `speaking_amplitude_rad` and
 radians. Defaults preserve the existing behavior. Choosing a larger value or
 axis requires separate attended physical review; configuration is not proof of
 physical qualification.
+`listening_mode: "hold"` selects a no-command listening state instead of
+repeating a tilt. After the preceding transition finishes, it sends no motion
+commands while listening; it does not independently hold motors, establish
+physical settling, or bypass an unconfirmed-stop quarantine. The default is
+`"tilt"` for compatibility.
 An ordinary presence change allows an already-dispatched finite Reachy SDK
 segment up to 1.5 seconds to finish before switching patterns. Explicit
 interruption, disconnect, expiry and shutdown still use immediate STOP; the

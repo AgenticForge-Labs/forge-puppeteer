@@ -19,6 +19,12 @@ Puppeteer remains usable standalone through its Python and MCP interfaces: it mu
 
 Named gestures such as `yes` and `no` are finite one-shots. `idle`, `listening` and `speaking` are interruptible background loops. Missing device mappings are not guessed or substituted.
 
+Listening can alternatively use an explicit cue-free `hold` pattern: after
+the preceding transition completes, the coordinator sends no movement
+commands for that presence. This is not a motor HOLD, proof of physical
+settling, or an override for an unconfirmed stop. Idle and speaking remain
+bounded interruptible loops.
+
 The initial allowed sources and the Python models describe intent *above* the SDK. A behavior may contain parameters appropriate for a selected native provider, but only the existing SDK provider may validate and execute those parameters. No motor bus, camera, audio player or separate robot controller is introduced here.
 
 ## Coordinator lifecycle

@@ -329,6 +329,13 @@ class ConversationEnsemble:
         self, name: str, behavior: str, pattern: BehaviorPattern,
         slot: _Slot, action_id: str
     ):
+        if pattern.mode == "hold":
+            # The preceding transition has already finished or followed the
+            # mandatory stop/quarantine path. This is no motor command and
+            # provides no independent evidence of physical settling.
+            slot.status = "holding"
+            slot.evidence = "no_motion_command_dispatched"
+            return
         start = anyio.current_time()
         cycles = pattern.max_cycles if pattern.mode == "loop" else 1
         for cycle in range(cycles):
