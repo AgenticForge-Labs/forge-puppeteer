@@ -174,3 +174,30 @@ optional capability until the native SDK/firmware change is accepted.
 
 These new authored performances are software-only until their actual appearance
 and motion are observed and approved on a connected StackChan.
+
+
+### Source-grounded stock modifier behavior
+
+The pinned upstream `m5stack/StackChan` revision
+`b72b3ede38b32d54f0b6ba51c62cfcef2ec3ae1e` contains
+`modifiers/speaking.h`, `blink.h`, `idle_expression.h` and
+`idle_motion.h`. The stock AI.AGENT app starts the Xiaozhi service;
+it is not a host-facing catalog of named semantic emotions. Its speaking
+modifier animates **mouth weight** rather than size, optionally adding
+randomized head motions. Blink uses eye weight (closed weight 25) and
+idle expression changes eye position, mouth position and rotation.
+
+Puppeteer now includes deterministic, bounded native face-only
+`blink`, `glance_left`, `glance_right` cues alongside the other
+semantically named expression patterns. Its default existing speaking
+loop still uses mouth size for backward compatibility. An operator may
+explicitly choose `stackchan_speaking_mode: "native_weight"` in the
+three-robot ensemble configuration. That chooses deterministic mouth
+weight values at bounded cadence using only the existing SDK
+`avatar.update` operation; it does **not** start the firmware's random
+SpeakingModifier or another motion process. Eye baseline/appearance and
+physical rendering must be attended-reviewed.
+
+The optional audio-responsive `StackChanSpeechFacePreview` likewise
+uses normalized mouth intensity to propose native mouth **weight**
+updates, not a duplicate speaking engine. It remains preview-only.
