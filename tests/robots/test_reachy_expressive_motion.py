@@ -120,3 +120,8 @@ async def test_expressive_motion_uses_single_sdk_goto_for_head_and_antennas():
     with pytest.raises(PermissionError, match="restricted"):
         await denied.validate(request)
     assert not await denied.permitted("pose_and_antennas")
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
