@@ -97,7 +97,7 @@ def test_status_discovers_only_authored_performer_actions():
         **pack("reachy").behaviors,
         "happy": once("fake_yes"),
         "neutral": once("fake_yes"),
-    })
+    }, neutral_behavior="neutral")
     stackchan = PerformerBehaviors.author("stackchan", {
         "idle": loop("fake_idle"),
         "listening": loop("fake_listen"),
@@ -108,7 +108,7 @@ def test_status_discovers_only_authored_performer_actions():
     snapshot = ensemble.snapshot()
     catalog = snapshot["performers"]
     assert catalog["reachy"]["expressions"] == [
-        "happy", "neutral", "no", "yes",
+        "happy", "no", "yes",
     ]
     assert catalog["stackchan"]["expressions"] == ["yes"]
     assert catalog["reachy"]["presence_behaviors"] == [
@@ -188,6 +188,41 @@ def test_normal_voice_transition_does_not_cancel_finite_gesture():
     anyio.run(run)
 
 
+def test_presence_motion_returns_to_authored_neutral_before_next_presence():
+    async def run():
+        speaking_started = anyio.Event()
+
+        class RecordingSDK(FakeSDK):
+            async def execute(self, request):
+                self.calls.append(request.operation)
+                if request.operation == "fake_talk":
+                    speaking_started.set()
+                return Completion("fake SDK completed")
+
+        sdk = RecordingSDK()
+        runtime = ExecutionRuntime(PerformanceStage())
+        runtime.register("reachy", sdk)
+        behaviors = dict(pack("reachy").behaviors)
+        behaviors["neutral"] = once("fake_neutral")
+        authored = PerformerBehaviors.author(
+            "reachy", behaviors, neutral_behavior="neutral",
+        )
+        ensemble = ConversationEnsemble(runtime, [authored])
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "listening"))
+            while "fake_listen" not in sdk.calls:
+                await anyio.sleep(0.001)
+            await ensemble.observe(event("room", 1, "speaking"))
+            await speaking_started.wait()
+            last_listen = max(i for i, operation in enumerate(sdk.calls) if operation == "fake_listen")
+            neutral_index = sdk.calls.index("fake_neutral")
+            talk_index = sdk.calls.index("fake_talk")
+            assert last_listen < neutral_index < talk_index
+            await ensemble.observe(event("room", 2, "disconnected"))
+
+    anyio.run(run)
+
+
 def test_expression_uses_authored_neutral_transition_before_resuming_presence():
     async def run():
         sdk = FakeSDK()
@@ -206,12 +241,16 @@ def test_expression_uses_authored_neutral_transition_before_resuming_presence():
             assert result["outcome"] == "accepted"
             await anyio.sleep(0.15)
             assert sdk.calls.count("fake_no") == 1
-            assert sdk.calls.count("fake_neutral") == 1
-            assert sdk.calls.index("fake_no") < sdk.calls.index("fake_neutral")
-            assert sdk.calls.index("fake_neutral") < max(
+            assert sdk.calls.count("fake_neutral") == 2
+            first_neutral = sdk.calls.index("fake_neutral")
+            no_index = sdk.calls.index("fake_no")
+            second_neutral = sdk.calls.index("fake_neutral", first_neutral + 1)
+            assert sdk.calls.index("fake_listen") < first_neutral < no_index < second_neutral
+            assert second_neutral < max(
                 i for i, operation in enumerate(sdk.calls) if operation == "fake_listen"
             )
             assert runtime.lookup("no-return:reachy:0:0").state.value == "completed"
+            assert runtime.lookup("no-return-pre-neutral:reachy:0:0").state.value == "completed"
             assert runtime.lookup("no-return-neutral:reachy:0:0").state.value == "completed"
             await ensemble.observe(event("room", 1, "disconnected"))
             assert sdk.stop_calls == 0
@@ -241,8 +280,12 @@ def test_multiple_performers_use_their_own_authored_neutral_behavior():
                 "no", action_id="both-no", performer_ids=("reachy", "stackchan"),
             )
             await anyio.sleep(0.15)
-            assert providers["reachy"].calls.index("fake_no") < providers["reachy"].calls.index("fake_head_neutral")
-            assert providers["stackchan"].calls.index("fake_no") < providers["stackchan"].calls.index("fake_face_neutral")
+            assert providers["reachy"].calls.count("fake_head_neutral") == 2
+            assert providers["stackchan"].calls.count("fake_face_neutral") == 2
+            reachy_no = providers["reachy"].calls.index("fake_no")
+            stackchan_no = providers["stackchan"].calls.index("fake_no")
+            assert providers["reachy"].calls.index("fake_head_neutral", reachy_no + 1) > reachy_no
+            assert providers["stackchan"].calls.index("fake_face_neutral", stackchan_no + 1) > stackchan_no
             assert "fake_face_neutral" not in providers["reachy"].calls
             assert "fake_head_neutral" not in providers["stackchan"].calls
             await ensemble.observe(event("room", 1, "disconnected"))
@@ -281,6 +324,9 @@ def test_startup_behavior_runs_once_before_latest_presence_and_is_not_an_express
         async with runtime.run(), ensemble.run():
             await ensemble.observe(event("room", 0, "listening"))
             await startup_started.wait()
+            expression = await ensemble.express("yes", action_id="during-startup")
+            assert expression["outcome"] == "denied"
+            assert expression["reason"] == "startup_in_progress"
             result = await ensemble.observe(event("room", 1, "speaking"))
             assert result["performers"]["reachy"]["startup_pending"] is False
             assert sdk.stop_calls == 0
@@ -399,6 +445,9 @@ def test_unconfirmed_interruption_does_not_rearm_neutral_or_presence():
         runtime = ExecutionRuntime(PerformanceStage())
         runtime.register("reachy", sdk)
         behaviors = dict(pack("reachy").behaviors)
+        behaviors["listening"] = BehaviorPattern(
+            source="procedural", mode="hold", cues=(),
+        )
         behaviors["neutral"] = once("fake_neutral")
         authored = PerformerBehaviors.author(
             "reachy", behaviors, neutral_behavior="neutral",

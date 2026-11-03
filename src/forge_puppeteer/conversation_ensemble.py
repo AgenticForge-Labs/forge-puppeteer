@@ -36,6 +36,7 @@ class _Slot:
     pending: bool = False
     action_done: anyio.Event = field(default_factory=anyio.Event)
     action_count: int = 0
+    pre_neutral: bool = False
 
 
 class ConversationEnsemble:
@@ -136,6 +137,7 @@ class ConversationEnsemble:
                         behavior for behavior, pattern in self.packs[name].behaviors.items()
                         if pattern.mode == "once"
                         and behavior not in {"idle", "listening", "speaking", "disconnected"}
+                        and behavior != self.packs[name].neutral_behavior
                     ),
                     "presence_behaviors": sorted(
                         behavior for behavior in ("idle", "listening", "speaking")
@@ -250,11 +252,13 @@ class ConversationEnsemble:
                 return {"outcome": "denied", "reason": "performer_not_owned", **self.snapshot()}
             if any(expression not in self.packs[n].behaviors for n in names):
                 return {"outcome": "unsupported", "reason": "unmapped_expression", **self.snapshot()}
+            if any(self._slots.get(n) and self._slots[n].behavior == "startup" for n in names):
+                return {"outcome": "denied", "reason": "startup_in_progress", **self.snapshot()}
             if any(self._slots.get(n) and self._slots[n].expression_active for n in names):
                 return {"outcome": "denied", "reason": "expression_in_progress", **self.snapshot()}
             if any(self.packs[n].behaviors[expression].mode != "once" for n in names):
                 return {"outcome": "denied", "reason": "expression_must_be_finite", **self.snapshot()}
-            await self._stop_slots(names, graceful=True)
+            settle_after_stop = await self._stop_slots(names, graceful=True)
             if any(n in self._blocked for n in names):
                 return {"outcome": "denied", "reason": "unconfirmed_prior_stop", **self.snapshot()}
             self._gesture_ids.add(action_id)
@@ -262,7 +266,11 @@ class ConversationEnsemble:
             if len(self._gesture_order) > 256:
                 self._gesture_ids.discard(self._gesture_order.popleft())
             for name in names:
-                self._spawn(name, expression, action_id, resume=True)
+                self._spawn(
+                    name, expression, action_id, resume=True,
+                    pre_neutral=(name in settle_after_stop
+                                 and self.packs[name].neutral_behavior is not None),
+                )
             return {"outcome": "accepted", **self.snapshot()}
 
     def _acquire_owner(self, name: str) -> bool:
@@ -290,7 +298,10 @@ class ConversationEnsemble:
                 continue
             self._owned.remove(name)
 
-    def _spawn(self, name: str, behavior: str, action_id: str, *, resume: bool = False):
+    def _spawn(
+        self, name: str, behavior: str, action_id: str, *,
+        resume: bool = False, pre_neutral: bool = False,
+    ):
         if name in self._blocked or name not in self._owned or self._session is None:
             return
         pattern = (
@@ -300,13 +311,20 @@ class ConversationEnsemble:
         if pattern is None:
             return  # Missing device behavior is unsupported, never substituted.
         scope = anyio.CancelScope()
-        slot = _Slot(scope=scope, behavior=behavior, expression_active=resume)
+        slot = _Slot(
+            scope=scope, behavior=behavior, expression_active=resume,
+            pre_neutral=pre_neutral,
+        )
         self._slots[name] = slot
         self._tasks.start_soon(self._play, name, behavior, pattern, slot, action_id, resume)
 
     async def _stop_slots(self, names: tuple[str, ...], *, graceful: bool = False):
         active = [(n, self._slots.pop(n)) for n in names if n in self._slots]
         settle_after_stop: set[str] = set()
+        had_motion = {
+            name: slot.pending or slot.action_count > 0
+            for name, slot in active
+        }
         # On ordinary semantic transitions, an opt-in SDK can complete its
         # already-admitted finite native segment before we cancel the *loop*.
         # This must be time-bounded: a stuck SDK action still takes the
@@ -328,9 +346,7 @@ class ConversationEnsemble:
                 await slot.done.wait()
             if deadline.cancel_called or slot.status == "blocked":
                 self._blocked.add(name)
-            elif (slot.expression_active
-                    and slot.behavior != "startup"
-                    and slot.behavior != self.packs[name].neutral_behavior):
+            elif had_motion[name]:
                 settle_after_stop.add(name)
         return settle_after_stop
 
@@ -340,8 +356,21 @@ class ConversationEnsemble:
     ):
         with slot.scope:
             try:
-                await self._execute_pattern(name, behavior, pattern, slot, action_id)
                 performer = self.packs[name]
+                if slot.pre_neutral and performer.neutral_behavior is not None:
+                    neutral_behavior = performer.neutral_behavior
+                    slot.status = "starting"
+                    slot.evidence = "returning_to_neutral_before_next_behavior"
+                    await self._execute_pattern(
+                        name, neutral_behavior,
+                        performer.behaviors[neutral_behavior], slot,
+                        f"{action_id}-pre-neutral",
+                    )
+                    if slot.status != "completed":
+                        return
+                slot.status = "starting"
+                slot.evidence = "executing_behavior_sequence"
+                await self._execute_pattern(name, behavior, pattern, slot, action_id)
                 neutral_behavior = performer.neutral_behavior
                 if (
                     slot.status == "completed"
@@ -412,6 +441,7 @@ class ConversationEnsemble:
         self, name: str, behavior: str, pattern: BehaviorPattern,
         slot: _Slot, action_id: str
     ):
+        slot.behavior = behavior
         if pattern.mode == "hold":
             # The preceding transition has already finished or followed the
             # mandatory stop/quarantine path. This is no motor command and

@@ -65,8 +65,11 @@ in the performer's behavior pack and requires
 `reachy_startup_behavior: "wake_up"` plus the explicit `wake_up` grant.
 Puppeteer's shared conversation
 state machine runs each finite expression, runs that performer's neutral
-behavior, then resumes the latest semantic presence state. The neutral step
-has its own journal action and action ID under the same exclusive performer
+behavior, then resumes the latest semantic presence state. Motion-bearing
+presence changes and confirmed interruptions also pass through that authored
+neutral. A manual expression first returns active motion to neutral and then
+uses the same expression/neutral/resume sequence. The neutral step has its own
+journal action and action ID under the same exclusive performer
 owner. Reachy's adapter maps the fixed `return_to_neutral` operation to the
 head and antenna feedback sampled after startup plus the SDK startup body-yaw
 target; callers cannot provide raw targets. Other performers can author their

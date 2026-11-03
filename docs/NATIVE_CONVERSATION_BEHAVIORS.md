@@ -61,9 +61,12 @@ recording_revision=..., available_recordings=...)` creates:
   operator-reviewed 4x4 neutral head transform when breathing is enabled.
   Classic idle with zero breathing amplitude can be a no-motion hold when the
   performer pack declares a neutral behavior that the shared state machine
-  runs after finite expressions. Without that reset, the neutral-target loop
-  remains the recovery path. After a confirmed interrupt stop, the state
-  machine also runs the authored neutral behavior before resuming presence;
+  runs after finite expressions, confirmed interruptions, and transitions
+  between motion-bearing presence behaviors. A manual expression first settles
+  active motion through neutral, runs the requested expression, then returns
+  through neutral before resuming the latest presence state. Without that reset,
+  the neutral-target loop remains the recovery path. After a confirmed interrupt
+  stop, the state machine also runs the authored neutral behavior before resuming presence;
   an unknown stop keeps the performer quarantined. Expressive idle can still
   sway antennas.
   Native SDK interpolation controls individual targets. Default vertical
@@ -76,8 +79,10 @@ recording_revision=..., available_recordings=...)` creates:
 - `yes`, `no` and `acknowledge`: exact pinned SDK recordings
   `yes1` and `no1`, with associated audio disabled.
 - `neutral`: explicit, performer-authored return behavior. A pack can nominate
-  it as `neutral_behavior`; the shared state machine then waits for it after
-  each finite expression before resuming the latest presence state.
+  it as `neutral_behavior`; the shared state machine sequences motion-bearing
+  behavior changes, manual expressions, and confirmed interruptions through
+  it before resuming the latest state. It is system transition behavior and is
+  excluded from the manual expression catalog.
 - Optional `happy`, `curious`, `confused` and `excited` recordings,
   only when those exact recording names are present in the verified catalog.
 
