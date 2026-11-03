@@ -15,6 +15,7 @@ from soarm101_motion.constants import ARM_JOINTS, HOME_JOINTS
 from forge_puppeteer.conversation_soarm import author_soarm_reference_programs
 from forge_puppeteer.mcp.ensemble_launcher import (
     EnsembleConfig,
+    ReachyOnlyEnsembleConfig,
     SOARMEnsembleConfig,
     build_ensemble,
     soarm_native_binding,
@@ -80,6 +81,59 @@ def test_native_launcher_config_binds_three_distinct_approved_programs(tmp_path)
     assert pack.behaviors["yes"].cues[0].asset_revision == programs["yes"].revision
     assert "4g" not in pack.model_dump_json().lower()
     assert EnsembleConfig.model_validate_json(json.dumps(data)).reachy.host == "127.0.0.1"
+
+
+def test_reachy_only_configuration_needs_explicit_identity_and_authority(tmp_path):
+    data = config_data(tmp_path)
+    data.pop("stackchan")
+    data.pop("soarm101")
+    data["schema_version"] = 2
+    assert ReachyOnlyEnsembleConfig.model_validate(data).reachy.instance_id == "reachy"
+    for change in ({"motion_authority": "REVIEW_REQUIRED"},
+                   {"reachy_neutral_head": "relative.json"},
+                   {"stackchan": {}},
+                   {"action_journal": data["ownership_db"]}):
+        with pytest.raises(ValueError):
+            ReachyOnlyEnsembleConfig.model_validate(data | change)
+
+
+def test_reachy_only_launcher_starts_without_other_device_providers(tmp_path, monkeypatch):
+    import forge_puppeteer.mcp.ensemble_launcher as launcher
+    from forge_puppeteer.behavior_contract import (
+        BehaviorCue,
+        BehaviorPattern,
+        PerformerBehaviors,
+    )
+
+    data = config_data(tmp_path)
+    data.pop("stackchan")
+    data.pop("soarm101")
+    data["schema_version"] = 2
+    (tmp_path / "reachy-neutral.json").write_text(json.dumps([[1, 0, 0, 0]] * 4))
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(data))
+    pack = PerformerBehaviors.author("reachy", {
+        name: BehaviorPattern(source="procedural", mode="loop", period_s=1, cues=(
+            BehaviorCue(at_s=0, operation="head_pose"),
+        )) for name in ("idle", "listening", "speaking")
+    })
+    seen = []
+    class FakeReachy:
+        def __init__(self, config):
+            self.catalog = object()
+        async def connected(self):
+            raise AssertionError("test must not connect hardware")
+    async def fake_pack(*args, **kwargs):
+        return pack
+    class FakeServer:
+        def run(self, *, transport):
+            seen.append(transport)
+    monkeypatch.setattr(launcher, "ReachySDKProvider", FakeReachy)
+    monkeypatch.setattr(launcher, "StackChanSDKProvider", lambda *_: pytest.fail("unexpected StackChan"))
+    monkeypatch.setattr(launcher, "reachy_pack_from_catalog", fake_pack)
+    monkeypatch.setattr(launcher, "create_ensemble_server", lambda *a, **k: FakeServer())
+    launcher.serve(config_path)
+    assert seen == ["stdio"]
 
 
 @pytest.mark.parametrize("bad", [

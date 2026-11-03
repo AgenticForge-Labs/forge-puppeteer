@@ -76,6 +76,16 @@ forge-puppeteer-ensemble --config /absolute/path/to/operator-reviewed-ensemble.j
 No automatic Pollen Conversation App is launched. It must not
 control Reachy's motion concurrently with Puppeteer.
 
+### Reachy-only attended deployment
+
+For a session with only Reachy, use the same launcher with `schema_version: 2`
+and omit `stackchan` and `soarm101`. Supply the same `motion_authority`,
+`reachy`, `reachy_neutral_head`, `action_journal` and `ownership_db` fields as
+the three-performer configuration. The Reachy SDK identity, explicit motion
+grant, reviewed neutral transform and pinned recording catalog are still
+required. No other robot SDK session is started. This does not authorize or
+qualify physical motion; the operator must review each behavior separately.
+
 ## SO-ARM101 supervised physical trial
 
 The default SO-ARM launch mode is SDK simulation. A physical trial
