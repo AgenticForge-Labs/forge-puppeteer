@@ -147,7 +147,9 @@ def test_reachy_only_launcher_starts_without_other_device_providers(tmp_path, mo
             self.catalog = object()
         async def connected(self):
             raise AssertionError("test must not connect hardware")
+    resolved_kwargs = []
     async def fake_pack(*args, **kwargs):
+        resolved_kwargs.append(kwargs)
         return pack
     class FakeServer:
         def run(self, *, transport):
@@ -158,6 +160,18 @@ def test_reachy_only_launcher_starts_without_other_device_providers(tmp_path, mo
     monkeypatch.setattr(launcher, "create_ensemble_server", lambda *a, **k: FakeServer())
     launcher.serve(config_path)
     assert seen == ["stdio"]
+    assert resolved_kwargs[0]["expression_style"] == "classic"
+    assert resolved_kwargs[0]["breath_amplitude_m"] == 0.0
+
+    data["reachy_expression_style"] = "expressive"
+    data["reachy_neutral_antennas_rad"] = [-0.17, 0.17]
+    data["reachy"]["allowed_tools"].append("pose_and_antennas")
+    config_path.write_text(json.dumps(data))
+    launcher.serve(config_path)
+    assert seen == ["stdio", "stdio"]
+    assert resolved_kwargs[1]["expression_style"] == "expressive"
+    assert resolved_kwargs[1]["neutral_antennas_rad"] == (-0.17, 0.17)
+    assert resolved_kwargs[1]["wobble_amplitude_rad"] == 0.05
 
 
 @pytest.mark.parametrize("bad", [
