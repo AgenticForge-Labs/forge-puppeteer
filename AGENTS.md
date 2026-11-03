@@ -183,3 +183,20 @@ Never commit credentials, Wi-Fi/device secrets, private network addresses, token
   sound timing and STOP drift checks remain for the final Codex handoff.
 - Only the *caller* defines current 4G persona and tool grants; Puppeteer
   remains useful independently of Conversationalist or Platform.
+
+
+## Shared speech-reactive expression contract
+
+- The source-controlled speech_expression.py is a pure, device-independent
+  renderer for generated-PCM envelope features from Conversationalist. All
+  channels are unitless; they never grant motor or speaker access.
+- Do not put PCM, audio sinks, microphone access, personas or LLM providers in
+  Puppeteer. Do not copy the upstream Reachy HeadWobbler motor scheduler or
+  bypass the existing ExecutionRuntime and SDK authority.
+- An unconfirmed STOP or unsensed neutral/sleep state blocks any new physical
+  reactive movement; never automatically retry or rearm.
+- Per-performer mapping remains separately operator-authored and
+  SDK-preflighted. SO-ARM101 may only use exact approved finite choreography,
+  never an arbitrary per-hop joint stream.
+- See docs/SPEECH_DRIVEN_EMBODIMENT.md for pending live transport,
+  integration, timing calibration and physical qualification.
