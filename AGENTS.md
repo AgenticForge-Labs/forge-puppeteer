@@ -222,3 +222,11 @@ Never commit credentials, Wi-Fi/device secrets, private network addresses, token
   MUST NOT be treated as a live face animation driver. It emits SDK-valid
   native mouth cue shapes with bounded rate and release semantics; only the
   existing ExecutionRuntime may dispatch after a separate operator grant.
+
+
+- Source-grounded StackChan behaviors may use pinned upstream modifier
+  semantics (mouth WEIGHT for speaking, eye weight for blink, paired eye
+  x/y for glance) but may not run a second firmware modifier controller.
+  The optional `stackchan_speaking_mode: native_weight` is operator-only,
+  while `legacy_size` remains the default. Never silently switch styles
+  based on model interpretation or infer measured face appearance.
