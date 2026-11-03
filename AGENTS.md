@@ -139,10 +139,11 @@ Never commit credentials, Wi-Fi/device secrets, private network addresses, token
   Conversationalist as an optional caller; Puppeteer remains standalone.
 
 
-## Candidate Reachy expressive pack (unmerged, awaiting hardware acceptance)
+## Reachy expressive pack (merged PR #16, awaiting hardware acceptance)
 
-- `agent/reachy-expressive-motion-v1` is a proposed opt-in expressive style.
-  Do not present it as merged or physically qualified.
+- PR #16 merged the opt-in expressive style into `main` at
+  `c83efcbbf470f9f72052d2090398f1092e6670dd`. Do not present
+  its physical motion envelope as qualified until attended testing.
 - `classic` is the unchanged default; yes/no use the existing SHA-pinned
   `play_move` path and must not regress.
 - `pose_and_antennas` composes both bounded targets in one pinned SDK
