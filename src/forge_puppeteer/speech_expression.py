@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import time
 from dataclasses import dataclass
 from typing import Literal
 
@@ -137,3 +138,82 @@ class SpeechExpressionShaper:
             z=channels["z"],
             antenna=channels["antenna"],
         )
+
+
+class SpeechEnvelopeWindow:
+    """Content-free, bounded, process-local preview for a room-owned MCP child.
+
+    This accepts *observations*, not action requests. It has no robot link,
+    command dispatcher, timer thread or STOP/rearm authority. A caller may
+    read its unitless preview, but it cannot actuate a motor.
+    """
+
+    def __init__(self) -> None:
+        self.clear()
+
+    def clear(self) -> None:
+        self._stream_id: str | None = None
+        self._next_sequence = 0
+        self._shapers: dict[str, SpeechExpressionShaper] = {}
+        self._latest: dict[str, ExpressionChannels] = {}
+        self._latest_hop: SpeechEnvelopeHop | None = None
+        self._received_at_ns: int | None = None
+
+    def accept(
+        self, frames: list[dict[str, object]], *, performer_ids: tuple[str, ...],
+    ) -> dict[str, object]:
+        """Validate a whole batch before updating the observed stream state."""
+        if not isinstance(frames, list) or not 1 <= len(frames) <= 8:
+            raise ValueError("speech batch must contain one to eight hops")
+        if not performer_ids or len(set(performer_ids)) != len(performer_ids):
+            raise ValueError("unique bound performer IDs required")
+        parsed = [SpeechEnvelopeHop.model_validate(frame) for frame in frames]
+        new_stream = parsed[0].stream_id != self._stream_id
+        expected = 0 if new_stream else self._next_sequence
+        stream_id = parsed[0].stream_id
+        for hop in parsed:
+            if hop.stream_id != stream_id or hop.sequence != expected:
+                raise ValueError("speech batch contains a gap or mixed stream")
+            expected += 1
+        # The source may switch at an explicit stream boundary, but cannot
+        # implicitly reset the sequence of an existing stream.
+        if new_stream:
+            shapers = {
+                name: SpeechExpressionShaper(performer_id=name, stream_id=stream_id)
+                for name in performer_ids
+            }
+        else:
+            if set(self._shapers) != set(performer_ids):
+                raise ValueError("performer bindings changed during speech stream")
+            shapers = self._shapers
+        latest = {}
+        for hop in parsed:
+            latest = {name: shaper.render(hop) for name, shaper in shapers.items()}
+        self._shapers = shapers
+        self._latest = latest
+        self._stream_id = stream_id
+        self._next_sequence = expected
+        self._latest_hop = parsed[-1]
+        self._received_at_ns = time.monotonic_ns()
+        return {
+            "frames_accepted": len(parsed),
+            "stream_id": stream_id,
+            "last_sequence": expected - 1,
+            "timing_source": "generated_pcm",
+            "physical_motion_dispatched": False,
+        }
+
+    def snapshot(self) -> dict[str, object]:
+        if self._latest_hop is None or self._received_at_ns is None:
+            return {"available": False, "physical_motion_dispatched": False}
+        return {
+            "available": True,
+            "stream_id": self._stream_id,
+            "last_sequence": self._latest_hop.sequence,
+            "intensity": self._latest_hop.intensity,
+            "active": self._latest_hop.active,
+            "timing_source": "generated_pcm",
+            "stale": time.monotonic_ns() - self._received_at_ns > 750_000_000,
+            "performers": sorted(self._latest),
+            "physical_motion_dispatched": False,
+        }
