@@ -85,6 +85,11 @@ the three-performer configuration. The Reachy SDK identity, explicit motion
 grant, reviewed neutral transform and pinned recording catalog are still
 required. No other robot SDK session is started. This does not authorize or
 qualify physical motion; the operator must review each behavior separately.
+Optional `speaking_axis` (`yaw` or `tilt`), `speaking_amplitude_rad` and
+`listening_tilt_rad` select bounded motion; each amplitude is at most 0.07
+radians. Defaults preserve the existing behavior. Choosing a larger value or
+axis requires separate attended physical review; configuration is not proof of
+physical qualification.
 
 ## SO-ARM101 supervised physical trial
 

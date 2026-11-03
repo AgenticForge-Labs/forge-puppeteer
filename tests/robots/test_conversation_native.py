@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -52,6 +53,29 @@ def test_reachy_native_pack_uses_exact_sdk_ops_and_asset_pins():
             if cue.operation == "play_move":
                 assert cue.asset_revision == REV
                 assert cue.parameters == {"sound": False}
+
+
+def test_reachy_operator_can_select_bounded_tilt_speaking_and_listening():
+    amplitude = math.radians(3)
+    pack = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1", "no1"), speaking_axis="tilt",
+        wobble_amplitude_rad=amplitude, listening_tilt_rad=amplitude,
+    )
+    speaking = pack.behaviors["speaking"].cues
+    listening = pack.behaviors["listening"].cues
+    assert speaking[0].parameters["pose"][2][1] == pytest.approx(math.sin(amplitude))
+    assert speaking[1].parameters["pose"][2][1] == pytest.approx(-math.sin(amplitude))
+    assert speaking[2].parameters["pose"] == NEUTRAL
+    assert listening[0].parameters["pose"][2][1] == pytest.approx(math.sin(amplitude))
+    assert listening[1].parameters["pose"][2][1] == pytest.approx(math.sin(amplitude * 0.75))
+    for changes in ({"speaking_axis": "invalid"}, {"listening_tilt_rad": 0.08},
+                    {"wobble_amplitude_rad": 0.08}):
+        with pytest.raises(ValueError):
+            reachy_conversation_pack(
+                "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+                available_recordings=("yes1", "no1"), **changes,
+            )
 
 
 @pytest.mark.parametrize("bad", [-1, 0.01, float("nan"), float("inf")])

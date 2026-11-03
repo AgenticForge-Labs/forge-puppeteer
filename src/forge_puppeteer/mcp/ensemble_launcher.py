@@ -137,6 +137,9 @@ class ReachyOnlyEnsembleConfig(BaseModel):
     ownership_db: str
     presence_ttl_s: float = Field(default=30, ge=1, le=3600)
     stop_timeout_s: float = Field(default=5, ge=0.1, le=60)
+    speaking_axis: Literal["yaw", "tilt"] = "yaw"
+    speaking_amplitude_rad: float = Field(default=0.025, ge=0, le=0.07)
+    listening_tilt_rad: float = Field(default=0.02, ge=0, le=0.07)
 
     @model_validator(mode="after")
     def validate_reachy(self):
@@ -289,6 +292,9 @@ def serve(config_path: str | Path) -> None:
             return await reachy_pack_from_catalog(
                 config.reachy.instance_id, reachy.catalog,
                 neutral_head=json.loads(Path(config.reachy_neutral_head).read_text()),
+                wobble_amplitude_rad=config.speaking_amplitude_rad,
+                speaking_axis=config.speaking_axis,
+                listening_tilt_rad=config.listening_tilt_rad,
             )
         pack = anyio.run(resolve_reachy)
         runtime = ExecutionRuntime(
