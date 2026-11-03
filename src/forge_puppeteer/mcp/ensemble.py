@@ -124,7 +124,7 @@ def create_ensemble_server(
                 frames, performer_ids=tuple(ensemble.packs),
             )
             return {"outcome": "observed", **result}
-        except Exception:
+        except (TypeError, ValueError):
             raise ToolError("invalid_or_stale_speech_envelope") from None
 
     return server
