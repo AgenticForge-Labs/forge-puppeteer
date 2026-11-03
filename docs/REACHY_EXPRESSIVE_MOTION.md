@@ -40,7 +40,7 @@ configuration (do **not** replace its identity, authorization or SDK fields):
 {
   "reachy_expression_style": "expressive",
   "reachy_neutral_antennas_rad": [-0.17, 0.17],
-  "reachy_expressive_amplitude_rad": 0.05,
+  "reachy_expressive_amplitude_rad": 0.09,
   "reachy_antenna_sway_rad": 0.18,
   "reachy_breath_amplitude_m": 0.0
 }
