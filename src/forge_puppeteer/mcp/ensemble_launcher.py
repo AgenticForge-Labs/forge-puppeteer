@@ -133,9 +133,9 @@ class EnsembleConfig(BaseModel):
     def require_explicit_performer_selection(cls, value):
         # v1 is the existing three-robot contract. v3 explicitly selects
         # Reachy + StackChan and refuses even a nullable SO-ARM record.
-        if isinstance(value, dict):
-            if value.get("schema_version") == 3 and "soarm101" in value:
-                raise ValueError("two-robot ensemble cannot declare SO-ARM101")
+        if (isinstance(value, dict) and value.get("schema_version") == 3
+                and "soarm101" in value):
+            raise ValueError("two-robot ensemble cannot declare SO-ARM101")
         return value
 
     @model_validator(mode="after")
