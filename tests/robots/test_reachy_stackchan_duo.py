@@ -10,7 +10,6 @@ import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import anyio
 import pytest
 
 from forge_puppeteer.mcp import ensemble_launcher as launcher
