@@ -249,3 +249,10 @@ The standard face remains independent of its **optional 1.7×** display-only
 firmware setting, currently being added in stackchan-control-sdk PR #7.
 No expression automatically requests a face scale change, additional lighting
 capability or arm/head motion grant.
+
+
+StackChan also has an **inactive, pure speech-face preview renderer** mapping
+the same normalized outgoing audio features to bounded mouth-size candidates
+at a rate-limited cadence. It is not connected to physical USB dispatch.
+The existing action journal, SDK capability checks, and STOP admission remain
+mandatory before any future live face animation.
