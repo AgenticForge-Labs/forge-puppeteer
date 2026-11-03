@@ -105,6 +105,24 @@ changes and then resumes the latest presence. A real interruption,
 disconnection, expiry or shutdown still preempts it immediately and retains
 the existing unknown-outcome quarantine if STOP cannot be confirmed.
 
+## Experimental Reachy expressive profile (not yet merged)
+
+The branch `agent/reachy-expressive-motion-v1` proposes
+`reachy_expression_style: "expressive"` for both launcher schemas.
+It requires a reviewed `reachy_neutral_antennas_rad` pair and an explicit
+Reachy `pose_and_antennas` operation grant. Its lead head-motion
+amplitude defaults to 0.05 radians, antenna sway to 0.18 radians, and
+vertical breathing displacement remains 0 m until separately qualified.
+The existing conservative `classic` style stays the default and the
+official pinned recorded yes/no are unchanged.
+
+The compound head + antennas cue enters the same ExecutionRuntime, and
+the same pinned SDK `goto_target`, as existing motion. It does not
+create a new motor scheduler, grant raw LLM servo commands, or independently
+confirm physical STOP. **This branch is awaiting physical acceptance; the
+feature is not merged into `main`**. See
+[Reachy expressive motion](REACHY_EXPRESSIVE_MOTION.md).
+
 ## SO-ARM101 supervised physical trial
 
 The default SO-ARM launch mode is SDK simulation. A physical trial
