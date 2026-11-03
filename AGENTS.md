@@ -203,3 +203,16 @@ Never commit credentials, Wi-Fi/device secrets, private network addresses, token
   never an arbitrary per-hop joint stream.
 - See docs/SPEECH_DRIVEN_EMBODIMENT.md for pending live transport,
   integration, timing calibration and physical qualification.
+
+
+## StackChan native expressions versus face presentation scale
+
+- Shared semantic emotion/gesture names belong in Puppeteer's authored behavior
+  packs; StackChan SDK owns native eye/mouth/head/light values and validation.
+  New finite StackChan faces may be authored with existing operations, but are
+  not an SDK-provided built-in emotion engine.
+- A separate optional SDK/firmware `display.face_scale` 100%/170% setting
+  changes only the LVGL face panel, not geometry, motor ranges, expressions or
+  calibration. Never silently enlarge faces from dialogue or model output.
+- Do not require a firmware update to run existing native expressions, and do
+  not infer physical approval of software-authored expressions from CI.
