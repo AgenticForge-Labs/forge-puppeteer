@@ -182,7 +182,9 @@ async def test_reachy_normal_transition_waits_for_inflight_native_head_move(tmp_
     class SlowReachy(FakeReachySDK):
         def goto_target(self, **kwargs):
             self.commands.append(("head", kwargs))
-            time.sleep(0.15)
+            # Beyond the bounded confirmed-stop wait: a stuck segment must
+            # still quarantine instead of being assumed stopped.
+            time.sleep(1.5)
 
     catalog = make_catalog(tmp_path)
     robot = SlowReachy()
@@ -201,14 +203,15 @@ async def test_reachy_normal_transition_waits_for_inflight_native_head_move(tmp_
         assert not any(c[0] == "cancel_unconfirmed" for c in robot.commands)
 
 
-async def test_reachy_explicit_interruption_still_quarantines_unconfirmed_stop(tmp_path):
-    class SlowReachy(FakeReachySDK):
+async def test_reachy_interruption_lets_a_finite_segment_finish(tmp_path):
+    """A barge-in must not quarantine Reachy for an ordinary short segment."""
+    class FastReachy(FakeReachySDK):
         def goto_target(self, **kwargs):
             self.commands.append(("head", kwargs))
             time.sleep(0.15)
 
     catalog = make_catalog(tmp_path)
-    provider = ReachyPlaybackProvider(catalog, SlowReachy(), motion_authorized=True)
+    provider = ReachyPlaybackProvider(catalog, FastReachy(), motion_authorized=True)
     pack = await reachy_pack_from_catalog("reachy", catalog, neutral_head=NEUTRAL)
     runtime = ExecutionRuntime(PerformanceStage())
     runtime.register("reachy", provider)
@@ -218,4 +221,29 @@ async def test_reachy_explicit_interruption_still_quarantines_unconfirmed_stop(t
         await anyio.sleep(0.04)
         event = presence(1, "listening").model_copy(update={"interrupted": True})
         result = await ensemble.observe(event)
-        assert result["performers"]["reachy"]["status"] == "blocked"
+        assert result["performers"]["reachy"]["status"] != "blocked"
+        assert not provider._quarantined
+
+
+async def test_reachy_segment_that_outlives_the_grace_still_quarantines(tmp_path):
+    """A segment that never returns must not be assumed stopped."""
+    class StuckReachy(FakeReachySDK):
+        def goto_target(self, **kwargs):
+            self.commands.append(("head", kwargs))
+            time.sleep(4.0)
+
+    catalog = make_catalog(tmp_path)
+    provider = ReachyPlaybackProvider(catalog, StuckReachy(), motion_authorized=True)
+    pack = await reachy_pack_from_catalog("reachy", catalog, neutral_head=NEUTRAL)
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("reachy", provider)
+    ensemble = ConversationEnsemble(runtime, [pack])
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(presence(0, "speaking"))
+        await anyio.sleep(0.04)
+        event = presence(1, "listening").model_copy(update={"interrupted": True})
+        await ensemble.observe(event)
+        deadline = anyio.current_time() + 8.0
+        while not provider._quarantined:
+            assert anyio.current_time() < deadline, "stuck segment did not quarantine"
+            await anyio.sleep(0.05)

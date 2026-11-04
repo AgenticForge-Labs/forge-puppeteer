@@ -372,6 +372,20 @@ class ConversationEnsemble:
                 if isinstance(grace, (int, float)) and 0 < grace <= 5.0:
                     with anyio.move_on_after(grace):
                         await slot.action_done.wait()
+        else:
+            # A provider whose SDK cannot cancel a finite segment (no stop
+            # acknowledgment exists) may opt in to a short bounded finish on
+            # interruption. Cancelling such a segment always yields an
+            # unconfirmed stop, which quarantines the performer for the rest
+            # of the room. Providers that can stop keep the urgent path.
+            for name, slot in active:
+                if not slot.pending:
+                    continue
+                provider = self.runtime._provider(name)
+                grace = getattr(provider, "finish_on_interrupt_s", 0.0)
+                if isinstance(grace, (int, float)) and 0 < grace <= 5.0:
+                    with anyio.move_on_after(grace):
+                        await slot.action_done.wait()
         for _, slot in active:
             slot.scope.cancel()
         for name, slot in active:

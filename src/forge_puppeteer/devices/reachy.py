@@ -146,6 +146,10 @@ class ReachyPlaybackProvider:
     # acknowledged playback loop in ``stop`` instead. The ensemble caps this
     # grace at 5 s.
     finish_before_interrupt_s = 3.0
+    # The pinned SDK exposes no cancel for goto_target, so a barge-in that
+    # cancels an in-flight segment can only produce an unconfirmed stop and a
+    # session-wide quarantine. A finite segment is sub-second, so let it finish.
+    finish_on_interrupt_s = 3.0
 
     def __init__(
         self,
