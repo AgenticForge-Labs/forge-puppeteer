@@ -1,5 +1,43 @@
 # Forge Puppeteer
 
+## Organizational boundary and next acceptance — November 2026
+
+**Puppeteer is core to AgenticForge physical embodiment** and remains an
+independently usable robot performance system. It owns semantic expressions,
+performer coordination, stage/capture primitives and their deterministic
+execution records; each device SDK/broker owns calibration, authority/leases,
+STOP, physical limits and hardware safety. It does **not** own company goals,
+Business Engine role allocation, LiveKit room/session state, or the company
+MCP gateway.
+
+Conversationalist/4G supplies voice and authenticated presentation requests;
+Business Engine proposes company work; Platform owns WorkItems, approvals,
+ContextForge federation, business events and evidence. A work event is
+**never automatically a motion command**. An expression may be dispatched
+only after the specific performer and capability are authorized and ready.
+Do not add a second company agent hierarchy or parallel general MCP gateway
+inside Puppeteer.
+
+**Local testing priority:** preserve existing simulated/standalone behavior;
+qualify the real Reachy connection, gestures, sensed neutral/settled state,
+interruption and room-close lifecycle **attended**, preserving
+unknown-outcome quarantine. Keep [neutral-return PR #20](https://github.com/AgenticForge-Labs/forge-puppeteer/pull/20)
+unmerged until its hardware clearance and acceptance conditions are met.
+The OBSBOT helper startup timeout was merged via PR #28; passing mock CI
+does not prove a physical camera is ready. Validate the three-robot ensemble
+only after the individual device authorities are accepted.
+
+RoboConduit is the intended larger **remote robotics session/transport**
+authority direction, but its integration is deferred; it is not a replacement
+for Puppeteeer's semantic performance or the native SDKs' safety. RC-M3 is
+an optional expressive-audio experiment, not another robot controller.
+
+- [Company control and delegation](https://github.com/AgenticForge-Labs/agenticforge-platform/blob/main/docs/company-control-and-delegation.md)
+- [Company activation roadmap](https://github.com/AgenticForge-Labs/agenticforge-platform/blob/main/docs/company-activation-roadmap-2026-11.md)
+
+**Status:** no new device permission, motion qualification or production
+gateway federation is granted by this documentation.
+
 ### Give any AI agent a physical presence.
 
 **One language for expression. Many robots. Live conversations and scripted performances.**
