@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 from forge_puppeteer.conversation_native import (
-    stackchan_recorded_assets,
     reachy_conversation_pack,
     stackchan_conversation_pack,
+    stackchan_recorded_assets,
 )
 from forge_puppeteer.reachy_sync import (
     OFFICIAL_REACHY_DATASET,
