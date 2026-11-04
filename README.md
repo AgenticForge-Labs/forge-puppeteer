@@ -55,6 +55,13 @@ The server communicates over **stdio**; it must be launched by an MCP client rat
 
 Real hardware requires operator-reviewed configuration, device-specific permissions and appropriate safety checks. Software tests and simulations do not qualify physical motion or establish that a device has safely stopped. Start with the [robot deployment and safety guide](docs/ROBOT_DEPLOYMENT.md) and the relevant [ensemble guide](docs/THREE_ROBOT_ENSEMBLE.md).
 
+## Robot SDKs
+
+Puppeteer coordinates semantic performance through device-specific controls. These SDKs are also useful independently:
+
+- [SO-ARM101 Motion SDK](https://github.com/AgenticForge-Labs/soarm101-motion-sdk) — calibration, motion, teaching, GUI, simulation and the arm's trusted control boundary.
+- [StackChan Control SDK](https://github.com/AgenticForge-Labs/stackchan-control-sdk) — native head, face and lighting controls, protocols and companion firmware.
+
 ## Explore
 
 - [Current status](STATUS.md) and [development plan](PLAN.md)
