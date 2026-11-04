@@ -446,6 +446,23 @@ async def reachy_pack_from_catalog(
     )
 
 
+def stackchan_recorded_assets(
+    directory: str | object,
+) -> tuple[tuple[str, str, str], ...]:
+    """Map the operator's native asset pack to (name, asset_id, revision).
+
+    The SDK validates every file and pins a SHA-256 revision; a malformed or
+    duplicate pack fails here rather than at playback.
+    """
+    from pathlib import Path
+
+    from stackchan_control.assets import list_assets
+
+    return tuple(
+        (asset.id, asset.id, asset.revision) for asset in list_assets(Path(directory))
+    )
+
+
 def stackchan_conversation_pack(
     performer_id: str,
     *,
@@ -455,11 +472,16 @@ def stackchan_conversation_pack(
     pitch_amplitude: int = 45,
     head_speed: int = 180,
     speaking_mode: Literal["legacy_size", "native_weight"] = "legacy_size",
+    recorded_assets: Sequence[tuple[str, str, str]] = (),
 ) -> PerformerBehaviors:
     """Native SDK face/head/eyes patterns; units are tenths of a degree.
 
     Defaults are authoring examples, not physical calibration or authorization.
     Provider.validate still checks the connected firmware's reported bounds.
+
+    ``recorded_assets`` names validated native assets already loaded from the
+    operator's pack. Each becomes a finite expression that replays the pinned
+    SDK asset revision, mirroring Reachy's recorded emotions.
     """
     from .stackchan_validation import validate_stackchan_center
 
@@ -585,4 +607,12 @@ def stackchan_conversation_pack(
             _cue(0.44, "face", mouth={"weight": 55}),
             _cue(0.66, "face", mouth={"weight": 0}),
         ), period_s=0.9)
+    for name, asset_id, revision in recorded_assets:
+        # BehaviorCue carries asset identity as fields, not parameters.
+        behaviors[name] = _pattern(
+            (BehaviorCue(at_s=0.0, operation="play_asset",
+                         parameters={}, asset_id=asset_id,
+                         asset_revision=revision),),
+            source="recorded",
+        )
     return PerformerBehaviors.author(performer_id, behaviors)

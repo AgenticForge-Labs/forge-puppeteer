@@ -23,7 +23,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..behavior_contract import BehaviorCue
 from ..conversation_ensemble import ConversationEnsemble
-from ..conversation_native import reachy_pack_from_catalog, stackchan_conversation_pack
+from ..conversation_native import (
+    reachy_pack_from_catalog,
+    stackchan_conversation_pack,
+    stackchan_recorded_assets,
+)
 from ..conversation_soarm import EXPECTED, soarm_conversation_pack
 from ..execution import ExecutionRuntime
 from ..runtime import PerformanceStage
@@ -464,8 +468,14 @@ def serve(config_path: str | Path) -> None:
         )
     # NOTE: Reachy neutral is operator supplied, no fabricated physical zero.
     reachy_pack = anyio.run(resolve)
+    recorded = ()
+    if config.stackchan.asset_root:
+        # Operator-selected native asset pack; the SDK validates and pins it.
+        recorded = stackchan_recorded_assets(config.stackchan.asset_root)
     stack_pack = stackchan_conversation_pack(
-        config.stackchan.instance_id, speaking_mode=config.stackchan_speaking_mode,
+        config.stackchan.instance_id,
+        speaking_mode=config.stackchan_speaking_mode,
+        recorded_assets=recorded,
     )
     packs = (reachy_pack, stack_pack) if arm_pack is None else (
         reachy_pack, stack_pack, arm_pack,

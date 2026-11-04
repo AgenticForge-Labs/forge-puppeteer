@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from forge_puppeteer.conversation_native import (
+    stackchan_recorded_assets,
     reachy_conversation_pack,
     stackchan_conversation_pack,
 )
@@ -319,3 +320,25 @@ def test_recorded_replay_envelope_rejects_fast_head_shakes():
     # A small, slow gesture stays inside the envelope.
     slow = recorded_move_envelope(Move(2.0, lambda t: math.radians(8) * math.sin(t)))
     assert recorded_move_is_safe(slow)
+
+
+def test_stackchan_recorded_assets_become_pinned_expressions(tmp_path):
+    import json
+
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "wave.json").write_text(json.dumps({
+        "schema_version": 1,
+        "id": "wave",
+        "kind": "pose",
+        "steps": [{"at_s": 0, "operation": "head",
+                   "parameters": {"yaw": {"angle": 200, "speed": 200}}}],
+    }))
+    recorded = stackchan_recorded_assets(assets)
+    assert [name for name, _id, _rev in recorded] == ["wave"]
+    pack = stackchan_conversation_pack("stackchan", recorded_assets=recorded)
+    pattern = pack.behaviors["wave"]
+    assert pattern.source == "recorded" and pattern.mode == "once"
+    cue = pattern.cues[0]
+    assert cue.operation == "play_asset" and cue.asset_id == "wave"
+    assert cue.asset_revision.startswith("sha256:")
