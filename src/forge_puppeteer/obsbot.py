@@ -18,9 +18,6 @@ from .cameras import (
 
 
 class ObsbotSdkPTZController:
-    STARTUP_TIMEOUT_SECONDS = 10.0
-    MAX_STARTUP_LINE_BYTES = 4096
-
     """Camera-native PTZ using OBSBOT's SDK rather than V4L2 gimbal controls.
 
     The native helper owns SDK initialization and remains alive while the
@@ -29,6 +26,9 @@ class ObsbotSdkPTZController:
     position for this controller session; hardware readback should be added
     before relative nudging is enabled.
     """
+
+    STARTUP_TIMEOUT_SECONDS = 10.0
+    MAX_STARTUP_LINE_BYTES = 4096
 
     def __init__(
         self,
