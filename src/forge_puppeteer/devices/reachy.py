@@ -168,6 +168,7 @@ class ReachyPlaybackProvider:
         self._active_operation: str | None = None
         self._quarantined = False
         self._playback: asyncio.Future[None] | None = None
+        self._native: asyncio.Future[None] | None = None
 
     async def describe(self) -> DeviceDescriptor:
         from ..robot_contracts import ControlDescriptor
@@ -329,7 +330,12 @@ class ReachyPlaybackProvider:
                     self._playback = None
                 evidence = "SDK playback loop returned; physical settling unmeasured"
             elif request.operation == "wake_up":
-                evidence = await asyncio.to_thread(self._wake_up_if_sleeping)
+                wake = asyncio.create_task(asyncio.to_thread(self._wake_up_if_sleeping))
+                self._native = wake
+                try:
+                    evidence = await asyncio.shield(wake)
+                finally:
+                    self._native = None
             else:
                 # The pinned SDK's goto_target waits for its daemon task to finish,
                 # but returns no measured-pose evidence. Keep its blocking call off
@@ -337,6 +343,7 @@ class ReachyPlaybackProvider:
 
                 args = self._native_sdk_args(request)
                 sdk_task = asyncio.create_task(asyncio.to_thread(self.robot.goto_target, **args))
+                self._native = sdk_task
                 try:
                     await asyncio.shield(sdk_task)
                 except asyncio.CancelledError:
@@ -345,6 +352,8 @@ class ReachyPlaybackProvider:
                     # cannot imply the physical task stopped.
                     await sdk_task
                     raise
+                finally:
+                    self._native = None
                 evidence = "SDK goto task completed; physical pose not independently measured"
         finally:
             with self._lock:
@@ -468,6 +477,25 @@ class ReachyPlaybackProvider:
                 True,
                 "SDK playback loop returned after cancellation request; physical settling unmeasured",
             )
+        native = self._native
+        if active_operation == "wake_up" and native is not None:
+            # The pinned SDK exposes no cancel for goto_target. The daemon task
+            # returning is the only available acknowledgment that no further
+            # targets are being streamed for this segment, so a bounded wait is
+            # a confirmed command stop with an unmeasured physical pose.
+            try:
+                await asyncio.wait_for(asyncio.shield(native), 5.0)
+            except TimeoutError:
+                with self._lock:
+                    self._quarantined = True
+                return StopResult(False, "SDK goto task did not return; provider quarantined")
+            except Exception as exc:  # noqa: BLE001 - failure is not a confirmed stop
+                with self._lock:
+                    self._quarantined = True
+                return StopResult(False, f"SDK goto task failed during stop; provider quarantined: {type(exc).__name__}")
+            with self._lock:
+                self._quarantined = False
+            return StopResult(True, "SDK goto task returned; physical pose unmeasured")
         with self._lock:
             self._quarantined = True
         if active_operation in (None, "play_move") and hasattr(self.robot, "cancel_move"):
