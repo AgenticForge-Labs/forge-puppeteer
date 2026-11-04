@@ -1,5 +1,25 @@
 # Agent / Codex instructions
 
+## Company authority and current qualification focus (2026-11-04)
+
+Puppeteer owns the semantic/Stage physical performance interface but is **not**
+the company Executive or operational WorkItem store. Conversationalist owns
+voice; Business Engine owns role/work intent; Platform owns approvals, tool
+federation and company evidence. A company notification or MCP discovery
+result does not authorize physical movement. Accept only explicit, bounded,
+validated performer capabilities through the existing SDK/broker authority.
+
+Until operator-attended validation establishes real sensed neutral/settled
+state and safe room-close/interrupt behavior, retain unknown-outcome
+quarantine and no automatic retry/rearm. PR #20 remains an independent
+hardware-gated branch, not a behavior to assume merged. Puppeteer's
+standalone no-company-mode must continue to work. RoboConduit is an
+independent future transport/session layer rather than a substitute
+for hardware STOP/leases.
+
+See [company controls](https://github.com/AgenticForge-Labs/agenticforge-platform/blob/main/docs/company-control-and-delegation.md).
+This is documentation, not hardware qualification.
+
 Forge Puppeteer is the public physical execution backend for AgenticForge. It owns Stage environment/capture and performer embodiment/control. It must also remain useful as a standalone live robot/show system.
 
 Physical safety takes precedence over autonomy.
