@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import select
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from .cameras import (
@@ -16,6 +18,9 @@ from .cameras import (
 
 
 class ObsbotSdkPTZController:
+    STARTUP_TIMEOUT_SECONDS = 10.0
+    MAX_STARTUP_LINE_BYTES = 4096
+
     """Camera-native PTZ using OBSBOT's SDK rather than V4L2 gimbal controls.
 
     The native helper owns SDK initialization and remains alive while the
@@ -91,15 +96,45 @@ class ObsbotSdkPTZController:
             bufsize=1,
         )
         assert process.stdout is not None
-        first = process.stdout.readline().strip()
-        if not first.startswith("READY\t"):
-            stderr = ""
-            if process.stderr is not None:
-                stderr = process.stderr.read().strip()
-            process.terminate()
-            raise RuntimeError(
-                f"OBSBOT SDK helper failed to initialize: {first or stderr}"
-            )
+        # Read the complete READY line with a deadline. select() followed by
+        # TextIO.readline() alone can still hang on partial lines.
+        deadline = time.monotonic() + self.STARTUP_TIMEOUT_SECONDS
+        startup_bytes = bytearray()
+        finished = False
+        while len(startup_bytes) <= self.MAX_STARTUP_LINE_BYTES:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            readable, _, _ = select.select([process.stdout], [], [], remaining)
+            if not readable:
+                break
+            chunk = os.read(process.stdout.fileno(), 1)
+            if not chunk:
+                finished = True
+                break
+            if chunk == b"\n":
+                finished = True
+                break
+            startup_bytes.extend(chunk)
+
+        first = startup_bytes.decode("utf-8", errors="replace").strip()
+        if not finished or not first.startswith("READY\t"):
+            if process.poll() is None:
+                process.terminate()
+            try:
+                _, stderr = process.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                _, stderr = process.communicate()
+            if not finished:
+                reason = (
+                    f"OBSBOT SDK helper timed out after "
+                    f"{self.STARTUP_TIMEOUT_SECONDS:g}s waiting for READY"
+                )
+            else:
+                reason = "OBSBOT SDK helper failed to initialize"
+            detail = first or (stderr or "").strip()
+            raise RuntimeError(f"{reason}: {detail or 'no complete READY line'}")
         parts = first.split("\t", 2)
         if len(parts) == 3:
             self.camera_name = parts[1]
