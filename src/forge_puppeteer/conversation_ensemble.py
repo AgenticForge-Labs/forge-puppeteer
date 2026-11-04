@@ -138,6 +138,19 @@ class ConversationEnsemble:
                         if pattern.mode == "once"
                         and behavior not in {"idle", "listening", "speaking", "disconnected"}
                     ),
+                    # Recorded expressions replay an exact pinned asset; authored
+                    # ones are procedural gestures. Callers may group or filter
+                    # by this without inferring intent from device type.
+                    "expression_kinds": {
+                        behavior: (
+                            "recorded"
+                            if pattern.source == "recorded"
+                            else "authored"
+                        )
+                        for behavior, pattern in sorted(self.packs[name].behaviors.items())
+                        if pattern.mode == "once"
+                        and behavior not in {"idle", "listening", "speaking", "disconnected"}
+                    },
                     "presence_behaviors": sorted(
                         behavior for behavior in ("idle", "listening", "speaking")
                         if behavior in self.packs[name].behaviors

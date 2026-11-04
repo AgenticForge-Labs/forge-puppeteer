@@ -247,3 +247,21 @@ async def test_reachy_segment_that_outlives_the_grace_still_quarantines(tmp_path
         while not provider._quarantined:
             assert anyio.current_time() < deadline, "stuck segment did not quarantine"
             await anyio.sleep(0.05)
+
+async def test_snapshot_distinguishes_recorded_from_authored_expressions(tmp_path):
+    catalog = make_catalog(tmp_path)
+    provider = ReachyPlaybackProvider(catalog, FakeReachySDK(), motion_authorized=True)
+    pack = await reachy_pack_from_catalog("reachy", catalog, neutral_head=NEUTRAL)
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("reachy", provider)
+    ensemble = ConversationEnsemble(runtime, [pack])
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(presence(0, "idle"))
+        await anyio.sleep(0.05)
+        performers = ensemble.snapshot()["performers"]
+    detail = performers["reachy"]
+    kinds = detail["expression_kinds"]
+    # A pinned recording replays an exact asset; neutral is an authored pose.
+    assert kinds["yes"] == "recorded"
+    assert kinds["neutral"] == "authored"
+    assert set(kinds) == set(detail["expressions"])
