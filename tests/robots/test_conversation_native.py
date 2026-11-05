@@ -5,18 +5,22 @@ import json
 import math
 from pathlib import Path
 
+import anyio
 import pytest
 
+from forge_puppeteer.conversation_ensemble import ConversationEnsemble, EnsemblePresence
 from forge_puppeteer.conversation_native import (
     reachy_conversation_pack,
     stackchan_conversation_pack,
     stackchan_recorded_assets,
 )
+from forge_puppeteer.execution import ExecutionRuntime
 from forge_puppeteer.reachy_sync import (
     OFFICIAL_REACHY_DATASET,
     recording_url,
     sync_reachy_recordings,
 )
+from forge_puppeteer.runtime import PerformanceStage
 
 NEUTRAL = [
     [1.0, 0.0, 0.0, 0.0],
@@ -131,9 +135,25 @@ def test_stackchan_poses_follow_native_tenths_and_valid_protocol_shape():
     assert "4g" not in pack.model_dump_json()
     assert pack.behaviors["idle"].cues[1].parameters["pitch"]["angle"] == 450
     assert pack.behaviors["speaking"].cues[1].parameters["mouth"]["size"] == 42
-    assert pack.behaviors["yes"].cues[0].parameters["pitch"]["angle"] == 405
-    assert pack.behaviors["no"].cues[0].parameters["yaw"]["angle"] == -80
-    assert len(pack.behaviors["no"].cues) == 5
+    # yes/no are head nods and shakes, not only facial changes.
+    yes_cues = pack.behaviors["yes"].cues
+    assert [c.operation for c in yes_cues][1] == "head"
+    assert yes_cues[2].parameters["pitch"]["angle"] == 450 + 45
+    no_cues = pack.behaviors["no"].cues
+    assert no_cues[2].parameters["yaw"]["angle"] == -80
+    assert all("yaw" in c.parameters for c in no_cues if c.operation == "head")
+    # look left/right move both head and eyes.
+    left = pack.behaviors["look_left"].cues
+    assert any(c.operation == "head" and c.parameters["yaw"]["angle"] == 80 for c in left)
+    assert any(
+        c.operation == "face" and c.parameters["left_eye"].get("x") == -35 for c in left
+    )
+    right = pack.behaviors["look_right"].cues
+    assert any(c.operation == "head" and c.parameters["yaw"]["angle"] == -80 for c in right)
+    assert any(
+        c.operation == "face" and c.parameters["left_eye"].get("x") == 35 for c in right
+    )
+    assert pack.behaviors["no"].cues[2].parameters["yaw"]["angle"] == -80
     assert pack.behaviors["neutral"].cues[1].parameters["pitch"]["angle"] == 450
     assert {"happy", "curious", "confused", "concerned", "excited", "surprised", "sad"} <= set(
         pack.behaviors
@@ -342,3 +362,51 @@ def test_stackchan_recorded_assets_become_pinned_expressions(tmp_path):
     cue = pattern.cues[0]
     assert cue.operation == "play_asset" and cue.asset_id == "wave"
     assert cue.asset_revision.startswith("sha256:")
+
+
+@pytest.mark.anyio
+async def test_speech_channel_drives_speaking_without_changing_other_slots():
+    """Audio-driven targets apply only to an active speaking slot."""
+
+    class Channel:
+        def latest(self):
+            return {"yaw": 0.5, "pitch": -0.5, "roll": 0.0}
+
+    class Provider:
+        def __init__(self):
+            self.calls = []
+
+        async def validate(self, request):
+            if request.operation == "head" and "yaw" not in request.parameters:
+                raise ValueError("incomplete head target")
+
+        async def execute(self, request):
+            from forge_puppeteer.execution import Completion
+            self.calls.append(request.operation)
+            return Completion("ok")
+
+        def resources_for(self, request):
+            return ("head.pose",)
+
+        async def stop(self):
+            from forge_puppeteer.execution import StopResult
+            return StopResult(True, "stopped")
+
+    provider = Provider()
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("stackchan", provider)
+    pack = stackchan_conversation_pack("stackchan")
+    ensemble = ConversationEnsemble(runtime, [pack])
+    ensemble.bind_speech_channel("stackchan", Channel(), amplitude=0.08)
+
+    def presence(seq, state):
+        return EnsemblePresence(
+            event_id=f"event-{seq}", session_id="one-4g-room",
+            sequence=seq, state=state, source="agent_state",
+        )
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(presence(0, "speaking"))
+        await anyio.sleep(0.35)
+        assert "head" in provider.calls
+        await ensemble.observe(presence(1, "listening"))
+        await anyio.sleep(0.05)

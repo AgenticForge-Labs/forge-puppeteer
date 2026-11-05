@@ -8,7 +8,7 @@ actions. A denied/busy/uncertain device cannot be silently retried or replaced.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
@@ -21,6 +21,7 @@ from .behavior_contract import (
     PerformerBehaviors,
     Presence,
 )
+from .conversation_native import _head
 from .execution import ActionRequest, ExecutionError, ExecutionRuntime
 from .robot_contracts import ActionState
 
@@ -37,6 +38,12 @@ class _Slot:
     pending: bool = False
     action_done: anyio.Event = field(default_factory=anyio.Event)
     action_count: int = 0
+
+
+def _tenths(value: float) -> int:
+    """Round a tenths-of-a-degree target; the SDK still validates bounds."""
+    rounded = round(value)
+    return rounded if isinstance(rounded, int) else int(rounded)
 
 
 class ConversationEnsemble:
@@ -75,6 +82,10 @@ class ConversationEnsemble:
         self._lock = anyio.Lock()
         self._tasks = None
         self._slots: dict[str, _Slot] = {}
+        self._speech_channels: dict[str, tuple[object, float, list | None]] = {}
+        # Bounded dispatch rate for audio-driven targets: slow hardware must
+        # never receive a burst of catch-up commands.
+        self._speech_interval_s: float = 0.25
         self._blocked: set[str] = set()
         self._owned: set[str] = set()
         self._unavailable: dict[str, str] = {}
@@ -364,10 +375,40 @@ class ConversationEnsemble:
         )
         if pattern is None:
             return  # Missing device behavior is unsupported, never substituted.
+        if behavior == "speaking" and name in self._speech_channels:
+            scope = anyio.CancelScope()
+            slot = _Slot(scope=scope, behavior=behavior, expression_active=resume)
+            self._slots[name] = slot
+            self._tasks.start_soon(
+                self._play_speech_driven, name, pattern, slot, action_id,
+            )
+            return
         scope = anyio.CancelScope()
         slot = _Slot(scope=scope, behavior=behavior, expression_active=resume)
         self._slots[name] = slot
         self._tasks.start_soon(self._play, name, behavior, pattern, slot, action_id, resume)
+
+    def bind_speech_channel(
+        self, performer_id: str, channel, *, amplitude: float,
+        neutral_head: Sequence[Sequence[float]] | None = None,
+    ) -> None:
+        """Attach an optional audio-driven channel for one verbal performer.
+
+        The channel is consulted only while a *speaking* presence slot is
+        active, so listening/idle and every finite gesture stay exactly as
+        authored. Values are unitless and must already be clamped by the
+        caller's operator limits.
+        """
+        if performer_id not in self.packs:
+            raise ValueError("speech channel requires a configured performer")
+        if neutral_head is not None and (
+            len(neutral_head) != 4 or any(len(row) != 4 for row in neutral_head)
+        ):
+            raise ValueError("speech channel neutral head must be a 4x4 transform")
+        self._speech_channels[performer_id] = (
+            channel, float(amplitude),
+            [[float(v) for v in row] for row in neutral_head] if neutral_head else None,
+        )
 
     async def _stop_slots(self, names: tuple[str, ...], *, graceful: bool = False):
         active = [(n, self._slots.pop(n)) for n in names if n in self._slots]
@@ -460,6 +501,84 @@ class ConversationEnsemble:
                 if slot.status == "blocked":
                     self._blocked.add(name)
                 slot.done.set()
+
+    async def _play_speech_driven(
+        self, name: str, pattern: BehaviorPattern, slot: _Slot, action_id: str,
+    ) -> None:
+        """Dispatch bounded targets from the live speech envelope.
+
+        Only the speaking slot uses this. It reuses the same runtime, action
+        journal and STOP path; the envelope merely chooses the next target.
+        A stale or missing envelope falls back to the authored cue at that
+        index, so losing the tap degrades the texture without a silent stop.
+        """
+        channel, amplitude, _neutral = self._speech_channels[name]
+        with slot.scope:
+            index = 0
+            try:
+                while True:
+                    values = channel.latest()
+                    cue = (
+                        pattern.cues[index % len(pattern.cues)]
+                        if values is None
+                        else self._speech_cue(values, amplitude, name)
+                    )
+                    request = ActionRequest(
+                        id=f"{action_id}:{name}:0:{index}",
+                        performer_id=name, caller_id=self.caller_id,
+                        session_id=self._session, operation=cue.operation,
+                        parameters=dict(cue.parameters),
+                        cue_id=f"speaking:0:{index}",
+                        asset_id=cue.asset_id, asset_revision=cue.asset_revision,
+                    )
+                    slot.last_action_id = request.id
+                    await self.runtime.submit(request)
+                    slot.pending = True
+                    slot.action_done = anyio.Event()
+                    record = await self.runtime.wait(request.id)
+                    slot.pending = record.state == ActionState.UNKNOWN
+                    slot.action_done.set()
+                    if record.state != ActionState.COMPLETED:
+                        slot.status = (
+                            "blocked" if record.state == ActionState.UNKNOWN
+                            else "unavailable"
+                        )
+                        slot.evidence = f"action_{record.state.value}"
+                        if slot.status == "blocked":
+                            self._blocked.add(name)
+                        return
+                    slot.status = "active"
+                    slot.evidence = "speech_envelope_dispatch"
+                    index += 1
+                    await anyio.sleep(self._speech_interval_s)
+            finally:
+                slot.status = "completed"
+                slot.evidence = "behavior_pattern_finished"
+
+    def _speech_cue(
+        self, values: dict[str, float], amplitude: float, name: str,
+    ) -> BehaviorCue:
+        levels = {key: max(-1.0, min(1.0, value)) for key, value in values.items()}
+        if name == "stackchan":
+            yaw = _tenths(levels.get("yaw", 0.0) * amplitude * 100)
+            pitch = _tenths(-levels.get("pitch", 0.0) * amplitude * 60)
+            return BehaviorCue(
+                at_s=0.0, operation="head",
+                parameters={
+                    "yaw": {"angle": yaw, "speed": 200},
+                    "pitch": {"angle": 450 + pitch, "speed": 200},
+                },
+            )
+        neutral = self._speech_channels[name][2]
+        if neutral is None:
+            raise ValueError("audio-driven Reachy motion requires a neutral head")
+        pose = _head(neutral, pitch_rad=levels.get("pitch", 0.0) * amplitude,
+                     yaw_rad=levels.get("yaw", 0.0) * amplitude,
+                     roll_rad=levels.get("roll", 0.0) * amplitude * 0.5)
+        return BehaviorCue(
+            at_s=0.0, operation="head_pose",
+            parameters={"pose": pose, "duration_s": 0.3},
+        )
 
     async def _execute_pattern(
         self, name: str, behavior: str, pattern: BehaviorPattern,

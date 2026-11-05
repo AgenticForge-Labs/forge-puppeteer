@@ -607,6 +607,48 @@ def stackchan_conversation_pack(
             _cue(0.44, "face", mouth={"weight": 55}),
             _cue(0.66, "face", mouth={"weight": 0}),
         ), period_s=0.9)
+    # Semantic gestures that move the head, not only the face. Pitch is in
+    # tenths of a degree (larger is lower); yaw likewise; eye x is -100..100.
+    # Offsets must be strictly increasing, so face and head cues interleave.
+    def nod(at: float, *, mouth: int = 0, eyes: int = 65) -> BehaviorCue:
+        return face(at, mouth=mouth, eyes=eyes, mouth_weight=rest_mouth_weight)
+
+    behaviors["yes"] = _pattern((
+        nod(0.0),
+        head(0.02, pitch=0),
+        head(0.28, pitch=pitch_amplitude),
+        head(0.56, pitch=-pitch_amplitude // 3),
+        head(0.84, pitch=pitch_amplitude // 2),
+        head(1.15, pitch=0),
+        nod(1.16, eyes=45),
+    ))
+    behaviors["no"] = _pattern((
+        nod(0.0),
+        head(0.02, yaw=0),
+        head(0.28, yaw=-yaw_amplitude),
+        head(0.56, yaw=yaw_amplitude),
+        head(0.84, yaw=-yaw_amplitude // 2),
+        head(1.12, yaw=0),
+        nod(1.13, eyes=45),
+    ))
+    behaviors["look_left"] = _pattern((
+        head(0.0, yaw=0),
+        face(0.02, mouth=0, eyes=45, eye_x=0, mouth_weight=rest_mouth_weight),
+        head(0.3, yaw=yaw_amplitude),
+        face(0.32, mouth=0, eyes=70, eye_x=-35, mouth_weight=rest_mouth_weight),
+        head(1.2, yaw=yaw_amplitude),
+        face(1.55, mouth=0, eyes=45, eye_x=0, mouth_weight=rest_mouth_weight),
+        head(1.6, yaw=0),
+    ))
+    behaviors["look_right"] = _pattern((
+        head(0.0, yaw=0),
+        face(0.02, mouth=0, eyes=45, eye_x=0, mouth_weight=rest_mouth_weight),
+        head(0.3, yaw=-yaw_amplitude),
+        face(0.32, mouth=0, eyes=70, eye_x=35, mouth_weight=rest_mouth_weight),
+        head(1.2, yaw=-yaw_amplitude),
+        face(1.55, mouth=0, eyes=45, eye_x=0, mouth_weight=rest_mouth_weight),
+        head(1.6, yaw=0),
+    ))
     for name, asset_id, revision in recorded_assets:
         # BehaviorCue carries asset identity as fields, not parameters.
         behaviors[name] = _pattern(
