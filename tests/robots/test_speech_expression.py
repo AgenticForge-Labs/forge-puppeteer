@@ -302,3 +302,37 @@ def test_window_inactive_residual_intensity_zero_for_both_modes():
         assert all(getattr(item, axis) == 0 for axis in (
             "pitch", "yaw", "roll", "x", "y", "z", "antenna",
         ))
+
+
+def test_multi_performer_batches_advance_each_stream_independently():
+    window = SpeechEnvelopeWindow(performer_dynamics={"reachy": "smoothed_v1"})
+    window.accept([sample(0)], performer_ids=("reachy", "stackchan"))
+    window.accept([sample(1)], performer_ids=("stackchan",))
+    window.accept([sample(1)], performer_ids=("reachy",))
+    assert window.latest("reachy").sequence == 1
+    assert window.latest("stackchan").sequence == 1
+    window.accept([sample(2)], performer_ids=("reachy", "stackchan"))
+    assert window.latest("reachy").sequence == 2
+    assert window.latest("stackchan").sequence == 2
+
+
+def test_multi_performer_rejection_does_not_advance_other_performer():
+    window = SpeechEnvelopeWindow(performer_dynamics={"reachy": "smoothed_v1"})
+    window.accept([sample(0)], performer_ids=("reachy", "stackchan"))
+    window.accept([sample(1)], performer_ids=("reachy",))
+    with pytest.raises(ValueError, match="gap"):
+        window.accept([sample(2)], performer_ids=("reachy", "stackchan"))
+    assert window.latest("reachy").sequence == 1
+    assert window.latest("stackchan").sequence == 0
+    window.accept([sample(1)], performer_ids=("stackchan",))
+    window.accept([sample(2)], performer_ids=("reachy",))
+
+
+def test_new_performer_requires_stream_boundary_and_zero_sequence():
+    window = SpeechEnvelopeWindow()
+    with pytest.raises(ValueError, match="start at zero"):
+        window.accept([sample(1)], performer_ids=("reachy",))
+    window.accept([sample(0)], performer_ids=("reachy",))
+    with pytest.raises(ValueError, match="start at zero"):
+        window.accept([sample(1, stream_id="new")], performer_ids=("reachy",))
+    window.accept([sample(0, stream_id="new")], performer_ids=("reachy",))
