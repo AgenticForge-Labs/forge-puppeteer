@@ -2,9 +2,11 @@
 
 # Forge Puppeteer
 
-**Give AI agents and creative performers a physical presence.**
+**One MCP interface for agentic control of popular open-source robots.**
 
-Forge Puppeteer is a robot-performance system for coordinating expressive behavior across physical devices. A conversational agent can ask a robot to listen or acknowledge; a director can choreograph gestures and cues for a scene. Puppeteer translates shared performance intent into device-specific actions using explicit adapters and a deterministic execution runtime.
+Forge Puppeteer gives AI agents a standard [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) interface for interacting with robots through tool calls. It exposes supported native device capabilities alongside shared behaviors, actions, and emotions for conversational robots: an agent can request listening, speaking, acknowledgement, gestures, or an expression, and each configured performer interprets the request through its own capabilities.
+
+The project takes inspiration from [Reachy Mini](https://github.com/pollen-robotics/reachy_mini) and the [Reachy Mini Conversation App](https://github.com/pollen-robotics/reachy_mini_conversation_app), extending the idea of an expressive conversational robot toward a general approach for multiple kinds of robots and agents. Puppeteer also supports scripted performances, Python, and CLI workflows.
 
 **One language for expression. Many robots. Live conversations and scripted performances.**
 
@@ -13,7 +15,7 @@ Forge Puppeteer is a robot-performance system for coordinating expressive behavi
 - Give a conversational character a physical presence through listening, speaking, idle, acknowledgement and gesture behaviors.
 - Coordinate a shared semantic performance across Reachy Mini, StackChan and SO-ARM101, with each performer using its supported capabilities.
 - Author repeatable behavior packs and scripted performances with validation, timing and action records.
-- Connect an AI agent or other client through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), or use Puppeteer through Python and the CLI.
+- Use MCP tool calls to discover supported capabilities and request operator-authorized native controls and shared expressions. Available tools vary by device, configuration, and MCP server.
 - Experiment without robots using mock stages and fake providers.
 
 The ensemble launcher supports configurations for Reachy alone, Reachy with StackChan, or all three performers. Actual capabilities depend on the configured providers, operator grants and device readiness. See [Native conversational performers](docs/THREE_ROBOT_ENSEMBLE.md).
@@ -61,6 +63,15 @@ Puppeteer coordinates semantic performance through device-specific controls. The
 
 - [SO-ARM101 Motion SDK](https://github.com/AgenticForge-Labs/soarm101-motion-sdk) — calibration, motion, teaching, GUI, simulation and the arm's trusted control boundary.
 - [StackChan Control SDK](https://github.com/AgenticForge-Labs/stackchan-control-sdk) — native head, face and lighting controls, protocols and companion firmware.
+
+## Built on a community of open robotics
+
+Thanks to the projects and communities making these robots and tools possible:
+
+- [Pollen Robotics Reachy Mini SDK](https://github.com/pollen-robotics/reachy_mini), [Reachy Mini Conversation App](https://github.com/pollen-robotics/reachy_mini_conversation_app), and [Reachy Mini emotions library](https://huggingface.co/datasets/pollen-robotics/reachy-mini-emotions-library) — expressive robotics and recorded behaviors that inspire this project.
+- [The Robot Studio's SO-ARM project](https://github.com/TheRobotStudio/SO-ARM100) and [Hugging Face LeRobot](https://github.com/huggingface/lerobot) — the SO-101 open robot arm and broader open robotics ecosystem.
+- [Stack-chan](https://github.com/stack-chan/stack-chan) and [M5Stack StackChan](https://github.com/m5stack/StackChan) — the desktop robot community and firmware.
+- [Model Context Protocol](https://modelcontextprotocol.io/) — the common tool interface connecting agents and applications.
 
 ## Explore
 
