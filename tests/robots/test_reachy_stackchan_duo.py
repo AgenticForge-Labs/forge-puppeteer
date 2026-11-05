@@ -202,3 +202,56 @@ def test_review_only_authoring_requires_no_arm_file_or_sdk(tmp_path):
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+
+def test_duo_smooth_stackchan_speaking_selects_native_sdk_face_and_dynamics(
+    tmp_path, monkeypatch,
+):
+    from forge_puppeteer.behavior_contract import BehaviorCue, BehaviorPattern, PerformerBehaviors
+
+    class FakeProvider:
+        def __init__(self, config):
+            self.catalog = object()
+
+        @asynccontextmanager
+        async def connected(self):
+            raise AssertionError("no real SDK connection in software preflight")
+            yield  # pragma: no cover
+
+    async def fake_reachy(*_args, **_kwargs):
+        return PerformerBehaviors.author("reachy", {
+            name: BehaviorPattern(
+                source="procedural", mode="loop", period_s=1.0,
+                cues=(BehaviorCue(at_s=0.0, operation="head_pose"),),
+            ) for name in ("idle", "listening", "speaking")
+        })
+
+    captured = []
+    class FakeServer:
+        def run(self, *, transport):
+            assert transport == "stdio"
+
+    def server(_runtime, ensemble, **kwargs):
+        captured.append((ensemble, kwargs))
+        return FakeServer()
+
+    monkeypatch.setattr(launcher, "ReachySDKProvider", FakeProvider)
+    monkeypatch.setattr(launcher, "StackChanSDKProvider", FakeProvider)
+    monkeypatch.setattr(launcher, "reachy_pack_from_catalog", fake_reachy)
+    monkeypatch.setattr(launcher, "create_ensemble_server", server)
+    (tmp_path / "head.json").write_text(json.dumps([[1, 0, 0, 0]] * 4))
+    data = duo_data(tmp_path)
+    data["motion_profiles"] = {"stackchan": {"speaking": "smooth_v2"}}
+    data["speech_driven_performers"] = ["stackchan"]
+    config = tmp_path / "selected.json"
+    config.write_text(json.dumps(data))
+    launcher.serve(config)
+
+    ensemble, kwargs = captured[0]
+    assert kwargs["speech_dynamics"] == {"stackchan": "smoothed_v1"}
+    assert kwargs["stackchan_performer_id"] == "stackchan"
+    assert ensemble.packs["stackchan"].behaviors["speaking"].cues[0].parameters[
+        "mouth"
+    ]["weight"] == 45
+    assert "weight" not in ensemble.packs["reachy"].behaviors["speaking"].cues[0].parameters

@@ -8,6 +8,7 @@ from forge_puppeteer.speech_expression import SpeechEnvelopeHop, SpeechExpressio
 from forge_puppeteer.stackchan_speech import (
     StackChanSpeechFacePreview,
     StackChanSpeechFaceProfile,
+    stackchan_native_mouth_cue,
 )
 
 
@@ -69,3 +70,20 @@ def test_unqualified_physical_parameters_are_rejected_while_rendering_is_inert()
         preview.render(frame)
     with pytest.raises(ValueError, match="out of order"):
         preview.render(replace(frame, sequence=2, offset_ms=100))
+
+
+
+def test_smooth_mouth_renderer_is_pure_bounded_and_releases_on_silence():
+    from stackchan_control.assets import _step
+
+    active = stackchan_native_mouth_cue({"mouth": 0.8, "active": True}, 0.08)
+    assert active.parameters == {"mouth": {"weight": 60}}
+    assert _step({"at_s": 0, "operation": active.operation,
+                  "parameters": active.parameters})
+    quiet = stackchan_native_mouth_cue({"mouth": 0.9, "active": False}, 0.08)
+    assert quiet.parameters == {"mouth": {"weight": 0}}
+    for bad in (float("nan"), -0.1, 1.1, True):
+        with pytest.raises(ValueError):
+            stackchan_native_mouth_cue({"mouth": bad, "active": True}, 0.08)
+    with pytest.raises(ValueError):
+        stackchan_native_mouth_cue({"mouth": 0.5}, 0.08)

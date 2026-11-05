@@ -916,7 +916,10 @@ async def test_speech_does_not_reissue_same_hop_or_animate_inactive_hop():
             event_id="start", session_id="room", sequence=0,
             state="speaking", source="agent_state",
         ))
-        await anyio.sleep(0.15)
+        with anyio.fail_after(2):
+            while len(provider.calls) < 1:
+                await anyio.sleep(0.01)
+        await anyio.sleep(0.12)
         assert len(provider.calls) == 1
         channel.value["sequence"] = 1
         channel.value["active"] = False
