@@ -128,6 +128,7 @@ class EnsembleConfig(BaseModel):
     # Operator opt-in: performers whose speaking slot follows the live
     # generated-PCM envelope instead of the authored pattern.
     speech_driven_performers: tuple[str, ...] = ()
+    speech_seed: int = 7
     reachy_expression_style: Literal["classic", "expressive"] = "classic"
     reachy_startup_behavior: Literal["none", "wake_up_if_sleeping"] = "none"
     reachy_neutral_antennas_rad: tuple[float, float] | None = None
@@ -477,6 +478,9 @@ def serve(config_path: str | Path) -> None:
         recorded = stackchan_recorded_assets(config.stackchan.asset_root)
     # Opt-in audio-driven wording; operator config, never a tool argument.
     speech_driven = tuple(getattr(config, "speech_driven_performers", ()) or ())
+    speech_seeds = {
+        name: int(getattr(config, "speech_seed", 7)) for name in speech_driven
+    }
     speech_neutral = {}
     if speech_driven and "reachy" in speech_driven:
         speech_neutral["reachy"] = json.loads(
@@ -500,6 +504,7 @@ def serve(config_path: str | Path) -> None:
         motion_enabled=True,
         speech_driven_performers=speech_driven,
         speech_neutral_heads=speech_neutral,
+        speech_seeds=speech_seeds,
         presentation_presets=stackchan_display_presets(config),
     ).run(transport="stdio")
 

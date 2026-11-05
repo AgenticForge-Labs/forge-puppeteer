@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from ..behavior_contract import BehaviorCue, EnsemblePresence
 from ..conversation_ensemble import ConversationEnsemble
+from ..conversation_native import stackchan_firmware_warp
 from ..execution import ExecutionRuntime
 from ..speech_expression import SpeechEnvelopeWindow
 
@@ -31,6 +32,7 @@ def create_ensemble_server(
     presentation_presets: Mapping[str, Mapping[str, BehaviorCue]] | None = None,
     speech_driven_performers: tuple[str, ...] = (),
     speech_neutral_heads: Mapping[str, object] | None = None,
+    speech_seeds: Mapping[str, int] | None = None,
 ) -> MCPServer:
     """An opt-in single-room stdio server with operator startup gate.
 
@@ -48,6 +50,7 @@ def create_ensemble_server(
     # Opt-in audio-driven wording texture. Disabled unless every bound
     # performer was explicitly authorized by the operator config.
     speech_driven = frozenset(speech_driven_performers or ())
+    speech_seeds = dict(speech_seeds or {})
     if not speech_driven <= set(ensemble.packs):
         raise ValueError("speech-driven performers must be configured performers")
 
@@ -68,13 +71,20 @@ def create_ensemble_server(
 
     for performer in sorted(speech_driven):
         if performer == "stackchan":
+            # Keep StackChan's own speaking character: the envelope gates the
+            # timing, the firmware port chooses each subtle nod or sway.
             ensemble.bind_speech_channel(
                 performer, _WindowChannel(performer), amplitude=0.08,
+                warp=stackchan_firmware_warp(
+                    seed=speech_seeds.get(performer, 7),
+                ),
+                interval_s=2.0,
             )
         else:
             ensemble.bind_speech_channel(
                 performer, _WindowChannel(performer), amplitude=0.09,
                 neutral_head=(speech_neutral_heads or {}).get(performer),
+                interval_s=0.25,
             )
     # This is operator-selected trusted code/data, never LLM-provided cues.
     presets = {name: dict(options) for name, options in (presentation_presets or {}).items()}

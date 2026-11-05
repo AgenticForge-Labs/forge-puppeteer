@@ -8,7 +8,7 @@ actions. A denied/busy/uncertain device cannot be silently retried or replaced.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
@@ -82,7 +82,10 @@ class ConversationEnsemble:
         self._lock = anyio.Lock()
         self._tasks = None
         self._slots: dict[str, _Slot] = {}
-        self._speech_channels: dict[str, tuple[object, float, list | None]] = {}
+        self._speech_channels: dict[
+            str, tuple[object, float, list | None, object | None]
+        ] = {}
+        self._speech_intervals: dict[str, float] = {}
         # Bounded dispatch rate for audio-driven targets: slow hardware must
         # never receive a burst of catch-up commands.
         self._speech_interval_s: float = 0.25
@@ -391,6 +394,8 @@ class ConversationEnsemble:
     def bind_speech_channel(
         self, performer_id: str, channel, *, amplitude: float,
         neutral_head: Sequence[Sequence[float]] | None = None,
+        warp: Callable[[dict[str, float], float], BehaviorCue] | None = None,
+        interval_s: float = 0.25,
     ) -> None:
         """Attach an optional audio-driven channel for one verbal performer.
 
@@ -408,7 +413,9 @@ class ConversationEnsemble:
         self._speech_channels[performer_id] = (
             channel, float(amplitude),
             [[float(v) for v in row] for row in neutral_head] if neutral_head else None,
+            warp,
         )
+        self._speech_intervals[performer_id] = float(interval_s)
 
     async def _stop_slots(self, names: tuple[str, ...], *, graceful: bool = False):
         active = [(n, self._slots.pop(n)) for n in names if n in self._slots]
@@ -512,17 +519,21 @@ class ConversationEnsemble:
         A stale or missing envelope falls back to the authored cue at that
         index, so losing the tap degrades the texture without a silent stop.
         """
-        channel, amplitude, _neutral = self._speech_channels[name]
+        channel, amplitude, _neutral, warp = self._speech_channels[name]
+        interval = self._speech_intervals.get(name, self._speech_interval_s)
         with slot.scope:
             index = 0
             try:
                 while True:
                     values = channel.latest()
-                    cue = (
-                        pattern.cues[index % len(pattern.cues)]
-                        if values is None
-                        else self._speech_cue(values, amplitude, name)
-                    )
+                    if values is None:
+                        cue = pattern.cues[index % len(pattern.cues)]
+                    elif warp is not None:
+                        # Operator-supplied mapping, e.g. the firmware port
+                        # which picks its own subtle nod or sway.
+                        cue = warp(values, amplitude)
+                    else:
+                        cue = self._speech_cue(values, amplitude, name)
                     request = ActionRequest(
                         id=f"{action_id}:{name}:0:{index}",
                         performer_id=name, caller_id=self.caller_id,
@@ -550,7 +561,7 @@ class ConversationEnsemble:
                     slot.status = "active"
                     slot.evidence = "speech_envelope_dispatch"
                     index += 1
-                    await anyio.sleep(self._speech_interval_s)
+                    await anyio.sleep(interval)
             finally:
                 slot.status = "completed"
                 slot.evidence = "behavior_pattern_finished"

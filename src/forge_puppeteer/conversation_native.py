@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Sequence
+import random
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Literal
 
 from .behavior_contract import BehaviorCue, BehaviorPattern, PerformerBehaviors
@@ -455,6 +457,55 @@ def stackchan_recorded_assets(
     return tuple(
         (asset.id, asset.id, asset.revision) for asset in list_assets(Path(directory))
     )
+
+
+@dataclass(frozen=True)
+class _FirmwarePort:
+    """Seeded port of StackChan's own SpeakingModifier head motion.
+
+    Numbers come from the pinned firmware: a subtle nod of -20..+50 tenths
+    or a yaw/pitch drift of 40/20, at speed 100..200, chosen around the pose
+    that was last observed rather than a fixed centre.
+    """
+
+    seed: int
+    yaw_center: int
+    pitch_center: int
+
+    def cue(self, step: int) -> BehaviorCue:
+        rng = random.Random((self.seed, step).__hash__())
+        speed = rng.randint(100, 200)
+        yaw = self.yaw_center
+        pitch = self.pitch_center
+        if rng.randint(0, 9) < 5:
+            pitch += rng.randint(-20, 50)
+        else:
+            yaw += rng.randint(-40, 40)
+            pitch += rng.randint(-20, 20)
+        return _cue(
+            0.0, "head",
+            yaw={"angle": max(-1280, min(1280, yaw)), "speed": speed},
+            pitch={"angle": max(30, min(870, pitch)), "speed": speed},
+        )
+
+
+def stackchan_firmware_warp(
+    *, seed: int, yaw_center: int = 0, pitch_center: int = 450,
+) -> Callable[[dict[str, float], float], BehaviorCue]:
+    """Build the speaking warp used by the audio-driven channel.
+
+    The envelope only decides *when* to move (fresh hops); the target itself
+    follows the firmware's own weighted choice, so StackChan keeps its
+    character instead of faking Reachy's continuous wobble.
+    """
+    port = _FirmwarePort(seed=seed, yaw_center=yaw_center, pitch_center=pitch_center)
+    counter = {"n": 0}
+
+    def warp(_values: dict[str, float], _amplitude: float) -> BehaviorCue:
+        counter["n"] += 1
+        return port.cue(counter["n"])
+
+    return warp
 
 
 def stackchan_conversation_pack(

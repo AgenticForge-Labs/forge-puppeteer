@@ -12,6 +12,7 @@ from forge_puppeteer.conversation_ensemble import ConversationEnsemble, Ensemble
 from forge_puppeteer.conversation_native import (
     reachy_conversation_pack,
     stackchan_conversation_pack,
+    stackchan_firmware_warp,
     stackchan_recorded_assets,
 )
 from forge_puppeteer.execution import ExecutionRuntime
@@ -442,3 +443,19 @@ def test_head_axes_match_the_daemon_readback_convention():
         assert abs(angles[axis] - 10.0) < 0.01, (name, angles)
         others = [abs(a) for i, a in enumerate(angles) if i != axis]
         assert max(others) < 0.01, (name, angles)
+
+
+def test_stackchan_speaking_warp_uses_firmware_style_targets():
+    """StackChan keeps its own character: small nods and sways, not a wobble."""
+    warp = stackchan_firmware_warp(seed=5)
+    cues = [warp({"pitch": 0.5, "yaw": 0.3}, 0.08) for _ in range(40)]
+    assert all(cue.operation == "head" for cue in cues)
+    yaws = [c.parameters["yaw"]["angle"] for c in cues]
+    pitches = [c.parameters["pitch"]["angle"] for c in cues]
+    speeds = [c.parameters["yaw"]["speed"] for c in cues]
+    # Centred on the configured rest pose, never a large excursion.
+    assert max(abs(y) for y in yaws) <= 40
+    assert max(p for p in pitches) <= 500 and min(pitches) >= 430
+    assert all(100 <= s <= 200 for s in speeds)
+    # And it varies rather than repeating one target.
+    assert len(set(zip(yaws, pitches, strict=True))) > 5
