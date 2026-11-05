@@ -717,3 +717,66 @@ def test_idle_breath_loop_does_not_snap_the_head():
     assert min(z) < -0.002 < 0.002 < max(z)
     offsets = [cue.at_s for cue in idle.cues]
     assert all(b - a < idle.period_s for a, b in pairwise(offsets))
+
+
+@pytest.mark.anyio
+async def test_a_conversation_keeps_producing_speech_targets_turn_after_turn():
+    """Speech motion must resume on every speaking turn, not just the first.
+
+    The live journal showed speech targets only during the opening greeting and
+    nothing afterwards, even though presence kept alternating. Each turn must
+    start a fresh speech slot that dispatches while the envelope is fresh.
+    """
+
+    class Channel:
+        def latest(self):
+            return {"yaw": 0.4, "pitch": 0.2, "roll": 0.0, "z": 0.0, "antenna": 0.0}
+
+    class Provider:
+        def __init__(self):
+            self.calls = []
+
+        async def validate(self, request):
+            return None
+
+        async def execute(self, request):
+            from forge_puppeteer.execution import Completion
+            self.calls.append(request.cue_id)
+            return Completion("ok")
+
+        def resources_for(self, request):
+            return ("head.pose", "antennas.left", "antennas.right", "body.yaw")
+
+        async def stop(self):
+            from forge_puppeteer.execution import StopResult
+            return StopResult(True, "stopped")
+
+    provider = Provider()
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("reachy", provider)
+    pack = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1", "no1"),
+    )
+    ensemble = ConversationEnsemble(runtime, [pack])
+    ensemble.bind_speech_channel(
+        "reachy", Channel(), amplitude=0.12, neutral_head=NEUTRAL, interval_s=0.05,
+    )
+
+    def presence(seq, state):
+        return EnsemblePresence(
+            event_id=f"event-{seq}", session_id="conversation-room",
+            sequence=seq, state=state, source="agent_state",
+        )
+
+    async with runtime.run(), ensemble.run():
+        seq = 0
+        for _turn in range(3):
+            for state in ("listening", "speaking"):
+                result = await ensemble.observe(presence(seq, state))
+                seq += 1
+                await anyio.sleep(0.45)
+                assert result["performers"]["reachy"]["status"] != "blocked"
+        cues = [cue.split(":")[0] for cue in provider.calls]
+        # One speech slot per turn, and each delivers more than one target.
+        assert cues.count("speaking") >= 6, f"speech stopped after a turn: {cues}"
