@@ -691,7 +691,11 @@ async def test_transition_after_speech_never_quarantines_performer():
             # Long enough for a cue to land even when the idle sample spacing
             # is the full measured 1.6 s.
             await anyio.sleep(2.0)
-            status = result["performers"]["reachy"]["status"]
+            # observe() returns an admission-time snapshot. Read the actual
+            # post-transition state after dispatch; otherwise this assertion
+            # can miss asynchronous STOP/quarantine outcomes.
+            assert result["outcome"] == "accepted"
+            status = ensemble.snapshot()["performers"]["reachy"]["status"]
             assert status != "blocked", f"{state} quarantined the performer"
         cues = [cue.split(":")[0] for cue in provider.calls]
         assert cues.count("idle") >= 2, f"idle did not resume: {cues}"
