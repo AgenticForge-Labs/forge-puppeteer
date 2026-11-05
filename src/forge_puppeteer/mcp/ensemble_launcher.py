@@ -111,6 +111,62 @@ class SOARMEnsembleConfig(BaseModel):
         return self
 
 
+class PerformerMotionSelection(BaseModel):
+    """Explicit independent idle/speaking choices; no implicit SDK permission."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    idle: Literal["legacy", "native_v1", "smooth_v2"] = "legacy"
+    speaking: Literal["legacy", "native_v1", "smooth_v2"] = "legacy"
+
+
+def _validate_motion_selection(
+    choices: dict[str, PerformerMotionSelection],
+    performer_ids: tuple[str, ...],
+    *,
+    reachy_id: str,
+    stackchan_id: str | None,
+    speech_driven: tuple[str, ...],
+    tools: list[str],
+    neutral_antennas: tuple[float, float] | None,
+    antenna_sway_rad: float,
+) -> None:
+    selected = set(performer_ids)
+    if set(choices) - selected:
+        raise ValueError("motion profile references an unknown performer")
+    if len(set(speech_driven)) != len(speech_driven):
+        raise ValueError("speech-driven performer IDs must be unique")
+    if set(speech_driven) - selected or set(speech_driven) - {
+        reachy_id, stackchan_id,
+    }:
+        raise ValueError("speech-driven performer must be native Reachy or StackChan")
+    for performer_id, profile in choices.items():
+        nonlegacy = profile.idle != "legacy" or profile.speaking != "legacy"
+        if nonlegacy and performer_id not in {reachy_id, stackchan_id}:
+            raise ValueError("SO-ARM only supports legacy approved choreography")
+        if performer_id == reachy_id and nonlegacy:
+            _check_reachy_expression_authority(
+                "expressive", neutral_antennas, tools, antenna_sway_rad,
+            )
+        if profile.speaking == "smooth_v2" and performer_id not in speech_driven:
+            raise ValueError("smooth_v2 speaking requires explicit speech-driven opt-in")
+
+
+def _profile_overrides(
+    choices: dict[str, PerformerMotionSelection],
+    native: dict[str, object],
+) -> dict[str, dict[str, object]]:
+    """Select already authored alternative packs; never generate motor targets."""
+    return {
+        performer_id: {
+            state: native[performer_id]
+            for state in ("idle", "speaking")
+            if getattr(selection, state) != "legacy"
+        }
+        for performer_id, selection in choices.items()
+        if selection.idle != "legacy" or selection.speaking != "legacy"
+    }
+
+
 class EnsembleConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: Literal[1, 3]
@@ -129,6 +185,7 @@ class EnsembleConfig(BaseModel):
     # generated-PCM envelope instead of the authored pattern.
     speech_driven_performers: tuple[str, ...] = ()
     speech_seed: int = 7
+    motion_profiles: dict[str, PerformerMotionSelection] = Field(default_factory=dict)
     # Hold the first spoken turn until startup motion (if any) has settled.
     # The pinning of Reachy's own SDK wake-up is the alternative; raising the
     # head and antennas to the reviewed neutral does not need the choreography.
@@ -165,6 +222,15 @@ class EnsembleConfig(BaseModel):
             ids.append(self.soarm101.instance_id)
         if len(set(ids)) != len(ids):
             raise ValueError("unique performer IDs required")
+        _validate_motion_selection(
+            self.motion_profiles, tuple(ids),
+            reachy_id=self.reachy.instance_id,
+            stackchan_id=self.stackchan.instance_id,
+            speech_driven=self.speech_driven_performers,
+            tools=self.reachy.allowed_tools,
+            neutral_antennas=self.reachy_neutral_antennas_rad,
+            antenna_sway_rad=self.reachy_antenna_sway_rad,
+        )
         for value in (self.action_journal, self.ownership_db, self.reachy_neutral_head):
             if not value or not Path(value).is_absolute():
                 raise ValueError("action history, ownership and Reachy neutral pose require absolute paths")
@@ -216,6 +282,8 @@ class ReachyOnlyEnsembleConfig(BaseModel):
     speaking_amplitude_rad: float = Field(default=0.025, ge=0, le=0.07)
     listening_tilt_rad: float = Field(default=0.02, ge=0, le=0.07)
     listening_mode: Literal["tilt", "hold"] = "tilt"
+    speech_driven_performers: tuple[str, ...] = ()
+    motion_profiles: dict[str, PerformerMotionSelection] = Field(default_factory=dict)
     reachy_expression_style: Literal["classic", "expressive"] = "classic"
     reachy_startup_behavior: Literal["none", "wake_up_if_sleeping"] = "none"
     reachy_neutral_antennas_rad: tuple[float, float] | None = None
@@ -232,6 +300,14 @@ class ReachyOnlyEnsembleConfig(BaseModel):
         _check_reachy_expression_authority(
             self.reachy_expression_style, self.reachy_neutral_antennas_rad,
             self.reachy.allowed_tools, self.reachy_antenna_sway_rad,
+        )
+        _validate_motion_selection(
+            self.motion_profiles, (self.reachy.instance_id,),
+            reachy_id=self.reachy.instance_id, stackchan_id=None,
+            speech_driven=self.speech_driven_performers,
+            tools=self.reachy.allowed_tools,
+            neutral_antennas=self.reachy_neutral_antennas_rad,
+            antenna_sway_rad=self.reachy_antenna_sway_rad,
         )
         if not {"head_pose", "play_move", "device_stop"} <= set(self.reachy.allowed_tools):
             raise ValueError("native Reachy expression requires head, playback and stop grants")
