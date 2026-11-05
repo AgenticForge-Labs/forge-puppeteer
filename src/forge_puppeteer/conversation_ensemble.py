@@ -109,6 +109,7 @@ class ConversationEnsemble:
             str, tuple[object, float, list | None, object | None]
         ] = {}
         self._speech_intervals: dict[str, float] = {}
+        self._speech_release_on_silence: dict[str, bool] = {}
         # One device connection per performer, but the execution runtime is
         # shared. Targets that would run while another performer's target is
         # still executing contend for it, so dispatch is serialized.
@@ -495,6 +496,7 @@ class ConversationEnsemble:
         neutral_head: Sequence[Sequence[float]] | None = None,
         warp: Callable[[dict[str, float], float], BehaviorCue] | None = None,
         interval_s: float = 0.25,
+        release_on_silence: bool = False,
     ) -> None:
         """Attach an optional audio-driven channel for one verbal performer.
 
@@ -513,6 +515,8 @@ class ConversationEnsemble:
             raise ValueError("speech dispatch interval must be within 0.01..5 seconds")
         if neutral_head is None and warp is None:
             raise ValueError("Reachy speech requires a neutral pose or explicit warp")
+        if type(release_on_silence) is not bool or (release_on_silence and warp is None):
+            raise ValueError("silent release requires a reviewed native warp")
         if neutral_head is not None and (
             len(neutral_head) != 4 or any(len(row) != 4 for row in neutral_head)
         ):
@@ -523,6 +527,7 @@ class ConversationEnsemble:
             warp,
         )
         self._speech_intervals[performer_id] = float(interval_s)
+        self._speech_release_on_silence[performer_id] = release_on_silence
 
     async def _stop_slots(self, names: tuple[str, ...], *, graceful: bool = False):
         active = [(n, self._slots.pop(n)) for n in names if n in self._slots]
@@ -658,6 +663,7 @@ class ConversationEnsemble:
         with slot.scope:
             index = 0
             last_dispatched: tuple[str, int] | None = None
+            silence_released = False
             started = anyio.current_time()
             try:
                 while True:
@@ -685,7 +691,10 @@ class ConversationEnsemble:
                         continue
                     # Later fresh PCM features replace unsent hops; neither
                     # replay a dispatched sequence nor animate VAD inactivity.
-                    if values.get("active") is False:
+                    if values.get("active") is False and (
+                        not self._speech_release_on_silence.get(name, False)
+                        or last_dispatched is None or silence_released
+                    ):
                         await anyio.sleep(interval)
                         continue
                     identity = (str(values.get("stream_id", "")), values.get("sequence"))
@@ -743,6 +752,7 @@ class ConversationEnsemble:
                     slot.status = "active"
                     slot.evidence = "speech_envelope_dispatch"
                     last_dispatched = identity
+                    silence_released = values.get("active") is False
                     index += 1
                     if anyio.current_time() - started > interval:
                         # Another performer held the gate past this interval.

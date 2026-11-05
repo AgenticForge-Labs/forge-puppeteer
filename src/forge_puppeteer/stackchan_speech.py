@@ -9,6 +9,7 @@ here calls an SDK, opens hardware or schedules a task.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from .behavior_contract import BehaviorCue
@@ -81,3 +82,26 @@ class StackChanSpeechFacePreview:
             operation="face",
             parameters={"mouth": {"weight": weight}},
         )
+
+
+
+def stackchan_native_mouth_cue(
+    values: Mapping[str, object], _amplitude: float,
+) -> BehaviorCue:
+    """One SDK-valid latest-hop mouth target; no second modifier scheduler.
+
+    Used only for operator-enabled smooth_v2 speaking. The native SDK owns
+    firmware capability checks and completion, not this pure formatter.
+    """
+    level = values.get("mouth")
+    if isinstance(level, bool) or not isinstance(level, (float, int)):
+        raise ValueError("StackChan mouth level must be numeric")
+    if not math.isfinite(level) or not 0 <= level <= 1:
+        raise ValueError("StackChan mouth level must be normalized")
+    active = values.get("active")
+    if type(active) is not bool:
+        raise ValueError("StackChan speech activity required")
+    weight = round(75 * level) if active else 0
+    return BehaviorCue(
+        at_s=0.0, operation="face", parameters={"mouth": {"weight": weight}},
+    )
