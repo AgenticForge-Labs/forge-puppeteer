@@ -119,7 +119,10 @@ class SpeechExpressionShaper:
             raise ValueError("out-of-order or missing audio envelope hop")
         self._next_sequence += 1
         t = item.offset_ms / 1000.0
-        level = item.intensity
+        # A silent/inactive hop can retain a nonzero smoothed intensity from
+        # the producer. It must not produce motion solely from that residual.
+        # Keep the existing active-hop oscillator and phase behavior unchanged.
+        level = item.intensity if item.active else 0.0
         channels = {
             name: max(-1.0, min(1.0, level * CHANNEL_WEIGHTS[name] * math.sin(
                 math.tau * frequency * t + self._phases[name]
