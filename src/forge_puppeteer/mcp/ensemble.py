@@ -29,6 +29,8 @@ def create_ensemble_server(
     name: str = "Forge Puppeteer Ensemble",
     motion_enabled: bool = False,
     presentation_presets: Mapping[str, Mapping[str, BehaviorCue]] | None = None,
+    speech_driven_performers: tuple[str, ...] = (),
+    speech_neutral_heads: Mapping[str, object] | None = None,
 ) -> MCPServer:
     """An opt-in single-room stdio server with operator startup gate.
 
@@ -43,6 +45,37 @@ def create_ensemble_server(
         raise RuntimeError("Install forge-puppeteer[mcp] for ensemble tools") from exc
 
     speech_window = SpeechEnvelopeWindow()
+    # Opt-in audio-driven wording texture. Disabled unless every bound
+    # performer was explicitly authorized by the operator config.
+    speech_driven = frozenset(speech_driven_performers or ())
+    if not speech_driven <= set(ensemble.packs):
+        raise ValueError("speech-driven performers must be configured performers")
+
+    class _WindowChannel:
+        """Adapter exposing only the latest unitless channels to the ensemble."""
+
+        def __init__(self, performer_id: str) -> None:
+            self._performer_id = performer_id
+
+        def latest(self) -> dict[str, float] | None:
+            latest = speech_window.latest(self._performer_id)
+            if latest is None:
+                return None
+            return {
+                "pitch": latest.pitch, "yaw": latest.yaw, "roll": latest.roll,
+                "z": latest.z, "antenna": latest.antenna,
+            }
+
+    for performer in sorted(speech_driven):
+        if performer == "stackchan":
+            ensemble.bind_speech_channel(
+                performer, _WindowChannel(performer), amplitude=0.08,
+            )
+        else:
+            ensemble.bind_speech_channel(
+                performer, _WindowChannel(performer), amplitude=0.09,
+                neutral_head=(speech_neutral_heads or {}).get(performer),
+            )
     # This is operator-selected trusted code/data, never LLM-provided cues.
     presets = {name: dict(options) for name, options in (presentation_presets or {}).items()}
     if any(name not in ensemble.packs or not options for name, options in presets.items()):

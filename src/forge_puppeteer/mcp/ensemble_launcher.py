@@ -125,6 +125,9 @@ class EnsembleConfig(BaseModel):
     presence_ttl_s: float = Field(default=30, ge=1, le=3600)
     stop_timeout_s: float = Field(default=5, ge=0.1, le=60)
     stackchan_speaking_mode: Literal["legacy_size", "native_weight"] = "legacy_size"
+    # Operator opt-in: performers whose speaking slot follows the live
+    # generated-PCM envelope instead of the authored pattern.
+    speech_driven_performers: tuple[str, ...] = ()
     reachy_expression_style: Literal["classic", "expressive"] = "classic"
     reachy_startup_behavior: Literal["none", "wake_up_if_sleeping"] = "none"
     reachy_neutral_antennas_rad: tuple[float, float] | None = None
@@ -472,6 +475,13 @@ def serve(config_path: str | Path) -> None:
     if config.stackchan.asset_root:
         # Operator-selected native asset pack; the SDK validates and pins it.
         recorded = stackchan_recorded_assets(config.stackchan.asset_root)
+    # Opt-in audio-driven wording; operator config, never a tool argument.
+    speech_driven = tuple(getattr(config, "speech_driven_performers", ()) or ())
+    speech_neutral = {}
+    if speech_driven and "reachy" in speech_driven:
+        speech_neutral["reachy"] = json.loads(
+            Path(config.reachy_neutral_head).read_text()
+        )
     stack_pack = stackchan_conversation_pack(
         config.stackchan.instance_id,
         speaking_mode=config.stackchan_speaking_mode,
@@ -488,6 +498,8 @@ def serve(config_path: str | Path) -> None:
     create_ensemble_server(
         runtime, ensemble, connected=connected,
         motion_enabled=True,
+        speech_driven_performers=speech_driven,
+        speech_neutral_heads=speech_neutral,
         presentation_presets=stackchan_display_presets(config),
     ).run(transport="stdio")
 

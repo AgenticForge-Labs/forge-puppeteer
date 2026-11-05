@@ -19,6 +19,8 @@ from pydantic import Field, model_validator
 from .robot_contracts import ContractModel
 
 SCHEMA = "forge.speech_envelope.v1"
+# An envelope older than this must not drive motion.
+_STALE_NS = 500_000_000
 HOP_MS = 50
 
 # Frequencies are an expressive texture, not joint-space or actuator rates.
@@ -202,6 +204,18 @@ class SpeechEnvelopeWindow:
             "timing_source": "generated_pcm",
             "physical_motion_dispatched": False,
         }
+
+    def latest(self, performer_id: str) -> ExpressionChannels | None:
+        """Unitless channels for one bound performer, or None when stale.
+
+        Staleness is wall-clock only: a room that stopped sending hops must
+        not keep a robot moving on an old envelope.
+        """
+        if self._received_at_ns is None:
+            return None
+        if (time.monotonic_ns() - self._received_at_ns) > _STALE_NS:
+            return None
+        return self._latest.get(performer_id)
 
     def snapshot(self) -> dict[str, object]:
         if self._latest_hop is None or self._received_at_ns is None:
