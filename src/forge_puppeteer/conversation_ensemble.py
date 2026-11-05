@@ -42,6 +42,9 @@ class _Slot:
     pending: bool = False
     action_done: anyio.Event = field(default_factory=anyio.Event)
     action_count: int = 0
+    # Set at the start of a transition stop, before the scope is cancelled,
+    # so a speech slot can finish between targets instead of mid-dispatch.
+    cancel_requested: bool = False
 
 
 def _tenths(value: float) -> int:
@@ -67,6 +70,7 @@ class ConversationEnsemble:
         caller_id: str = "conversation",
         presence_ttl_s: float = 30,
         stop_timeout_s: float = 5,
+        startup_settle_s: float = 0.0,
     ):
         if not caller_id or not 1 <= presence_ttl_s <= 3600 or not 0.1 <= stop_timeout_s <= 60:
             raise ValueError("invalid conversation coordinator settings")
@@ -113,6 +117,11 @@ class ConversationEnsemble:
             performer_id for performer_id, pack in self.packs.items()
             if pack.startup is not None
         }
+        # The first spoken turn waits until startup motion has finished, so an
+        # opening greeting never talks over a wake-up or a neutral rise.
+        self._startup_settle_s = float(startup_settle_s)
+        self._startup_done = anyio.Event()
+        self._startup_deadline: float | None = None
 
     @asynccontextmanager
     async def run(self):
@@ -232,9 +241,18 @@ class ConversationEnsemble:
                     if name in self._owned and (transition or newly_owned) and name not in self._slots:
                         if name in self._startup_pending:
                             self._startup_pending.discard(name)
+                            # Startup motion owns the robot until it settles;
+                            # the first spoken turn must not talk over it.
+                            self._mark_startup_pending()
                             self._spawn(
                                 name, "startup", f"{event.session_id}-{event.sequence}",
                                 resume=True,
+                            )
+                        elif event.state == "speaking" and not self.startup_complete():
+                            # Defer the opening turn rather than interrupting
+                            # the rise to neutral.
+                            self._spawn_deferred_speaking(
+                                name, f"{event.session_id}-{event.sequence}",
                             )
                         else:
                             self._spawn(name, event.state, f"{event.session_id}-{event.sequence}")
@@ -353,6 +371,59 @@ class ConversationEnsemble:
             )
             return {"outcome": "accepted", **self.snapshot()}
 
+    def _spawn_deferred_speaking(
+        self, name: str, action_id: str, *, resume: bool = False,
+    ) -> None:
+        """Start the speaking slot only after startup motion has settled."""
+        if self._tasks is None:
+            return
+        scope = anyio.CancelScope()
+        slot = _Slot(scope=scope, behavior="speaking", expression_active=resume)
+        self._slots[name] = slot
+
+        async def wait_then_play() -> None:
+            # The wait itself must be interruptible: an operator interrupt
+            # during the settle window has to cancel the deferred greeting.
+            # The scope is entered for the wait only, because both callees
+            # open their own 'with' block on it.
+            with scope:
+                while not self.startup_complete():
+                    if self._session is None or self._state == "disconnected":
+                        slot.done.set()
+                        return
+                    await anyio.sleep(0.1)
+            if scope.cancel_called:
+                slot.done.set()
+                return
+            pattern = self.packs[name].behaviors.get("speaking")
+            if pattern is None:
+                slot.done.set()
+                return
+            if name in self._speech_channels:
+                await self._play_speech_driven(name, pattern, slot, action_id)
+            else:
+                await self._play(
+                    name, "speaking", pattern, slot, action_id, resume,
+                )
+
+        self._tasks.start_soon(wait_then_play)
+
+    def startup_complete(self) -> bool:
+        """True once startup motion settled, or when no performer needs it.
+
+        ``_startup_deadline`` is unset until a startup action is actually
+        spawned. A fresh room has no startup work yet, so treat that as
+        not-yet-ready while any startup is still pending: this keeps the very
+        first presence event (which carries the greeting) from racing the
+        startup action that is spawned in the same call.
+        """
+        if self._startup_deadline is None:
+            return not self._startup_pending
+        return anyio.current_time() >= self._startup_deadline
+
+    def _mark_startup_pending(self) -> None:
+        self._startup_deadline = anyio.current_time() + self._startup_settle_s
+
     def _acquire_owner(self, name: str) -> bool:
         if name in self._owned or name in self._blocked or self._session is None:
             return False
@@ -388,6 +459,10 @@ class ConversationEnsemble:
         if pattern is None:
             return  # Missing device behavior is unsupported, never substituted.
         if behavior == "speaking" and name in self._speech_channels:
+            if not self.startup_complete():
+                # Startup motion owns the robot; defer rather than talk over it.
+                self._spawn_deferred_speaking(name, action_id, resume=resume)
+                return
             scope = anyio.CancelScope()
             slot = _Slot(scope=scope, behavior=behavior, expression_active=resume)
             self._slots[name] = slot
@@ -457,6 +532,7 @@ class ConversationEnsemble:
                     with anyio.move_on_after(grace):
                         await slot.action_done.wait()
         for _, slot in active:
+            slot.cancel_requested = True
             slot.scope.cancel()
         for name, slot in active:
             with anyio.move_on_after(self.stop_timeout_s) as deadline:
@@ -483,6 +559,18 @@ class ConversationEnsemble:
                         # while the next SDK action is being admitted.
                         slot.status = "starting"
                         slot.evidence = "resuming_presence_behavior"
+                        if self._state == "speaking" and not self.startup_complete():
+                            # The resume itself may be the startup rise that
+                            # just settled; the greeting still waits for the
+                            # settle window instead of talking over it.
+                            slot.status = "holding"
+                            slot.evidence = "deferred_until_startup_settles"
+                            resume_id = f"{action_id}-resume"
+                            await self._retire_slot(name, slot)
+                            self._spawn_deferred_speaking(
+                                name, resume_id, resume=True,
+                            )
+                            return
                         await self._execute_pattern(
                             name, self._state, background, slot, f"{action_id}-resume"
                         )
@@ -518,6 +606,18 @@ class ConversationEnsemble:
                     self._blocked.add(name)
                 slot.done.set()
 
+    async def _retire_slot(self, name: str, slot: _Slot) -> None:
+        """Vacate a slot the ensemble is handing to a replacement coroutine.
+
+        The caller has already committed to spawning a successor, so this only
+        removes the bookkeeping entry; it deliberately does not cancel or STOP
+        (the action is complete) and does not mark the performer blocked.
+        """
+        current = self._slots.get(name)
+        if current is slot:
+            self._slots.pop(name, None)
+        slot.done.set()
+
     async def _play_speech_driven(
         self, name: str, pattern: BehaviorPattern, slot: _Slot, action_id: str,
     ) -> None:
@@ -534,8 +634,18 @@ class ConversationEnsemble:
         interval = self._speech_intervals.get(name, self._speech_interval_s)
         with slot.scope:
             index = 0
+            started = anyio.current_time()
             try:
                 while True:
+                    # A transition cancels this scope while we are asleep
+                    # between targets. Exit here, before admitting another
+                    # action, so the slot is cleanly finished rather than
+                    # torn down mid-dispatch (which would look like an
+                    # unconfirmed STOP and quarantine the performer).
+                    if slot.cancel_requested:
+                        slot.status = "completed"
+                        slot.evidence = "speech_presence_transition"
+                        return
                     values = channel.latest()
                     if values is None:
                         slot.status = "active"
@@ -605,8 +715,21 @@ class ConversationEnsemble:
                         self._dispatch_overruns += 1
                     await anyio.sleep(interval)
             finally:
-                slot.status = "completed"
-                slot.evidence = "behavior_pattern_finished"
+                if slot.pending:
+                    # A cancelled slot must still report the real outcome: the
+                    # device call has not returned yet, so end the slot only
+                    # after the in-flight target settles. Otherwise the next
+                    # performer acquires the shared gate while this device is
+                    # still busy.
+                    with anyio.CancelScope(shield=True):
+                        with anyio.move_on_after(self.stop_timeout_s):
+                            await slot.action_done.wait()
+                if slot.status not in {"blocked", "unavailable"}:
+                    slot.status = "completed"
+                    slot.evidence = "behavior_pattern_finished"
+                # Without this the transition stop waits for the full timeout
+                # and then quarantines a perfectly healthy performer.
+                slot.done.set()
 
     def _speech_cue(
         self, values: dict[str, float], amplitude: float, name: str,
@@ -678,10 +801,14 @@ class ConversationEnsemble:
                 # Runtime.submit validates authority and resource ownership BEFORE
                 # it admits the request. Never send device STOP when that admission
                 # was denied: another controller may own the robot.
-                await self.runtime.submit(request)
-                slot.pending = True
-                slot.action_done = anyio.Event()
-                record = await self.runtime.wait(request.id)
+                # Every performer shares one serialized runtime, so a target
+                # is held across submit *and* execution. Without this two
+                # robots' patterns overlap and contend for the same device.
+                async with self._dispatch_gate:
+                    await self.runtime.submit(request)
+                    slot.pending = True
+                    slot.action_done = anyio.Event()
+                    record = await self.runtime.wait(request.id)
                 slot.pending = record.state == ActionState.UNKNOWN
                 slot.action_done.set()
                 slot.action_count += 1

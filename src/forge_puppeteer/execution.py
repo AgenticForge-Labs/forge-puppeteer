@@ -249,6 +249,9 @@ class ExecutionRuntime:
             db = self._ownership_db
             try:
                 db.execute("BEGIN IMMEDIATE")
+                # Any admitted-but-unsettled action keeps the performer busy,
+                # including one admitted by a process that later crashed: its
+                # physical outcome is unknown until an operator reconciles it.
                 activity = db.execute(
                     "SELECT 1 FROM performer_activity WHERE performer_id=? LIMIT 1",
                     (performer_id,),
@@ -318,6 +321,9 @@ class ExecutionRuntime:
             ).fetchone()
         except sqlite3.Error:
             return False
+        # An activity row means an admission from that owner is unresolved,
+        # so the performer stays quarantined until reconciliation. This holds
+        # even when the owner process died: its physical outcome is unknown.
         if activity is not None:
             return False
         return not any(
@@ -331,6 +337,12 @@ class ExecutionRuntime:
     ) -> None:
         """Replace a stale owner row, recording both identities for audit."""
         db = self._ownership_db
+        # Drop the dead owner's activity rows too, otherwise they keep
+        # reporting the performer busy after the owner is gone.
+        db.execute(
+            "DELETE FROM performer_activity WHERE performer_id=? AND process_id=?",
+            (performer_id, row[2]),
+        )
         db.execute(
             "DELETE FROM performer_owners WHERE performer_id=? "
             "AND caller_id=? AND session_id=? AND process_id=?",

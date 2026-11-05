@@ -33,6 +33,7 @@ def create_ensemble_server(
     speech_driven_performers: tuple[str, ...] = (),
     speech_neutral_heads: Mapping[str, object] | None = None,
     speech_seeds: Mapping[str, int] | None = None,
+    startup_settle_s: float = 0.0,
 ) -> MCPServer:
     """An opt-in single-room stdio server with operator startup gate.
 

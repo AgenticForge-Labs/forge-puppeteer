@@ -47,12 +47,20 @@ def test_reachy_native_pack_uses_exact_sdk_ops_and_asset_pins():
     assert pack.behaviors["no"].cues[0].asset_id == "reachy/no1"
     assert pack.behaviors["speaking"].cues[0].operation == "head_pose"
     z = [cue.parameters["pose"][2][3] for cue in pack.behaviors["idle"].cues]
-    assert pack.behaviors["idle"].period_s == 10.0  # 0.1 Hz breathing
-    assert len(z) == 20
+    idle = pack.behaviors["idle"]
+    assert idle.period_s == 10.0  # 0.1 Hz breathing
+    # One breath per period, sampled at the spacing the shared runtime can
+    # actually deliver: cues offered faster than that are dropped and read as
+    # a jittery head rather than a breath.
+    from forge_puppeteer.conversation_native import IDLE_BREATH_SAMPLE_S
+    assert len(z) == round(10.0 / IDLE_BREATH_SAMPLE_S)
+    offsets = [cue.at_s for cue in idle.cues]
+    assert offsets == sorted(offsets)
+    assert all(b - a == pytest.approx(IDLE_BREATH_SAMPLE_S) for a, b in zip(offsets, offsets[1:]))
     assert z[0] == pytest.approx(0)
-    assert max(z) == pytest.approx(0.004)
-    assert min(z) == pytest.approx(-0.004)
-    assert all(abs(v) <= 0.004 for v in z)
+    assert max(z) == pytest.approx(0.004, abs=1e-3)
+    assert min(z) == pytest.approx(-0.004, abs=1e-3)
+    assert all(abs(v) <= 0.004 + 1e-9 for v in z)
     # All recorded cues remain pinned; never inherit upstream random fallbacks.
     for pattern in pack.behaviors.values():
         for cue in pattern.cues:
@@ -561,3 +569,148 @@ async def test_attributed_envelope_feeds_only_its_own_performer():
     window.accept(frames, performer_ids=("reachy",))
     assert window.latest("reachy") is not None
     assert window.latest("stackchan") is None
+
+
+@pytest.mark.anyio
+async def test_first_speaking_waits_for_startup_to_settle():
+    """The opening greeting must not talk over the rise to neutral."""
+
+    class Channel:
+        def latest(self):
+            return {"yaw": 0.4, "pitch": 0.4, "roll": 0.0, "z": 0.0, "antenna": 0.0}
+
+    class Provider:
+        def __init__(self):
+            self.calls = []
+
+        async def validate(self, request):
+            return None
+
+        async def execute(self, request):
+            from forge_puppeteer.execution import Completion
+            self.calls.append((request.operation, request.cue_id))
+            return Completion("ok")
+
+        def resources_for(self, request):
+            return ("head.pose",)
+
+        async def stop(self):
+            from forge_puppeteer.execution import StopResult
+            return StopResult(True, "stopped")
+
+    provider = Provider()
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("reachy", provider)
+    pack = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1", "no1"),
+        wake_up_if_sleeping=True,
+    )
+    ensemble = ConversationEnsemble(runtime, [pack], startup_settle_s=0.5)
+    ensemble.bind_speech_channel(
+        "reachy", Channel(), amplitude=0.12, neutral_head=NEUTRAL, interval_s=0.05,
+    )
+
+    def presence(seq, state):
+        return EnsemblePresence(
+            event_id=f"event-{seq}", session_id="gate-room",
+            sequence=seq, state=state, source="agent_state",
+        )
+
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(presence(0, "speaking"))
+        # Startup owns the robot first; speaking must not dispatch yet.
+        await anyio.sleep(0.15)
+        startup_cues = [c for c in provider.calls if (c[1] or "").startswith("startup")]
+        speaking_cues = [c for c in provider.calls if (c[1] or "").startswith("speaking")]
+        assert startup_cues, "startup motion should run first"
+        assert not speaking_cues, f"spoke before startup settled: {speaking_cues}"
+        # After the settle window the speaking slot is allowed to run.
+        await anyio.sleep(0.7)
+        assert any((c[1] or "").startswith("speaking") for c in provider.calls)
+        await ensemble.observe(presence(1, "listening"))
+        await anyio.sleep(0.05)
+
+
+@pytest.mark.anyio
+async def test_transition_after_speech_never_quarantines_performer():
+    """A normal presence transition must not block the robot.
+
+    The speech loop used to never signal completion, so every transition
+    waited out the stop timeout and then quarantined a healthy performer.
+    Idle then never ran again and only one speaking target was ever seen.
+    """
+
+    class Channel:
+        def latest(self):
+            return {"yaw": 0.3, "pitch": 0.3, "roll": 0.0, "z": 0.0, "antenna": 0.0}
+
+    class Provider:
+        def __init__(self):
+            self.calls = []
+
+        async def validate(self, request):
+            return None
+
+        async def execute(self, request):
+            from forge_puppeteer.execution import Completion
+            self.calls.append(request.cue_id)
+            return Completion("ok")
+
+        def resources_for(self, request):
+            return ("head.pose", "antennas.left", "antennas.right", "body.yaw")
+
+        async def stop(self):
+            from forge_puppeteer.execution import StopResult
+            return StopResult(True, "stopped")
+
+    provider = Provider()
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("reachy", provider)
+    pack = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1", "no1"),
+    )
+    ensemble = ConversationEnsemble(runtime, [pack])
+    ensemble.bind_speech_channel(
+        "reachy", Channel(), amplitude=0.12, neutral_head=NEUTRAL, interval_s=0.02,
+    )
+
+    def presence(seq, state):
+        return EnsemblePresence(
+            event_id=f"event-{seq}", session_id="transition-room",
+            sequence=seq, state=state, source="agent_state",
+        )
+
+    async with runtime.run(), ensemble.run():
+        for seq, state in enumerate(("listening", "idle", "speaking", "idle")):
+            result = await ensemble.observe(presence(seq, state))
+            # Long enough for a cue to land even when the idle sample spacing
+            # is the full measured 1.6 s.
+            await anyio.sleep(2.0)
+            status = result["performers"]["reachy"]["status"]
+            assert status != "blocked", f"{state} quarantined the performer"
+        cues = [cue.split(":")[0] for cue in provider.calls]
+        assert cues.count("idle") >= 2, f"idle did not resume: {cues}"
+        assert cues.count("speaking") >= 1, f"no speech target ran: {cues}"
+
+
+def test_idle_breath_loop_does_not_snap_the_head():
+    """The 10 s idle loop must end where it started.
+
+    A sine sampled at the achievable target spacing never lands back on
+    neutral, so wrapping the loop snapped the head by most of the breath
+    amplitude every cycle. That read as a twitch rather than breathing.
+    """
+    pack = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1", "no1"), breath_amplitude_m=0.004,
+    )
+    idle = pack.behaviors["idle"]
+    z = [cue.parameters["pose"][2][3] for cue in idle.cues]
+    assert z[0] == pytest.approx(0.0)
+    assert z[-1] == pytest.approx(0.0)
+    # The breath still actually moves within the cycle.
+    assert min(z) < -0.002 < 0.002 < max(z)
+    offsets = [cue.at_s for cue in idle.cues]
+    assert all(b - a < idle.period_s for a, b in zip(offsets, offsets[1:]))

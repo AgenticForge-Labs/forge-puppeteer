@@ -153,6 +153,12 @@ def _reachy_move(at_s: float, name: str, revision: str) -> BehaviorCue:
     )
 
 
+# Measured achievable target spacing for one performer on the shared runtime.
+IDLE_BREATH_SAMPLE_S = 1.6
+# Number of samples per 10 s breath cycle; derived so the loop closes cleanly.
+IDLE_BREATH_SAMPLES = 6
+
+
 def reachy_conversation_pack(
     performer_id: str,
     *,
@@ -254,12 +260,22 @@ def reachy_conversation_pack(
         # 0.1 Hz breathing from 20 monotonic samples per 10-second cycle.
         # The native SDK interpolates each bounded target; Puppeteer owns the
         # loop and never writes raw servo positions or bypasses SDK validation.
+        # One 10 s breath, sampled at the rate the shared runtime can actually
+        # deliver. Measured on hardware, two performers on one serialized
+        # runtime manage a target roughly every 1.4-1.7 s; sampling faster only
+        # produced dropped cues, which read as a jittery head rather than a
+        # breath. The curve is unchanged, only its sample spacing.
         "idle": _pattern(tuple(
             head_cue(
-                index * 0.5,
-                z=breath_amplitude_m * math.sin(2 * math.pi * index / 20),
+                index * IDLE_BREATH_SAMPLE_S,
+                # A sine sampled this coarsely never lands back on neutral, so
+                # the cycle would snap the head when it wraps. The final sample
+                # is therefore exactly neutral, which closes the 10 s loop.
+                z=breath_amplitude_m * math.sin(
+                    2 * math.pi * index * IDLE_BREATH_SAMPLE_S / 10.0
+                ) * (0.0 if index == IDLE_BREATH_SAMPLES - 1 else 1.0),
             )
-            for index in range(20)
+            for index in range(IDLE_BREATH_SAMPLES)
         ), period_s=10.0),
         "listening": BehaviorPattern(source="procedural", mode="hold", cues=()) if listening_mode == "hold" else _pattern((
             head_cue(0.0, pitch=listening_tilt_rad),
