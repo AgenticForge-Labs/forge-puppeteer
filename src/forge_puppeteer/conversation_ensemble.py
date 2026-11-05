@@ -514,10 +514,12 @@ class ConversationEnsemble:
     ) -> None:
         """Dispatch bounded targets from the live speech envelope.
 
-        Only the speaking slot uses this. It reuses the same runtime, action
-        journal and STOP path; the envelope merely chooses the next target.
-        A stale or missing envelope falls back to the authored cue at that
-        index, so losing the tap degrades the texture without a silent stop.
+        Only the speaking slot uses this. Same runtime, journal and STOP path
+        as any other motion; the envelope merely chooses the next target.
+
+        When the envelope is stale the slot goes quiet instead of replaying
+        the authored pattern: the authored pattern is a *loop*, and running
+        it inside this finite slot would never stop.
         """
         channel, amplitude, _neutral, warp = self._speech_channels[name]
         interval = self._speech_intervals.get(name, self._speech_interval_s)
@@ -527,8 +529,11 @@ class ConversationEnsemble:
                 while True:
                     values = channel.latest()
                     if values is None:
-                        cue = pattern.cues[index % len(pattern.cues)]
-                    elif warp is not None:
+                        slot.status = "active"
+                        slot.evidence = "awaiting_speech_envelope"
+                        await anyio.sleep(interval)
+                        continue
+                    if warp is not None:
                         # Operator-supplied mapping, e.g. the firmware port
                         # which picks its own subtle nod or sway.
                         cue = warp(values, amplitude)
@@ -569,23 +574,17 @@ class ConversationEnsemble:
     def _speech_cue(
         self, values: dict[str, float], amplitude: float, name: str,
     ) -> BehaviorCue:
+        """Reachy mapping: one tapper hop around the operator's neutral pose."""
         levels = {key: max(-1.0, min(1.0, value)) for key, value in values.items()}
-        if name == "stackchan":
-            yaw = _tenths(levels.get("yaw", 0.0) * amplitude * 100)
-            pitch = _tenths(-levels.get("pitch", 0.0) * amplitude * 60)
-            return BehaviorCue(
-                at_s=0.0, operation="head",
-                parameters={
-                    "yaw": {"angle": yaw, "speed": 200},
-                    "pitch": {"angle": 450 + pitch, "speed": 200},
-                },
-            )
         neutral = self._speech_channels[name][2]
         if neutral is None:
             raise ValueError("audio-driven Reachy motion requires a neutral head")
-        pose = _head(neutral, pitch_rad=levels.get("pitch", 0.0) * amplitude,
-                     yaw_rad=levels.get("yaw", 0.0) * amplitude,
-                     roll_rad=levels.get("roll", 0.0) * amplitude * 0.5)
+        pose = _head(
+            neutral,
+            pitch_rad=levels.get("pitch", 0.0) * amplitude,
+            yaw_rad=levels.get("yaw", 0.0) * amplitude,
+            roll_rad=levels.get("roll", 0.0) * amplitude * 0.5,
+        )
         return BehaviorCue(
             at_s=0.0, operation="head_pose",
             parameters={"pose": pose, "duration_s": 0.3},

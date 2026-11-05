@@ -400,7 +400,10 @@ async def test_speech_channel_drives_speaking_without_changing_other_slots():
     runtime.register("stackchan", provider)
     pack = stackchan_conversation_pack("stackchan")
     ensemble = ConversationEnsemble(runtime, [pack])
-    ensemble.bind_speech_channel("stackchan", Channel(), amplitude=0.08)
+    ensemble.bind_speech_channel(
+        "stackchan", Channel(), amplitude=0.08,
+        warp=stackchan_firmware_warp(seed=7), interval_s=0.05,
+    )
 
     def presence(seq, state):
         return EnsemblePresence(
