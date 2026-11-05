@@ -336,3 +336,19 @@ def test_new_performer_requires_stream_boundary_and_zero_sequence():
     with pytest.raises(ValueError, match="start at zero"):
         window.accept([sample(1, stream_id="new")], performer_ids=("reachy",))
     window.accept([sample(0, stream_id="new")], performer_ids=("reachy",))
+
+
+def test_each_performer_has_independent_envelope_expiry(monkeypatch):
+    import forge_puppeteer.speech_expression as speech
+
+    now = [1_000_000_000]
+    monkeypatch.setattr(speech.time, "monotonic_ns", lambda: now[0])
+    window = SpeechEnvelopeWindow()
+    window.accept([sample(0)], performer_ids=("reachy", "stackchan"))
+    now[0] += 400_000_000
+    window.accept([sample(1)], performer_ids=("reachy",))
+    now[0] += 110_000_000
+    assert window.latest("reachy") is not None
+    assert window.latest("stackchan") is None
+    now[0] += 400_000_000
+    assert window.latest("reachy") is None
