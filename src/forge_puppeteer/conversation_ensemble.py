@@ -509,8 +509,8 @@ class ConversationEnsemble:
         # before any presence event can admit SDK motion.
         if not math.isfinite(amplitude) or not 0 <= amplitude <= 1:
             raise ValueError("speech amplitude must be finite and within 0..1 rad")
-        if not math.isfinite(interval_s) or not 0.05 <= interval_s <= 5:
-            raise ValueError("speech dispatch interval must be within 0.05..5 seconds")
+        if not math.isfinite(interval_s) or not 0.01 <= interval_s <= 5:
+            raise ValueError("speech dispatch interval must be within 0.01..5 seconds")
         if neutral_head is None and warp is None:
             raise ValueError("Reachy speech requires a neutral pose or explicit warp")
         if neutral_head is not None and (
