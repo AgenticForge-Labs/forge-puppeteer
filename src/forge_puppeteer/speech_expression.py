@@ -93,13 +93,20 @@ class SpeechExpressionShaper:
     new instance for a new utterance or after an interruption.
     """
 
-    def __init__(self, *, performer_id: str, stream_id: str) -> None:
+    def __init__(
+        self, *, performer_id: str, stream_id: str,
+        dynamics: Literal["legacy", "smoothed_v1"] = "legacy",
+    ) -> None:
         if not performer_id or len(performer_id) > 128:
             raise ValueError("performer_id must be a bounded nonempty string")
         if not stream_id or len(stream_id) > 128:
             raise ValueError("stream_id must be a bounded nonempty string")
+        if dynamics not in {"legacy", "smoothed_v1"}:
+            raise ValueError("unsupported speech dynamics")
         self.performer_id = performer_id
         self.stream_id = stream_id
+        self.dynamics = dynamics
+        self._smoothed_level = 0.0
         self._next_sequence = 0
         # Stable per-performer phases prevent three robots from moving in
         # mechanically identical lockstep while preserving shared speech timing.
@@ -123,6 +130,17 @@ class SpeechExpressionShaper:
         # the producer. It must not produce motion solely from that residual.
         # Keep the existing active-hop oscillator and phase behavior unchanged.
         level = item.intensity if item.active else 0.0
+        if self.dynamics == "smoothed_v1":
+            # One 50 ms hop per sample. First-order envelope following avoids
+            # hard jumps in speaking intensity; no delayed motion is emitted
+            # after VAD goes inactive, including on interrupted streams.
+            if not item.active:
+                self._smoothed_level = 0.0
+            else:
+                tau_s = 0.05 if level > self._smoothed_level else 0.25
+                alpha = 1.0 - math.exp(-0.05 / tau_s)
+                self._smoothed_level += alpha * (level - self._smoothed_level)
+            level = self._smoothed_level
         channels = {
             name: max(-1.0, min(1.0, level * CHANNEL_WEIGHTS[name] * math.sin(
                 math.tau * frequency * t + self._phases[name]

@@ -201,3 +201,59 @@ def test_inactive_nonzero_intensity_cannot_drive_residual_motion():
     assert any(getattr(resumed, axis) != 0 for axis in (
         "pitch", "yaw", "roll", "x", "y", "z",
     ))
+
+
+def test_smoothed_speech_attack_and_release_are_bounded():
+    legacy = SpeechExpressionShaper(performer_id="reachy", stream_id="utterance-1")
+    smooth = SpeechExpressionShaper(
+        performer_id="reachy", stream_id="utterance-1", dynamics="smoothed_v1",
+    )
+    samples = [sample(i, intensity=1.0, active=True) for i in range(3)]
+    original = [legacy.render(SpeechEnvelopeHop.model_validate(x)) for x in samples]
+    outputs = [smooth.render(SpeechEnvelopeHop.model_validate(x)) for x in samples]
+    assert all(x.mouth == 1 for x in original)
+    assert 0 < outputs[0].mouth < outputs[1].mouth < outputs[2].mouth < 1
+
+    release = smooth.render(SpeechEnvelopeHop.model_validate(
+        sample(3, intensity=0.0, active=True)
+    ))
+    assert 0 < release.mouth < outputs[-1].mouth
+    inactive = smooth.render(SpeechEnvelopeHop.model_validate(
+        sample(4, intensity=0.9, active=False)
+    ))
+    assert inactive.mouth == 0
+    assert all(getattr(inactive, name) == 0 for name in (
+        "pitch", "yaw", "roll", "x", "y", "z", "antenna",
+    ))
+
+
+def test_smoothed_dynamics_are_deterministic_and_opt_in():
+    a = SpeechExpressionShaper(
+        performer_id="reachy", stream_id="same", dynamics="smoothed_v1",
+    )
+    b = SpeechExpressionShaper(
+        performer_id="reachy", stream_id="same", dynamics="smoothed_v1",
+    )
+    for i in range(8):
+        hop = SpeechEnvelopeHop.model_validate(
+            sample(i, intensity=0.7 if i < 4 else 0.2, stream_id="same")
+        )
+        assert a.render(hop) == b.render(hop)
+    with pytest.raises(ValueError, match="unsupported"):
+        SpeechExpressionShaper(
+            performer_id="reachy", stream_id="same", dynamics="unknown",
+        )
+
+
+def test_smoothed_new_utterance_does_not_inherit_previous_envelope():
+    first = SpeechExpressionShaper(
+        performer_id="reachy", stream_id="one", dynamics="smoothed_v1",
+    )
+    first.render(SpeechEnvelopeHop.model_validate(sample(0, stream_id="one")))
+    second = SpeechExpressionShaper(
+        performer_id="reachy", stream_id="two", dynamics="smoothed_v1",
+    )
+    initial = second.render(SpeechEnvelopeHop.model_validate(
+        sample(0, stream_id="two", intensity=0.8)
+    ))
+    assert initial.mouth == pytest.approx(0.8 * (1 - math.exp(-1)))
