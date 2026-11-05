@@ -12,6 +12,7 @@ import hashlib
 import math
 import time
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -171,7 +172,17 @@ class SpeechEnvelopeWindow:
     read its unitless preview, but it cannot actuate a motor.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self, *,
+        performer_dynamics: Mapping[str, Literal["legacy", "smoothed_v1"]] | None = None,
+    ) -> None:
+        configured = dict(performer_dynamics or {})
+        if any(
+            not name or len(name) > 128 or mode not in {"legacy", "smoothed_v1"}
+            for name, mode in configured.items()
+        ):
+            raise ValueError("invalid per-performer speech dynamics")
+        self._performer_dynamics = configured
         self.clear()
 
     def clear(self) -> None:
@@ -222,6 +233,7 @@ class SpeechEnvelopeWindow:
             if existing is None or bound_stream != stream_id:
                 shapers[name] = SpeechExpressionShaper(
                     performer_id=name, stream_id=stream_id,
+                    dynamics=self._performer_dynamics.get(name, "legacy"),
                 )
             else:
                 shapers[name] = existing
