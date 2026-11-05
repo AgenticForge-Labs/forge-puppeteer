@@ -1,7 +1,8 @@
 # Provider-neutral, audio-reactive embodiment plan
 
-Status: **software primitives only**, not a connected audio-to-motor pipeline.
-The normal classic and expressive behavior packs remain unchanged.
+Status: **opt-in software-only SDK dispatch path on Puppeteer PR #40**,
+not an acoustically synchronized or hardware-qualified speech-to-motor system.
+The default classic and existing expressive behavior packs remain unchanged.
 Physical qualification is separate from source merge and CI.
 
 ## Authority and reuse
@@ -29,7 +30,9 @@ Physical qualification is separate from source merge and CI.
    Separate seeded phases prevent identical lockstep while preserving
    a common speech-driven envelope. Its optional room-owned MCP ingestion tool
    validates at most eight hops per batch and exposes read-only preview state.
-   There is **no actuator adapter** here.
+   The existing optional room-owned SDK execution path can now consume
+   selected features when the operator config explicitly enables a performer;
+   there is **no new actuator adapter, motor scheduler or default activation**.
 3. Puppeteer PR #19 merged a human-observed, offline reconciliation procedure
    that preserves historical UNKNOWN action outcomes and quarantine evidence.
 4. Puppeteer PR #20 remains an unmerged and physically unqualified measured
@@ -92,11 +95,13 @@ execute through the existing ExecutionRuntime and SDK.
   Conversationalist, preserve immediate interruption priority, room identity
   and current playback lifecycle evidence; never allow a feature queue to
   obstruct a semantic STOP event. Drop stale audio features, don't catch up.
-- The existing room-owned Puppeteer MCP child now exposes an **optional**
+- The existing room-owned Puppeteer MCP child exposes an **optional**
   versioned envelope-ingest tool. Conversationalist must negotiate that
-  capability on startup and send only bounded frames. The current ingestion
-  tool is preview-only. Do not automatically reinterpret generated PCM as
-  playback or issue motor commands.
+  capability on startup and send only bounded frames. Ingestion itself only
+  updates a validated observation window; the **separately operator-opted-in**
+  speaking slot may subsequently translate the most recent fresh feature
+  through the existing ExecutionRuntime/SDK. No implicit playback timing,
+  no additional motor authority and no direct LLM tool grant.
   Do not offer the envelope tool directly to the conversational LLM.
 - Establish mapping to LiveKit output playback accounting and the selected
   local EMEET speaker. Generated-PCM time by itself can lead physical sound
@@ -164,3 +169,17 @@ not a servo angle, mouth size, or actual phoneme. It remains disconnected
 from motion and from a production-calibrated speaker clock. Releasing speech
 proposes mouth weight 0, but verified stop/neutral remains the responsibility
 of the existing runtime and SDK when physical dispatch is eventually enabled.
+
+
+## PR #40 opt-in software dispatch clarification
+
+The branch adds independent performer envelope TTL and sequence state, prevents
+replaying an already dispatched hop, and prevents stale or inactive features
+from driving head targets. In optional StackChan `smooth_v2` speaking mode,
+a pure latest-hop mapper emits bounded firmware-native mouth-weight operations
+through the same ExecutionRuntime; one silence release closes the mouth.
+The existing `StackChanSpeechFacePreview` remains independently inert.
+No feature ingestion by itself authorizes motion. Reachy head and StackChan
+head/face motion retain SDK grants, runtime ownership, STOP uncertainty and
+quarantine. This is **generated audio timing**, not measured local speaker
+playout; exact physical synchronization remains for attended qualification.

@@ -17,6 +17,7 @@ from ..conversation_ensemble import ConversationEnsemble
 from ..conversation_native import stackchan_firmware_warp
 from ..execution import ExecutionRuntime
 from ..speech_expression import SpeechEnvelopeWindow
+from ..stackchan_speech import stackchan_native_mouth_cue
 
 if TYPE_CHECKING:
     from mcp.server import MCPServer
@@ -33,6 +34,8 @@ def create_ensemble_server(
     speech_driven_performers: tuple[str, ...] = (),
     speech_neutral_heads: Mapping[str, object] | None = None,
     speech_seeds: Mapping[str, int] | None = None,
+    speech_dynamics: Mapping[str, str] | None = None,
+    stackchan_performer_id: str | None = "stackchan",
     startup_settle_s: float = 0.0,
 ) -> MCPServer:
     """An opt-in single-room stdio server with operator startup gate.
@@ -47,7 +50,9 @@ def create_ensemble_server(
     except ImportError as exc:
         raise RuntimeError("Install forge-puppeteer[mcp] for ensemble tools") from exc
 
-    speech_window = SpeechEnvelopeWindow()
+    speech_window = SpeechEnvelopeWindow(performer_dynamics=speech_dynamics)
+    if set(speech_dynamics or {}) - set(ensemble.packs):
+        raise ValueError("speech dynamics refer to an unknown performer")
     # Opt-in audio-driven wording texture. Disabled unless every bound
     # performer was explicitly authorized by the operator config.
     speech_driven = frozenset(speech_driven_performers or ())
@@ -68,10 +73,22 @@ def create_ensemble_server(
             return {
                 "pitch": latest.pitch, "yaw": latest.yaw, "roll": latest.roll,
                 "z": latest.z, "antenna": latest.antenna,
+                "active": latest.active, "stream_id": latest.stream_id,
+                "sequence": latest.sequence, "mouth": latest.mouth,
             }
 
     for performer in sorted(speech_driven):
-        if performer == "stackchan":
+        if performer == stackchan_performer_id and (
+            (speech_dynamics or {}).get(performer) == "smoothed_v1"
+        ):
+            # Latest-hop smoothed mouth WEIGHT, including one release on
+            # silence. No duplicate firmware speaking modifier or motor loop.
+            ensemble.bind_speech_channel(
+                performer, _WindowChannel(performer), amplitude=0.08,
+                warp=stackchan_native_mouth_cue,
+                release_on_silence=True, interval_s=0.2,
+            )
+        elif performer == stackchan_performer_id:
             # Keep StackChan's own speaking character: the envelope gates the
             # timing, the firmware port chooses each subtle nod or sway. The
             # interval must stay well under a typical utterance, otherwise the

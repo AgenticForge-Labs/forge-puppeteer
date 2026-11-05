@@ -8,9 +8,11 @@ submits a motion. Device adapters and ExecutionRuntime retain authority.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import math
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -112,8 +114,15 @@ class SpeechExpressionShaper:
         # mechanically identical lockstep while preserving shared speech timing.
         phases: dict[str, float] = {}
         for name in FREQUENCIES_HZ:
+            # Native SwayRollRT.reset() retains seeded oscillator phases.
+            # Preserve that behavior across successive utterances for the
+            # opt-in smoothed renderer without altering legacy stream texture.
+            phase_owner = (
+                f"{performer_id}:persistent" if dynamics == "smoothed_v1"
+                else f"{performer_id}:{stream_id}"
+            )
             digest = hashlib.sha256(
-                f"{performer_id}:{stream_id}:{name}".encode()
+                f"{phase_owner}:{name}".encode()
             ).digest()
             phases[name] = math.tau * int.from_bytes(digest[:8], "big") / (2**64)
         self._phases = phases
@@ -171,7 +180,17 @@ class SpeechEnvelopeWindow:
     read its unitless preview, but it cannot actuate a motor.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self, *,
+        performer_dynamics: Mapping[str, Literal["legacy", "smoothed_v1"]] | None = None,
+    ) -> None:
+        configured = dict(performer_dynamics or {})
+        if any(
+            not name or len(name) > 128 or mode not in {"legacy", "smoothed_v1"}
+            for name, mode in configured.items()
+        ):
+            raise ValueError("invalid per-performer speech dynamics")
+        self._performer_dynamics = configured
         self.clear()
 
     def clear(self) -> None:
@@ -185,6 +204,7 @@ class SpeechEnvelopeWindow:
         self._latest: dict[str, ExpressionChannels] = {}
         self._latest_hop: SpeechEnvelopeHop | None = None
         self._received_at_ns: int | None = None
+        self._performer_received_at_ns: dict[str, int] = {}
 
     def accept(
         self, frames: list[dict[str, object]], *, performer_ids: tuple[str, ...],
@@ -201,42 +221,46 @@ class SpeechEnvelopeWindow:
         for index, hop in enumerate(parsed):
             if hop.stream_id != stream_id or hop.sequence != parsed[0].sequence + index:
                 raise ValueError("speech batch contains a gap or mixed stream")
-        # Continuity is tracked per performer. The window is room-wide while
-        # each performer receives its own attributed offers, so one performer's
-        # sequence must never gate another's.
-        previous_stream, previous_next = self._performer_sequences.get(
-            performer_ids[0], (stream_id, parsed[0].sequence)
-        )
-        new_stream = stream_id != previous_stream
-        expected = parsed[0].sequence if new_stream else previous_next
-        for hop in parsed:
-            if hop.sequence != expected:
-                raise ValueError("speech batch contains a gap or mixed stream")
-            expected += 1
-        # The source may switch at an explicit stream boundary, but cannot
-        # implicitly reset the sequence of an existing stream.
+        # Validate every addressed performer before mutating any shaper. A
+        # rejected batch must not partially advance another robot's stream.
+        for name in performer_ids:
+            bound = self._performer_sequences.get(name)
+            if bound is None:
+                if parsed[0].sequence != 0:
+                    raise ValueError("new performer stream must start at zero")
+            elif bound[0] == stream_id:
+                if parsed[0].sequence != bound[1]:
+                    raise ValueError("speech batch contains a gap or mixed stream")
+            elif parsed[0].sequence != 0:
+                raise ValueError("new speech stream must start at zero")
+
+        # Shapers are stateful: stage independent copies so an invalid batch
+        # cannot consume sequence numbers or smoothing state.
         shapers = {}
         for name in performer_ids:
-            bound_stream, _ = self._performer_sequences.get(name, (stream_id, 0))
+            bound = self._performer_sequences.get(name)
             existing = self._shapers.get(name)
-            if existing is None or bound_stream != stream_id:
+            if existing is None or bound is None or bound[0] != stream_id:
                 shapers[name] = SpeechExpressionShaper(
                     performer_id=name, stream_id=stream_id,
+                    dynamics=self._performer_dynamics.get(name, "legacy"),
                 )
             else:
-                shapers[name] = existing
+                shapers[name] = copy.deepcopy(existing)
         latest = {}
         for hop in parsed:
             latest = {name: shaper.render(hop) for name, shaper in shapers.items()}
+        expected = parsed[-1].sequence + 1
         self._shapers.update(shapers)
-        # Merge, never replace: an attributed batch updates only its own
-        # performer, otherwise one robot's envelope would erase the other's.
         self._latest.update(latest)
+        for name in performer_ids:
+            self._performer_sequences[name] = (stream_id, expected)
         self._stream_id = stream_id
         self._next_sequence = expected
-        self._performer_sequences[performer_ids[0]] = (stream_id, expected)
         self._latest_hop = parsed[-1]
         self._received_at_ns = time.monotonic_ns()
+        for name in performer_ids:
+            self._performer_received_at_ns[name] = self._received_at_ns
         return {
             "frames_accepted": len(parsed),
             "stream_id": stream_id,
@@ -253,7 +277,8 @@ class SpeechEnvelopeWindow:
         """
         if self._received_at_ns is None:
             return None
-        if (time.monotonic_ns() - self._received_at_ns) > _STALE_NS:
+        received_at = self._performer_received_at_ns.get(performer_id)
+        if received_at is None or time.monotonic_ns() - received_at > _STALE_NS:
             return None
         return self._latest.get(performer_id)
 
@@ -267,7 +292,7 @@ class SpeechEnvelopeWindow:
             "intensity": self._latest_hop.intensity,
             "active": self._latest_hop.active,
             "timing_source": "generated_pcm",
-            "stale": time.monotonic_ns() - self._received_at_ns > 750_000_000,
+            "stale": time.monotonic_ns() - self._received_at_ns > _STALE_NS,
             "performers": sorted(self._latest),
             "physical_motion_dispatched": False,
         }

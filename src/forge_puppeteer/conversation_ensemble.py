@@ -109,6 +109,7 @@ class ConversationEnsemble:
             str, tuple[object, float, list | None, object | None]
         ] = {}
         self._speech_intervals: dict[str, float] = {}
+        self._speech_release_on_silence: dict[str, bool] = {}
         # One device connection per performer, but the execution runtime is
         # shared. Targets that would run while another performer's target is
         # still executing contend for it, so dispatch is serialized.
@@ -495,6 +496,7 @@ class ConversationEnsemble:
         neutral_head: Sequence[Sequence[float]] | None = None,
         warp: Callable[[dict[str, float], float], BehaviorCue] | None = None,
         interval_s: float = 0.25,
+        release_on_silence: bool = False,
     ) -> None:
         """Attach an optional audio-driven channel for one verbal performer.
 
@@ -505,6 +507,16 @@ class ConversationEnsemble:
         """
         if performer_id not in self.packs:
             raise ValueError("speech channel requires a configured performer")
+        # Reject unsafe/undefined operator budgets at configuration time,
+        # before any presence event can admit SDK motion.
+        if not math.isfinite(amplitude) or not 0 <= amplitude <= 1:
+            raise ValueError("speech amplitude must be finite and within 0..1 rad")
+        if not math.isfinite(interval_s) or not 0.01 <= interval_s <= 5:
+            raise ValueError("speech dispatch interval must be within 0.01..5 seconds")
+        if neutral_head is None and warp is None:
+            raise ValueError("Reachy speech requires a neutral pose or explicit warp")
+        if type(release_on_silence) is not bool or (release_on_silence and warp is None):
+            raise ValueError("silent release requires a reviewed native warp")
         if neutral_head is not None and (
             len(neutral_head) != 4 or any(len(row) != 4 for row in neutral_head)
         ):
@@ -515,6 +527,7 @@ class ConversationEnsemble:
             warp,
         )
         self._speech_intervals[performer_id] = float(interval_s)
+        self._speech_release_on_silence[performer_id] = release_on_silence
 
     async def _stop_slots(self, names: tuple[str, ...], *, graceful: bool = False):
         active = [(n, self._slots.pop(n)) for n in names if n in self._slots]
@@ -649,6 +662,8 @@ class ConversationEnsemble:
         interval = self._speech_intervals.get(name, self._speech_interval_s)
         with slot.scope:
             index = 0
+            last_dispatched: tuple[str, int] | None = None
+            silence_released = False
             started = anyio.current_time()
             try:
                 while True:
@@ -672,6 +687,18 @@ class ConversationEnsemble:
                                 "speech_envelope_awaiting",
                                 extra={"performer_id": name, "interval_s": interval},
                             )
+                        await anyio.sleep(interval)
+                        continue
+                    # Later fresh PCM features replace unsent hops; neither
+                    # replay a dispatched sequence nor animate VAD inactivity.
+                    if values.get("active") is False and (
+                        not self._speech_release_on_silence.get(name, False)
+                        or last_dispatched is None or silence_released
+                    ):
+                        await anyio.sleep(interval)
+                        continue
+                    identity = (str(values.get("stream_id", "")), values.get("sequence"))
+                    if identity[1] is not None and identity == last_dispatched:
                         await anyio.sleep(interval)
                         continue
                     if warp is not None:
@@ -724,26 +751,52 @@ class ConversationEnsemble:
                         return
                     slot.status = "active"
                     slot.evidence = "speech_envelope_dispatch"
+                    last_dispatched = identity
+                    silence_released = values.get("active") is False
                     index += 1
                     if anyio.current_time() - started > interval:
                         # Another performer held the gate past this interval.
                         self._dispatch_overruns += 1
                     await anyio.sleep(interval)
+            except anyio.get_cancelled_exc_class():
+                slot.status = "cancelling"
+                slot.evidence = "speech_slot_cancelled"
+            except ExecutionError as exc:
+                slot.status = "blocked" if (
+                    slot.pending or exc.code == "stop_unconfirmed"
+                ) else "unavailable"
+                slot.evidence = exc.code
+            except (ValueError, TypeError):
+                # An invalid pure renderer value is a deterministic
+                # pre-dispatch failure. Never stop or quarantine a device
+                # that did not receive a command.
+                slot.status = "blocked" if slot.pending else "unavailable"
+                slot.evidence = "invalid_speech_mapping"
+            except Exception:  # noqa: BLE001 - uncertain SDK outcome
+                slot.status = "blocked"
+                slot.evidence = "speech_execution_unknown"
             finally:
                 if slot.pending:
-                    # A cancelled slot must still report the real outcome: the
-                    # device call has not returned yet, so end the slot only
-                    # after the in-flight target settles. Otherwise the next
-                    # performer acquires the shared gate while this device is
-                    # still busy.
+                    # Cancellation of runtime.wait does NOT cancel its SDK task.
+                    # An unconfirmed STOP must quarantine, never auto-rearm.
                     with anyio.CancelScope(shield=True):
-                        with anyio.move_on_after(self.stop_timeout_s):
-                            await slot.action_done.wait()
+                        try:
+                            with anyio.fail_after(self.stop_timeout_s):
+                                stopped = await self.runtime.stop(name)
+                            if not stopped.confirmed:
+                                slot.status = "blocked"
+                                slot.evidence = "device_stop_unconfirmed"
+                            else:
+                                slot.pending = False
+                        except Exception:  # noqa: BLE001 - unknown STOP
+                            slot.status = "blocked"
+                            slot.evidence = "device_stop_unknown"
+                        slot.action_done.set()
                 if slot.status not in {"blocked", "unavailable"}:
                     slot.status = "completed"
-                    slot.evidence = "behavior_pattern_finished"
-                # Without this the transition stop waits for the full timeout
-                # and then quarantines a perfectly healthy performer.
+                    slot.evidence = "speech_presence_finished"
+                if slot.status == "blocked":
+                    self._blocked.add(name)
                 slot.done.set()
 
     def _speech_cue(
@@ -756,7 +809,16 @@ class ConversationEnsemble:
         visible. Measured on hardware, a 20 deg command yields ~18.7 deg of
         real yaw, so ``amplitude`` is the operator's full expressive budget.
         """
-        levels = {key: max(-1.0, min(1.0, value)) for key, value in values.items()}
+        # The room channel also carries VAD and stream identity. Only the
+        # numeric motion axes belong in the physical head transform; do not
+        # accidentally interpret stream IDs as angle values.
+        levels: dict[str, float] = {}
+        for key in ("pitch", "yaw", "roll", "z", "antenna"):
+            raw = values.get(key, 0.0)
+            if (isinstance(raw, bool) or not isinstance(raw, (int, float))
+                    or not math.isfinite(raw)):
+                raise ValueError("invalid normalized speech motion axis")
+            levels[key] = max(-1.0, min(1.0, float(raw)))
         neutral = self._speech_channels[name][2]
         if neutral is None:
             raise ValueError("audio-driven Reachy motion requires a neutral head")
@@ -798,7 +860,7 @@ class ConversationEnsemble:
                 if offset >= pattern.max_duration_s:
                     return
                 now = anyio.current_time()
-                if pattern.mode == "loop" and now - target > (pattern.period_s or 0.0):
+                if pattern.mode == "loop" and now - target > 0.5:
                     # Slow hardware must not trigger high-rate catch-up bursts.
                     continue
                 await anyio.sleep(max(0, target - now))

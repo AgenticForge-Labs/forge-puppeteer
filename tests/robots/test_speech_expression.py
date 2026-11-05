@@ -257,3 +257,151 @@ def test_smoothed_new_utterance_does_not_inherit_previous_envelope():
         sample(0, stream_id="two", intensity=0.8)
     ))
     assert initial.mouth == pytest.approx(0.8 * (1 - math.exp(-1)))
+
+
+def test_window_smoothing_is_per_performer_and_default_remains_legacy():
+    window = SpeechEnvelopeWindow(performer_dynamics={"reachy": "smoothed_v1"})
+    frame = sample(0, intensity=1.0)
+    window.accept([frame], performer_ids=("reachy", "stackchan"))
+    reachy = window.latest("reachy")
+    stackchan = window.latest("stackchan")
+    assert reachy is not None and stackchan is not None
+    assert 0 < reachy.mouth < 1
+    assert stackchan.mouth == 1
+    assert window.snapshot()["physical_motion_dispatched"] is False
+
+
+def test_window_dynamics_survive_clear_but_not_envelope_history():
+    window = SpeechEnvelopeWindow(performer_dynamics={"reachy": "smoothed_v1"})
+    window.accept([sample(0, intensity=1.0)], performer_ids=("reachy",))
+    first = window.latest("reachy")
+    assert first is not None
+    window.clear()
+    window.accept([sample(0, intensity=1.0, stream_id="new")], performer_ids=("reachy",))
+    second = window.latest("reachy")
+    assert second is not None
+    assert second.mouth == pytest.approx(first.mouth)
+
+
+def test_window_invalid_speech_dynamics_rejected_before_accept():
+    with pytest.raises(ValueError, match="invalid"):
+        SpeechEnvelopeWindow(performer_dynamics={"reachy": "not_a_profile"})
+    with pytest.raises(ValueError, match="invalid"):
+        SpeechEnvelopeWindow(performer_dynamics={"": "smoothed_v1"})
+
+
+def test_window_inactive_residual_intensity_zero_for_both_modes():
+    window = SpeechEnvelopeWindow(performer_dynamics={"reachy": "smoothed_v1"})
+    window.accept(
+        [sample(0, intensity=0.9, active=False)],
+        performer_ids=("reachy", "stackchan"),
+    )
+    for name in ("reachy", "stackchan"):
+        item = window.latest(name)
+        assert item is not None and item.mouth == 0
+        assert all(getattr(item, axis) == 0 for axis in (
+            "pitch", "yaw", "roll", "x", "y", "z", "antenna",
+        ))
+
+
+def test_multi_performer_batches_advance_each_stream_independently():
+    window = SpeechEnvelopeWindow(performer_dynamics={"reachy": "smoothed_v1"})
+    window.accept([sample(0)], performer_ids=("reachy", "stackchan"))
+    window.accept([sample(1)], performer_ids=("stackchan",))
+    window.accept([sample(1)], performer_ids=("reachy",))
+    assert window.latest("reachy").sequence == 1
+    assert window.latest("stackchan").sequence == 1
+    window.accept([sample(2)], performer_ids=("reachy", "stackchan"))
+    assert window.latest("reachy").sequence == 2
+    assert window.latest("stackchan").sequence == 2
+
+
+def test_multi_performer_rejection_does_not_advance_other_performer():
+    window = SpeechEnvelopeWindow(performer_dynamics={"reachy": "smoothed_v1"})
+    window.accept([sample(0)], performer_ids=("reachy", "stackchan"))
+    window.accept([sample(1)], performer_ids=("reachy",))
+    with pytest.raises(ValueError, match="gap"):
+        window.accept([sample(2)], performer_ids=("reachy", "stackchan"))
+    assert window.latest("reachy").sequence == 1
+    assert window.latest("stackchan").sequence == 0
+    window.accept([sample(1)], performer_ids=("stackchan",))
+    window.accept([sample(2)], performer_ids=("reachy",))
+
+
+def test_new_performer_requires_stream_boundary_and_zero_sequence():
+    window = SpeechEnvelopeWindow()
+    with pytest.raises(ValueError, match="start at zero"):
+        window.accept([sample(1)], performer_ids=("reachy",))
+    window.accept([sample(0)], performer_ids=("reachy",))
+    with pytest.raises(ValueError, match="start at zero"):
+        window.accept([sample(1, stream_id="new")], performer_ids=("reachy",))
+    window.accept([sample(0, stream_id="new")], performer_ids=("reachy",))
+
+
+def test_each_performer_has_independent_envelope_expiry(monkeypatch):
+    import forge_puppeteer.speech_expression as speech
+
+    now = [1_000_000_000]
+    monkeypatch.setattr(speech.time, "monotonic_ns", lambda: now[0])
+    window = SpeechEnvelopeWindow()
+    window.accept([sample(0)], performer_ids=("reachy", "stackchan"))
+    now[0] += 400_000_000
+    window.accept([sample(1)], performer_ids=("reachy",))
+    now[0] += 110_000_000
+    assert window.latest("reachy") is not None
+    assert window.latest("stackchan") is None
+    now[0] += 400_000_000
+    assert window.latest("reachy") is None
+
+
+
+def test_opt_in_smoothing_retains_seeded_phases_across_stream_boundaries():
+    first = SpeechExpressionShaper(
+        performer_id="reachy", stream_id="first", dynamics="smoothed_v1",
+    )
+    second = SpeechExpressionShaper(
+        performer_id="reachy", stream_id="second", dynamics="smoothed_v1",
+    )
+    a = first.render(SpeechEnvelopeHop.model_validate(
+        sample(0, intensity=0.7, stream_id="first")
+    ))
+    b = second.render(SpeechEnvelopeHop.model_validate(
+        sample(0, intensity=0.7, stream_id="second")
+    ))
+    assert (a.pitch, a.yaw, a.roll, a.x, a.y, a.z) == (
+        b.pitch, b.yaw, b.roll, b.x, b.y, b.z
+    )
+    legacy_a = SpeechExpressionShaper(
+        performer_id="reachy", stream_id="first", dynamics="legacy",
+    ).render(SpeechEnvelopeHop.model_validate(sample(0, stream_id="first")))
+    legacy_b = SpeechExpressionShaper(
+        performer_id="reachy", stream_id="second", dynamics="legacy",
+    ).render(SpeechEnvelopeHop.model_validate(sample(0, stream_id="second")))
+    assert legacy_a.yaw != legacy_b.yaw
+
+
+def test_envelope_snapshot_stale_matches_dispatch_ttl(monkeypatch):
+    import forge_puppeteer.speech_expression as speech
+
+    now = [2_000_000_000]
+    monkeypatch.setattr(speech.time, "monotonic_ns", lambda: now[0])
+    window = SpeechEnvelopeWindow()
+    window.accept([sample(0)], performer_ids=("reachy",))
+    now[0] += 501_000_000
+    assert window.snapshot()["stale"] is True
+    assert window.latest("reachy") is None
+
+
+def test_pinned_reachy_sway_frequencies_are_present_but_not_pcm_parity():
+    # Pollen reachy_mini v1.10.0rc5, commit
+    # 221b3c3ce1aadae3c0eed97a8712d83bd205e13e, speech_tapper.py.
+    # Matching oscillator frequencies does NOT establish matching VAD,
+    # raw PCM loudness gains, phases, physical units, or playout timing.
+    from forge_puppeteer.speech_expression import FREQUENCIES_HZ, HOP_MS
+    assert HOP_MS == 50
+    assert {axis: FREQUENCIES_HZ[axis] for axis in (
+        "pitch", "yaw", "roll", "x", "y", "z",
+    )} == {
+        "pitch": 2.2, "yaw": 0.6, "roll": 1.3,
+        "x": 0.35, "y": 0.45, "z": 0.25,
+    }

@@ -1,10 +1,10 @@
 # Reachy Mini + StackChan motion continuity implementation
 
-Status: **implementation branch, not hardware-qualified**. This document records the staged change contract; it does not authorize physical motion.
+Status: **software implementation in PR #40; not hardware-qualified**. This document records the requirements and deliberate limitations; it does not authorize motion. See [PR #40 acceptance](PR40_MOTION_ENGINE_COMPLETION.md) for code locations and tests.
 
 ## Current verified baseline
 
-- Puppeteer `main` at `8e02d6c5210c4cded640bd5d555159937d0c00c6` already has Reachy `classic` and opt-in `expressive` styles, authored Reachy and StackChan idle/speaking packs, and optional audio-driven speaking.
+- Puppeteer main before PR #40 already had Reachy `classic` and opt-in `expressive` styles, authored Reachy and StackChan idle/speaking packs, and optional audio-driven speaking.
 - Reachy's upstream SDK implements `motion/speech_tapper.py:SwayRollRT` and `motion/head_wobbler.py:HeadWobbler`. It analyzes 20 ms windows, emits 50 ms hops, preserves oscillator phase, schedules offsets using PCM playback time, skips stale deadlines, and invalidates scheduled callbacks on stop/reset.
 - The upstream Conversation App layers primary moves (breathing, emotions, goto poses) with speech-reactive offsets. It also suppresses idle motion during local microphone speech detection.
 - Puppeteer's current speech feature schema carries **generated PCM timing**, explicitly **not measured speaker playout**. Do not label it acoustically synchronized.
@@ -14,21 +14,21 @@ Status: **implementation branch, not hardware-qualified**. This document records
 
 Preserve both robots' **actual pre-change authored** idle and speaking patterns. Before refactoring, capture exact serialized behavior packs, revisions, defaults, cadence, parameters, and tests from the starting commit. Keep legacy output available as a selectable configuration, not only in Git history.
 
-Proposed profiles are independent for `idle` and `speaking`:
+The operator-selected profiles are independent for `idle` and `speaking`:
 - `legacy`: exact existing authored behavior and timing; the default until attended qualification.
-- `native_v1`: pinned upstream Reachy audio-reactive reference; StackChan uses its existing firmware-style speaking modifier and face renderer, not Reachy's six-axis geometry.
-- `smooth_v2`: continuity-aware composition, opt-in, preserving the same physical grants.
+- `native_v1`: opt-in Reachy expressive authored pack or StackChan native mouth-weight speaking pack. These are upstream-inspired authored alternatives, **not exact PCM sample parity**.
+- `smooth_v2`: the same source-validated alternative pack plus 50 ms envelope smoothing for explicitly speech-driven speaking performers, opt-in, preserving the same physical grants. Idle uses authored targets; no extra motor scheduler is created.
 
 Profile changes are **operator configuration**, never an automatic response to device failure, UNKNOWN outcome, stale audio, or failed STOP. An unsupported profile must fail closed.
 
 ## Implementation order
 
-1. **Preserve baseline and regression fixtures.** Record deterministic serialized Reachy and StackChan packs and the original audio-driven configuration. Assert that existing defaults and recorded yes/no playback remain unchanged. Add tests for independent idle/speaking profile selection and invalid names before enabling new profiles.
-2. **Upstream parity in software.** Pin the exact Reachy SDK source revision. Compare the pure speech renderer to `SwayRollRT` using identical PCM, seeds and sample rates; cover silence, loudness changes, chunking, VAD attack/release, reset, phase continuity and six-axis units. A dimensionless envelope-only renderer cannot claim full PCM parity; either carry the required bounded features with a versioned contract or explicitly document the approximation.
-3. **Timing and ownership.** Retain the existing room/performer execution runtime. Establish a monotonic mapping from generated audio to *measured* playout where supported; otherwise retain an explicit uncalibrated timing label. Skip late targets rather than replaying backlogs. Preserve SDK cancellation, resource locks, action journal, STOP and UNKNOWN quarantine.
-4. **Continuous composition.** Blend base pose, idle, speaking offsets, and discrete gestures into one SDK-validated bounded trajectory. Preserve oscillator phase across normal transitions; ensure no conflicting absolute head targets. Do not introduce a separate servo scheduler or bypass native interpolation.
-5. **StackChan renderer.** Respect integer tenths-degree servo semantics, nonzero valid pitch, actual firmware limits and native speaking modifier. Apply smooth target transitions and mouth/eye timing at device-appropriate rates; keep original speaking and idle as legacy.
-6. **Conversationalist integration.** Maintain independent per-performer envelope delivery, bounded queues, interruption priority and honest playout timing. Do not leak raw audio or transcripts into Puppeteer.
+1. **Preserve baseline and regression fixtures (software implemented).** Record deterministic serialized Reachy and StackChan packs and the original audio-driven configuration. Assert that existing defaults and recorded yes/no playback remain unchanged. Add tests for independent idle/speaking profile selection and invalid names before enabling new profiles.
+2. **Upstream comparison (documented approximation).** Reachy Mini SDK v1.10.0rc5 commit `221b3c3ce1aadae3c0eed97a8712d83bd205e13e` uses raw PCM and six-axis rad/mm, while Puppeteer receives content-free generated-PCM envelopes. Tests cover matching frequencies, silence, attack/release, reset, seeded phase and unitless bounds. Full identical-PCM parity is **not applicable** to this input contract and is not claimed.
+3. **Timing and ownership (software implemented; physical audio calibration pending).** Retain the existing room/performer execution runtime. Establish a monotonic mapping from generated audio to *measured* playout where supported; otherwise retain an explicit uncalibrated timing label. Skip late targets rather than replaying backlogs. Preserve SDK cancellation, resource locks, action journal, STOP and UNKNOWN quarantine.
+4. **Motion arbitration.** SDK-validated base/voice targets and finite gestures use a single serialized ExecutionRuntime. A finite gesture takes precedence over ongoing presence; after known completion, the current presence resumes. Normal idle/listening/speaking are mutually exclusive; there is **no simultaneous additive base+idle+speech waveform engine** and no claim of seamless measured transition. The opt-in shaper retains seeded phases across new utterances. Do not introduce a second hardware scheduler.
+5. **StackChan renderer (software implemented with SDK preflight).** Respect integer tenths-degree servo semantics, nonzero valid pitch, actual firmware limits and native speaking modifier. Apply smooth target transitions and mouth/eye timing at device-appropriate rates; keep original speaking and idle as legacy.
+6. **Conversationalist integration (dependent PR 2, not merged by this PR).** Maintain independent per-performer envelope delivery, bounded queues, interruption priority and honest playout timing. Do not leak raw audio or transcripts into Puppeteer.
 7. **Automated integration first, attended physical test last.** Run unit, contract, simulated two-performer and failure tests. Only then perform one operator-attended legacy-vs-new comparison with prerecorded speech and live multi-turn conversation, including startup, speaking, listening, idle, interruption, STOP and shutdown. Record commanded targets, measured pose where available, dropped cues, audio timing, and video. Do not make `smooth_v2` the hardware default without physical acceptance.
 
 ## Acceptance gates

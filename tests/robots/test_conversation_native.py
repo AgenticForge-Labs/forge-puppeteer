@@ -691,7 +691,11 @@ async def test_transition_after_speech_never_quarantines_performer():
             # Long enough for a cue to land even when the idle sample spacing
             # is the full measured 1.6 s.
             await anyio.sleep(2.0)
-            status = result["performers"]["reachy"]["status"]
+            # observe() returns an admission-time snapshot. Read the actual
+            # post-transition state after dispatch; otherwise this assertion
+            # can miss asynchronous STOP/quarantine outcomes.
+            assert result["outcome"] == "accepted"
+            status = ensemble.snapshot()["performers"]["reachy"]["status"]
             assert status != "blocked", f"{state} quarantined the performer"
         cues = [cue.split(":")[0] for cue in provider.calls]
         assert cues.count("idle") >= 2, f"idle did not resume: {cues}"
@@ -780,3 +784,211 @@ async def test_a_conversation_keeps_producing_speech_targets_turn_after_turn():
         cues = [cue.split(":")[0] for cue in provider.calls]
         # One speech slot per turn, and each delivers more than one target.
         assert cues.count("speaking") >= 6, f"speech stopped after a turn: {cues}"
+
+
+@pytest.mark.parametrize("amplitude,interval", [
+    (float("nan"), 0.25), (float("inf"), 0.25),
+    (-0.1, 0.25), (1.1, 0.25),
+    (0.1, float("nan")), (0.1, 0.0),
+    (0.1, 6.0),
+])
+def test_speech_channel_rejects_unsafe_operator_budgets(amplitude, interval):
+    runtime = ExecutionRuntime(PerformanceStage())
+    pack = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1", "no1"),
+    )
+    ensemble = ConversationEnsemble(runtime, [pack])
+    with pytest.raises(ValueError):
+        ensemble.bind_speech_channel(
+            "reachy", object(), amplitude=amplitude,
+            neutral_head=NEUTRAL, interval_s=interval,
+        )
+
+
+@pytest.mark.anyio
+async def test_cancelled_speech_runtime_requires_confirmed_stop():
+    class Channel:
+        def latest(self):
+            return {"yaw": 0.3, "pitch": 0.1, "roll": 0, "z": 0,
+                    "antenna": 0, "active": True}
+
+    class SlowProvider:
+        def __init__(self):
+            self.started = anyio.Event()
+            self.stop_calls = 0
+            self.executed = 0
+
+        async def validate(self, _request):
+            return None
+
+        def resources_for(self, _request):
+            return ("head.pose",)
+
+        async def execute(self, _request):
+            self.executed += 1
+            self.started.set()
+            await anyio.sleep(10)
+            from forge_puppeteer.execution import Completion
+            return Completion("completed")
+
+        async def stop(self):
+            self.stop_calls += 1
+            from forge_puppeteer.execution import StopResult
+            return StopResult(False, "stop_outcome_unknown")
+
+    provider = SlowProvider()
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("reachy", provider)
+    pack = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1", "no1"),
+    )
+    ensemble = ConversationEnsemble(runtime, [pack], stop_timeout_s=0.25)
+    ensemble.bind_speech_channel(
+        "reachy", Channel(), amplitude=0.12,
+        neutral_head=NEUTRAL, interval_s=0.02,
+    )
+
+    def presence(sequence, state, interrupted=False):
+        return EnsemblePresence(
+            event_id=f"safety-{sequence}", session_id="stop-safety",
+            sequence=sequence, state=state, source="agent_state",
+            interrupted=interrupted,
+        )
+
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(presence(0, "speaking"))
+        with anyio.fail_after(2):
+            await provider.started.wait()
+        result = await ensemble.observe(presence(1, "listening", interrupted=True))
+        assert result["performers"]["reachy"]["status"] == "blocked"
+        assert provider.stop_calls >= 1
+        await ensemble.observe(presence(2, "idle"))
+        await anyio.sleep(0.03)
+        assert provider.executed == 1
+
+
+@pytest.mark.anyio
+async def test_speech_does_not_reissue_same_hop_or_animate_inactive_hop():
+    class Channel:
+        def __init__(self):
+            self.value = {"stream_id": "one", "sequence": 0, "active": True,
+                          "yaw": 0.3, "pitch": 0, "roll": 0, "z": 0, "antenna": 0}
+
+        def latest(self):
+            return dict(self.value)
+
+    class Provider:
+        def __init__(self):
+            self.calls = []
+
+        async def validate(self, _request):
+            return None
+
+        def resources_for(self, _request):
+            return ("head.pose",)
+
+        async def execute(self, request):
+            self.calls.append(request.cue_id)
+            from forge_puppeteer.execution import Completion
+            return Completion("completed")
+
+        async def stop(self):
+            from forge_puppeteer.execution import StopResult
+            return StopResult(True, "stopped")
+
+    channel = Channel()
+    provider = Provider()
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("reachy", provider)
+    pack = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1", "no1"),
+    )
+    ensemble = ConversationEnsemble(runtime, [pack])
+    ensemble.bind_speech_channel(
+        "reachy", channel, amplitude=0.12,
+        neutral_head=NEUTRAL, interval_s=0.02,
+    )
+
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(EnsemblePresence(
+            event_id="start", session_id="room", sequence=0,
+            state="speaking", source="agent_state",
+        ))
+        with anyio.move_on_after(2):
+            while len(provider.calls) < 1:
+                await anyio.sleep(0.01)
+        assert provider.calls, (
+            f"no speech dispatch: {ensemble.snapshot()} "
+            f"runtime_inhibited={runtime._inhibited} "
+            f"entries={[(key, value.record.state, value.record.error) for key, value in runtime._entries.items()]}"
+        )
+        await anyio.sleep(0.12)
+        assert len(provider.calls) == 1
+        channel.value["sequence"] = 1
+        channel.value["active"] = False
+        await anyio.sleep(0.1)
+        assert len(provider.calls) == 1
+        channel.value["sequence"] = 2
+        channel.value["active"] = True
+        await anyio.sleep(0.1)
+        assert len(provider.calls) == 2
+
+
+
+@pytest.mark.anyio
+async def test_invalid_speech_axis_is_pre_dispatch_denial_without_stop():
+    class Channel:
+        def latest(self):
+            return {"stream_id": "fault", "sequence": 0, "active": True,
+                    "yaw": float("nan"), "pitch": 0, "roll": 0, "z": 0,
+                    "antenna": 0}
+
+    class Provider:
+        def __init__(self):
+            self.stop_calls = 0
+            self.execute_calls = 0
+
+        async def validate(self, _request):
+            return None
+
+        def resources_for(self, _request):
+            return ("head.pose",)
+
+        async def execute(self, _request):
+            self.execute_calls += 1
+            from forge_puppeteer.execution import Completion
+            return Completion("done")
+
+        async def stop(self):
+            self.stop_calls += 1
+            from forge_puppeteer.execution import StopResult
+            return StopResult(True, "stopped")
+
+    provider = Provider()
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("reachy", provider)
+    pack = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1", "no1"),
+    )
+    ensemble = ConversationEnsemble(runtime, [pack])
+    ensemble.bind_speech_channel(
+        "reachy", Channel(), amplitude=0.12,
+        neutral_head=NEUTRAL, interval_s=0.02,
+    )
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(EnsemblePresence(
+            event_id="invalid", session_id="room", sequence=0,
+            state="speaking", source="agent_state",
+        ))
+        with anyio.fail_after(1):
+            while ensemble.snapshot()["performers"]["reachy"]["status"] != "unavailable":
+                await anyio.sleep(0.01)
+        status = ensemble.snapshot()["performers"]["reachy"]
+        assert status["evidence"] == "invalid_speech_mapping"
+        assert provider.execute_calls == 0
+        assert provider.stop_calls == 0
+        assert "reachy" not in ensemble._blocked

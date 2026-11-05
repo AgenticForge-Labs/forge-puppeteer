@@ -321,3 +321,58 @@ def test_optional_stackchan_display_presets_require_sdk_and_separate_grant(tmp_p
     assert curated["enlarged"].parameters == {"percent": 170}
     assert all(cue.asset_id is None for cue in curated.values())
     assert "face_scale" not in config.stackchan.allowed_tools  # only the named MCP grant
+
+
+
+def test_operator_motion_profile_validation_covers_all_performers(tmp_path):
+    data = config_data(tmp_path)
+    cfg = EnsembleConfig.model_validate(data)
+    assert cfg.motion_profiles == {}
+    data["motion_profiles"] = {"reachy": {"speaking": "native_v1"}}
+    with pytest.raises(ValueError, match="pose_and_antennas"):
+        EnsembleConfig.model_validate(data)
+    data["reachy"]["allowed_tools"].append("pose_and_antennas")
+    data["reachy_neutral_antennas_rad"] = [-0.17, 0.17]
+    approved = EnsembleConfig.model_validate(data)
+    assert approved.motion_profiles["reachy"].speaking == "native_v1"
+    assert approved.motion_profiles["reachy"].idle == "legacy"
+
+    data["motion_profiles"]["reachy"]["speaking"] = "smooth_v2"
+    with pytest.raises(ValueError, match="speech-driven"):
+        EnsembleConfig.model_validate(data)
+    data["speech_driven_performers"] = ["reachy"]
+    assert EnsembleConfig.model_validate(data).motion_profiles["reachy"].speaking == "smooth_v2"
+    data["speech_driven_performers"] = ["reachy", "reachy"]
+    with pytest.raises(ValueError, match="unique"):
+        EnsembleConfig.model_validate(data)
+
+    data["speech_driven_performers"] = []
+    for selected in (
+        {"soarm101": {"speaking": "native_v1"}},
+        {"nonexistent": {"idle": "native_v1"}},
+        {"reachy": {"idle": "not_real"}},
+        {"reachy": {"unexpected": "legacy"}},
+    ):
+        data["motion_profiles"] = selected
+        with pytest.raises(ValueError):
+            EnsembleConfig.model_validate(data)
+    data["motion_profiles"] = {}
+    data["speech_driven_performers"] = ["soarm101"]
+    with pytest.raises(ValueError, match="native Reachy or StackChan"):
+        EnsembleConfig.model_validate(data)
+
+
+def test_reachy_only_motion_profiles_require_expressive_review(tmp_path):
+    data = config_data(tmp_path)
+    data.pop("stackchan")
+    data.pop("soarm101")
+    data["schema_version"] = 2
+    data["motion_profiles"] = {"reachy": {"idle": "native_v1"}}
+    with pytest.raises(ValueError, match="pose_and_antennas"):
+        ReachyOnlyEnsembleConfig.model_validate(data)
+    data["reachy"]["allowed_tools"].append("pose_and_antennas")
+    data["reachy_neutral_antennas_rad"] = [-0.17, 0.17]
+    assert ReachyOnlyEnsembleConfig.model_validate(data).motion_profiles["reachy"].idle == "native_v1"
+    data["speech_driven_performers"] = ["stackchan"]
+    with pytest.raises(ValueError, match="native Reachy or StackChan"):
+        ReachyOnlyEnsembleConfig.model_validate(data)
