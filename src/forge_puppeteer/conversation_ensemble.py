@@ -803,7 +803,16 @@ class ConversationEnsemble:
         visible. Measured on hardware, a 20 deg command yields ~18.7 deg of
         real yaw, so ``amplitude`` is the operator's full expressive budget.
         """
-        levels = {key: max(-1.0, min(1.0, value)) for key, value in values.items()}
+        # The room channel also carries VAD and stream identity. Only the
+        # numeric motion axes belong in the physical head transform; do not
+        # accidentally interpret stream IDs as angle values.
+        levels: dict[str, float] = {}
+        for key in ("pitch", "yaw", "roll", "z", "antenna"):
+            raw = values.get(key, 0.0)
+            if (isinstance(raw, bool) or not isinstance(raw, (int, float))
+                    or not math.isfinite(raw)):
+                raise ValueError("invalid normalized speech motion axis")
+            levels[key] = max(-1.0, min(1.0, float(raw)))
         neutral = self._speech_channels[name][2]
         if neutral is None:
             raise ValueError("audio-driven Reachy motion requires a neutral head")
