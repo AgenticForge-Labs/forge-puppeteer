@@ -154,17 +154,25 @@ def _validate_motion_selection(
 def _profile_overrides(
     choices: dict[str, PerformerMotionSelection],
     native: dict[str, PerformerBehaviors],
+    smooth_idle: dict[str, PerformerBehaviors] | None = None,
 ) -> dict[str, dict[str, PerformerBehaviors]]:
-    """Select already authored alternative packs; never generate motor targets."""
-    return {
-        performer_id: {
-            state: native[performer_id]
-            for state in ("idle", "speaking")
-            if getattr(selection, state) != "legacy"
-        }
-        for performer_id, selection in choices.items()
-        if selection.idle != "legacy" or selection.speaking != "legacy"
-    }
+    """Select native or amplitude-reduced idle without new motor ownership."""
+    result: dict[str, dict[str, PerformerBehaviors]] = {}
+    for performer_id, selection in choices.items():
+        alternatives: dict[str, PerformerBehaviors] = {}
+        for state in ("idle", "speaking"):
+            name = getattr(selection, state)
+            if name == "legacy":
+                continue
+            if state == "idle" and name == "smooth_v2":
+                alternatives[state] = (smooth_idle or {}).get(
+                    performer_id, native[performer_id],
+                )
+            else:
+                alternatives[state] = native[performer_id]
+        if alternatives:
+            result[performer_id] = alternatives
+    return result
 
 
 class EnsembleConfig(BaseModel):
@@ -497,7 +505,7 @@ def serve(config_path: str | Path) -> None:
     config = load_config(config_path)
     if isinstance(config, ReachyOnlyEnsembleConfig):
         reachy = ReachySDKProvider(config.reachy)
-        async def resolve_reachy(native: bool = False):
+        async def resolve_reachy(native: bool = False, smooth_idle: bool = False):
             style = "expressive" if native else config.reachy_expression_style
             return await reachy_pack_from_catalog(
                 config.reachy.instance_id, reachy.catalog,
@@ -515,15 +523,21 @@ def serve(config_path: str | Path) -> None:
                 neutral_antennas_rad=config.reachy_neutral_antennas_rad,
                 antenna_sway_rad=config.reachy_antenna_sway_rad,
                 wake_up_if_sleeping=config.reachy_startup_behavior == "wake_up_if_sleeping",
+                idle_gain=0.6 if smooth_idle else 1.0,
             )
         pack = anyio.run(resolve_reachy)
         profile = config.motion_profiles.get(config.reachy.instance_id)
         alternate = {}
+        smooth_idle = {}
         if profile and (profile.idle != "legacy" or profile.speaking != "legacy"):
             alternate[config.reachy.instance_id] = (
                 pack if config.reachy_expression_style == "expressive"
                 else anyio.run(resolve_reachy, True)
             )
+            if profile.idle == "smooth_v2":
+                smooth_idle[config.reachy.instance_id] = anyio.run(
+                    resolve_reachy, True, True,
+                )
         runtime = ExecutionRuntime(
             PerformanceStage(), journal_path=config.action_journal,
             ownership_path=config.ownership_db, stop_timeout=config.stop_timeout_s,
@@ -532,7 +546,9 @@ def serve(config_path: str | Path) -> None:
         ensemble = ConversationEnsemble(
             runtime, (pack,), presence_ttl_s=config.presence_ttl_s,
             stop_timeout_s=config.stop_timeout_s,
-            motion_patterns=_profile_overrides(config.motion_profiles, alternate),
+            motion_patterns=_profile_overrides(
+                config.motion_profiles, alternate, smooth_idle,
+            ),
         )
         speech_driven = config.speech_driven_performers
         speech_dynamics = {
@@ -556,7 +572,7 @@ def serve(config_path: str | Path) -> None:
         arm_pack = None
     else:
         reachy, _stackchan, _arm, arm_pack, runtime, connected = build_ensemble(config)
-    async def resolve(native: bool = False):
+    async def resolve(native: bool = False, smooth_idle: bool = False):
         style = "expressive" if native else config.reachy_expression_style
         return await reachy_pack_from_catalog(
             config.reachy.instance_id, reachy.catalog,
@@ -570,11 +586,13 @@ def serve(config_path: str | Path) -> None:
             neutral_antennas_rad=config.reachy_neutral_antennas_rad,
             antenna_sway_rad=config.reachy_antenna_sway_rad,
             wake_up_if_sleeping=config.reachy_startup_behavior == "wake_up_if_sleeping",
+            idle_gain=0.6 if smooth_idle else 1.0,
         )
     # NOTE: Reachy neutral is operator supplied, no fabricated physical zero.
     reachy_pack = anyio.run(resolve)
     reachy_profile = config.motion_profiles.get(config.reachy.instance_id)
     alternate = {}
+    smooth_idle = {}
     if reachy_profile and (
         reachy_profile.idle != "legacy" or reachy_profile.speaking != "legacy"
     ):
@@ -582,6 +600,8 @@ def serve(config_path: str | Path) -> None:
             reachy_pack if config.reachy_expression_style == "expressive"
             else anyio.run(resolve, True)
         )
+        if reachy_profile.idle == "smooth_v2":
+            smooth_idle[config.reachy.instance_id] = anyio.run(resolve, True, True)
     recorded = ()
     if config.stackchan.asset_root:
         # Operator-selected native asset pack; the SDK validates and pins it.
@@ -612,7 +632,13 @@ def serve(config_path: str | Path) -> None:
                 speaking_mode="native_weight", recorded_assets=recorded,
             )
         )
-    motion_patterns = _profile_overrides(config.motion_profiles, alternate)
+    if stack_profile and stack_profile.idle == "smooth_v2":
+        smooth_idle[config.stackchan.instance_id] = stackchan_conversation_pack(
+            config.stackchan.instance_id,
+            speaking_mode="native_weight", yaw_amplitude=40,
+            recorded_assets=recorded,
+        )
+    motion_patterns = _profile_overrides(config.motion_profiles, alternate, smooth_idle)
     speech_dynamics = {
         name: "smoothed_v1" for name, selection in config.motion_profiles.items()
         if selection.speaking == "smooth_v2"

@@ -174,6 +174,7 @@ def reachy_conversation_pack(
     neutral_antennas_rad: tuple[float, float] | None = None,
     antenna_sway_rad: float = 0.18,
     wake_up_if_sleeping: bool = False,
+    idle_gain: float = 1.0,
 ) -> PerformerBehaviors:
     """Author Reachy motion using its existing native SDK adapter operations.
 
@@ -203,6 +204,8 @@ def reachy_conversation_pack(
         raise ValueError("Reachy listening mode must be tilt or hold")
     if expression_style not in {"classic", "expressive"}:
         raise ValueError("Reachy expression style must be classic or expressive")
+    if not math.isfinite(idle_gain) or not 0 <= idle_gain <= 1:
+        raise ValueError("idle gain must be a finite attenuation in 0..1")
     if not math.isfinite(antenna_sway_rad) or not 0 <= antenna_sway_rad <= _MAX_REACHY_ANTENNA_SWAY_RAD:
         raise ValueError("Reachy antenna sway must be bounded and nonnegative")
     if expression_style == "expressive":
@@ -312,17 +315,17 @@ def reachy_conversation_pack(
             t = index * 0.5
             return head_cue(
                 t,
-                z=breath_amplitude_m * math.sin(2 * math.pi * t / 12.0),
-                yaw=(
+                z=idle_gain * breath_amplitude_m * math.sin(2 * math.pi * t / 12.0),
+                yaw=idle_gain * (
                     0.018 * math.sin(2 * math.pi * t / 12.0)
                     + 0.007 * math.sin(2 * math.pi * t / 4.3 + 0.6)
                 ),
-                pitch=(
+                pitch=idle_gain * (
                     0.012 * math.sin(2 * math.pi * t / 9.0 + 1.1)
                     + 0.005 * math.sin(2 * math.pi * t / 3.7)
                 ),
-                roll=0.006 * math.sin(2 * math.pi * t / 7.5 + 2.0),
-                antenna_offset=(
+                roll=idle_gain * 0.006 * math.sin(2 * math.pi * t / 7.5 + 2.0),
+                antenna_offset=idle_gain * (
                     antenna_sway_rad * 0.55 * math.sin(2 * math.pi * t / 12.0 + 0.4)
                     + antenna_sway_rad * 0.20 * math.sin(2 * math.pi * t / 3.1 + 1.3)
                 ),
@@ -409,6 +412,7 @@ async def reachy_pack_from_catalog(
     neutral_antennas_rad: tuple[float, float] | None = None,
     antenna_sway_rad: float = 0.18,
     wake_up_if_sleeping: bool = False,
+    idle_gain: float = 1.0,
 ) -> PerformerBehaviors:
     """Resolve available recordings only from an already-verified ReachyCatalog.
 
@@ -455,6 +459,7 @@ async def reachy_pack_from_catalog(
         neutral_antennas_rad=neutral_antennas_rad,
         antenna_sway_rad=antenna_sway_rad,
         wake_up_if_sleeping=wake_up_if_sleeping,
+        idle_gain=idle_gain,
     )
 
 
