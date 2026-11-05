@@ -21,7 +21,7 @@ from typing import Literal
 import anyio
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..behavior_contract import BehaviorCue
+from ..behavior_contract import BehaviorCue, PerformerBehaviors
 from ..conversation_ensemble import ConversationEnsemble
 from ..conversation_native import (
     reachy_pack_from_catalog,
@@ -153,8 +153,8 @@ def _validate_motion_selection(
 
 def _profile_overrides(
     choices: dict[str, PerformerMotionSelection],
-    native: dict[str, object],
-) -> dict[str, dict[str, object]]:
+    native: dict[str, PerformerBehaviors],
+) -> dict[str, dict[str, PerformerBehaviors]]:
     """Select already authored alternative packs; never generate motor targets."""
     return {
         performer_id: {
@@ -497,25 +497,33 @@ def serve(config_path: str | Path) -> None:
     config = load_config(config_path)
     if isinstance(config, ReachyOnlyEnsembleConfig):
         reachy = ReachySDKProvider(config.reachy)
-        async def resolve_reachy():
+        async def resolve_reachy(native: bool = False):
+            style = "expressive" if native else config.reachy_expression_style
             return await reachy_pack_from_catalog(
                 config.reachy.instance_id, reachy.catalog,
                 neutral_head=json.loads(Path(config.reachy_neutral_head).read_text()),
                 wobble_amplitude_rad=(
                     config.reachy_expressive_amplitude_rad
-                    if config.reachy_expression_style == "expressive"
+                    if style == "expressive"
                     else config.speaking_amplitude_rad
                 ),
                 speaking_axis=config.speaking_axis,
                 listening_tilt_rad=config.listening_tilt_rad,
                 listening_mode=config.listening_mode,
-                expression_style=config.reachy_expression_style,
+                expression_style=style,
                 breath_amplitude_m=config.reachy_breath_amplitude_m,
                 neutral_antennas_rad=config.reachy_neutral_antennas_rad,
                 antenna_sway_rad=config.reachy_antenna_sway_rad,
                 wake_up_if_sleeping=config.reachy_startup_behavior == "wake_up_if_sleeping",
             )
         pack = anyio.run(resolve_reachy)
+        profile = config.motion_profiles.get(config.reachy.instance_id)
+        alternate = {}
+        if profile and (profile.idle != "legacy" or profile.speaking != "legacy"):
+            alternate[config.reachy.instance_id] = (
+                pack if config.reachy_expression_style == "expressive"
+                else anyio.run(resolve_reachy, True)
+            )
         runtime = ExecutionRuntime(
             PerformanceStage(), journal_path=config.action_journal,
             ownership_path=config.ownership_db, stop_timeout=config.stop_timeout_s,
@@ -524,9 +532,21 @@ def serve(config_path: str | Path) -> None:
         ensemble = ConversationEnsemble(
             runtime, (pack,), presence_ttl_s=config.presence_ttl_s,
             stop_timeout_s=config.stop_timeout_s,
+            motion_patterns=_profile_overrides(config.motion_profiles, alternate),
         )
+        speech_driven = config.speech_driven_performers
+        speech_dynamics = {
+            name: "smoothed_v1" for name, selection in config.motion_profiles.items()
+            if selection.speaking == "smooth_v2"
+        }
         create_ensemble_server(
             runtime, ensemble, connected=reachy.connected, motion_enabled=True,
+            speech_driven_performers=speech_driven,
+            speech_neutral_heads={config.reachy.instance_id: json.loads(
+                Path(config.reachy_neutral_head).read_text()
+            )} if speech_driven else {},
+            speech_dynamics=speech_dynamics,
+            stackchan_performer_id=None,
         ).run(transport="stdio")
         return
     # This is intentionally a deliberate, potentially physical operator action:
@@ -536,15 +556,16 @@ def serve(config_path: str | Path) -> None:
         arm_pack = None
     else:
         reachy, _stackchan, _arm, arm_pack, runtime, connected = build_ensemble(config)
-    async def resolve():
+    async def resolve(native: bool = False):
+        style = "expressive" if native else config.reachy_expression_style
         return await reachy_pack_from_catalog(
             config.reachy.instance_id, reachy.catalog,
             neutral_head=json.loads(Path(config.reachy_neutral_head).read_text()),
             wobble_amplitude_rad=(
                 config.reachy_expressive_amplitude_rad
-                if config.reachy_expression_style == "expressive" else 0.025
+                if style == "expressive" else 0.025
             ),
-            expression_style=config.reachy_expression_style,
+            expression_style=style,
             breath_amplitude_m=config.reachy_breath_amplitude_m,
             neutral_antennas_rad=config.reachy_neutral_antennas_rad,
             antenna_sway_rad=config.reachy_antenna_sway_rad,
@@ -552,6 +573,15 @@ def serve(config_path: str | Path) -> None:
         )
     # NOTE: Reachy neutral is operator supplied, no fabricated physical zero.
     reachy_pack = anyio.run(resolve)
+    reachy_profile = config.motion_profiles.get(config.reachy.instance_id)
+    alternate = {}
+    if reachy_profile and (
+        reachy_profile.idle != "legacy" or reachy_profile.speaking != "legacy"
+    ):
+        alternate[config.reachy.instance_id] = (
+            reachy_pack if config.reachy_expression_style == "expressive"
+            else anyio.run(resolve, True)
+        )
     recorded = ()
     if config.stackchan.asset_root:
         # Operator-selected native asset pack; the SDK validates and pins it.
@@ -562,8 +592,8 @@ def serve(config_path: str | Path) -> None:
         name: int(getattr(config, "speech_seed", 7)) for name in speech_driven
     }
     speech_neutral = {}
-    if speech_driven and "reachy" in speech_driven:
-        speech_neutral["reachy"] = json.loads(
+    if config.reachy.instance_id in speech_driven:
+        speech_neutral[config.reachy.instance_id] = json.loads(
             Path(config.reachy_neutral_head).read_text()
         )
     stack_pack = stackchan_conversation_pack(
@@ -571,6 +601,22 @@ def serve(config_path: str | Path) -> None:
         speaking_mode=config.stackchan_speaking_mode,
         recorded_assets=recorded,
     )
+    stack_profile = config.motion_profiles.get(config.stackchan.instance_id)
+    if stack_profile and (
+        stack_profile.idle != "legacy" or stack_profile.speaking != "legacy"
+    ):
+        alternate[config.stackchan.instance_id] = (
+            stack_pack if config.stackchan_speaking_mode == "native_weight"
+            else stackchan_conversation_pack(
+                config.stackchan.instance_id,
+                speaking_mode="native_weight", recorded_assets=recorded,
+            )
+        )
+    motion_patterns = _profile_overrides(config.motion_profiles, alternate)
+    speech_dynamics = {
+        name: "smoothed_v1" for name, selection in config.motion_profiles.items()
+        if selection.speaking == "smooth_v2"
+    }
     packs = (reachy_pack, stack_pack) if arm_pack is None else (
         reachy_pack, stack_pack, arm_pack,
     )
@@ -579,6 +625,7 @@ def serve(config_path: str | Path) -> None:
         presence_ttl_s=config.presence_ttl_s,
         stop_timeout_s=config.stop_timeout_s,
         startup_settle_s=config.startup_settle_s,
+        motion_patterns=motion_patterns,
     )
     create_ensemble_server(
         runtime, ensemble, connected=connected,
@@ -586,6 +633,8 @@ def serve(config_path: str | Path) -> None:
         speech_driven_performers=speech_driven,
         speech_neutral_heads=speech_neutral,
         speech_seeds=speech_seeds,
+        speech_dynamics=speech_dynamics,
+        stackchan_performer_id=config.stackchan.instance_id,
         startup_settle_s=config.startup_settle_s,
         presentation_presets=stackchan_display_presets(config),
     ).run(transport="stdio")
