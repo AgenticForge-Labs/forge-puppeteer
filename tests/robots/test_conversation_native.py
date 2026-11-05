@@ -934,3 +934,60 @@ async def test_speech_does_not_reissue_same_hop_or_animate_inactive_hop():
         channel.value["active"] = True
         await anyio.sleep(0.1)
         assert len(provider.calls) == 2
+
+
+
+@pytest.mark.anyio
+async def test_invalid_speech_axis_is_pre_dispatch_denial_without_stop():
+    class Channel:
+        def latest(self):
+            return {"stream_id": "fault", "sequence": 0, "active": True,
+                    "yaw": float("nan"), "pitch": 0, "roll": 0, "z": 0,
+                    "antenna": 0}
+
+    class Provider:
+        def __init__(self):
+            self.stop_calls = 0
+            self.execute_calls = 0
+
+        async def validate(self, _request):
+            return None
+
+        def resources_for(self, _request):
+            return ("head.pose",)
+
+        async def execute(self, _request):
+            self.execute_calls += 1
+            from forge_puppeteer.execution import Completion
+            return Completion("done")
+
+        async def stop(self):
+            self.stop_calls += 1
+            from forge_puppeteer.execution import StopResult
+            return StopResult(True, "stopped")
+
+    provider = Provider()
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("reachy", provider)
+    pack = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1", "no1"),
+    )
+    ensemble = ConversationEnsemble(runtime, [pack])
+    ensemble.bind_speech_channel(
+        "reachy", Channel(), amplitude=0.12,
+        neutral_head=NEUTRAL, interval_s=0.02,
+    )
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(EnsemblePresence(
+            event_id="invalid", session_id="room", sequence=0,
+            state="speaking", source="agent_state",
+        ))
+        with anyio.fail_after(1):
+            while ensemble.snapshot()["performers"]["reachy"]["status"] != "unavailable":
+                await anyio.sleep(0.01)
+        status = ensemble.snapshot()["performers"]["reachy"]
+        assert status["evidence"] == "invalid_speech_mapping"
+        assert provider.execute_calls == 0
+        assert provider.stop_calls == 0
+        assert "reachy" not in ensemble._blocked

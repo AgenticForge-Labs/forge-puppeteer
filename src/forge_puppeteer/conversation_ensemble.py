@@ -766,6 +766,12 @@ class ConversationEnsemble:
                     slot.pending or exc.code == "stop_unconfirmed"
                 ) else "unavailable"
                 slot.evidence = exc.code
+            except (ValueError, TypeError):
+                # An invalid pure renderer value is a deterministic
+                # pre-dispatch failure. Never stop or quarantine a device
+                # that did not receive a command.
+                slot.status = "blocked" if slot.pending else "unavailable"
+                slot.evidence = "invalid_speech_mapping"
             except Exception:  # noqa: BLE001 - uncertain SDK outcome
                 slot.status = "blocked"
                 slot.evidence = "speech_execution_unknown"
