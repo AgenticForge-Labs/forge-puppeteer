@@ -178,3 +178,26 @@ def test_attributed_performer_still_rejects_its_own_gap():
     )
     with pytest.raises(ValueError):
         window.accept([sample(sequence=5)], performer_ids=("reachy",))
+
+
+def test_inactive_nonzero_intensity_cannot_drive_residual_motion():
+    """VAD inactive wins over a producer's residual smoothed intensity."""
+    shaper = SpeechExpressionShaper(performer_id="reachy", stream_id="utterance-1")
+    active = shaper.render(SpeechEnvelopeHop.model_validate(
+        sample(sequence=0, intensity=0.9, active=True)
+    ))
+    assert active.mouth == pytest.approx(0.9)
+    inactive = shaper.render(SpeechEnvelopeHop.model_validate(
+        sample(sequence=1, intensity=0.9, active=False)
+    ))
+    assert inactive.mouth == 0
+    assert all(getattr(inactive, axis) == 0 for axis in (
+        "pitch", "yaw", "roll", "x", "y", "z", "antenna",
+    ))
+    resumed = shaper.render(SpeechEnvelopeHop.model_validate(
+        sample(sequence=2, intensity=0.9, active=True)
+    ))
+    assert resumed.mouth == pytest.approx(0.9)
+    assert any(getattr(resumed, axis) != 0 for axis in (
+        "pitch", "yaw", "roll", "x", "y", "z",
+    ))
