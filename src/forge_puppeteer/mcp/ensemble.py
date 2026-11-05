@@ -72,19 +72,26 @@ def create_ensemble_server(
     for performer in sorted(speech_driven):
         if performer == "stackchan":
             # Keep StackChan's own speaking character: the envelope gates the
-            # timing, the firmware port chooses each subtle nod or sway.
+            # timing, the firmware port chooses each subtle nod or sway. The
+            # interval must stay well under a typical utterance, otherwise the
+            # next presence transition cancels the target before it completes.
             ensemble.bind_speech_channel(
                 performer, _WindowChannel(performer), amplitude=0.08,
                 warp=stackchan_firmware_warp(
                     seed=speech_seeds.get(performer, 7),
                 ),
-                interval_s=2.0,
+                interval_s=0.6,
             )
         else:
+            # Measured on hardware: a 20 deg command produces ~18.7 deg of real
+            # yaw, so the tapper's own loudness scaling already attenuates the
+            # signal. The channel therefore uses the operator's full expressive
+            # amplitude rather than a fraction of it, and dispatches faster than
+            # the 0.3 s target so speech reads as continuous motion.
             ensemble.bind_speech_channel(
-                performer, _WindowChannel(performer), amplitude=0.09,
+                performer, _WindowChannel(performer), amplitude=0.12,
                 neutral_head=(speech_neutral_heads or {}).get(performer),
-                interval_s=0.25,
+                interval_s=0.2,
             )
     # This is operator-selected trusted code/data, never LLM-provided cues.
     presets = {name: dict(options) for name, options in (presentation_presets or {}).items()}

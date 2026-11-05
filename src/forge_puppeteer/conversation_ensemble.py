@@ -8,6 +8,7 @@ actions. A denied/busy/uncertain device cannot be silently retried or replaced.
 from __future__ import annotations
 
 import logging
+import math
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
@@ -610,20 +611,31 @@ class ConversationEnsemble:
     def _speech_cue(
         self, values: dict[str, float], amplitude: float, name: str,
     ) -> BehaviorCue:
-        """Reachy mapping: one tapper hop around the operator's neutral pose."""
+        """Reachy mapping: one tapper hop around the operator's neutral pose.
+
+        The tapper already scales by loudness and its own VAD envelope, so the
+        channel must not attenuate again: a quiet syllable should still be
+        visible. Measured on hardware, a 20 deg command yields ~18.7 deg of
+        real yaw, so ``amplitude`` is the operator's full expressive budget.
+        """
         levels = {key: max(-1.0, min(1.0, value)) for key, value in values.items()}
         neutral = self._speech_channels[name][2]
         if neutral is None:
             raise ValueError("audio-driven Reachy motion requires a neutral head")
+        # Lift the tapper's small per-hop values toward the full budget while
+        # keeping the sign and relative shape of the motion.
+        def lift(value: float) -> float:
+            return math.copysign(min(1.0, abs(value) * 2.5), value)
+
         pose = _head(
             neutral,
-            pitch_rad=levels.get("pitch", 0.0) * amplitude,
-            yaw_rad=levels.get("yaw", 0.0) * amplitude,
-            roll_rad=levels.get("roll", 0.0) * amplitude * 0.5,
+            pitch_rad=lift(levels.get("pitch", 0.0)) * amplitude,
+            yaw_rad=lift(levels.get("yaw", 0.0)) * amplitude,
+            roll_rad=lift(levels.get("roll", 0.0)) * amplitude * 0.5,
         )
         return BehaviorCue(
             at_s=0.0, operation="head_pose",
-            parameters={"pose": pose, "duration_s": 0.3},
+            parameters={"pose": pose, "duration_s": 0.25},
         )
 
     async def _execute_pattern(
