@@ -114,8 +114,15 @@ class SpeechExpressionShaper:
         # mechanically identical lockstep while preserving shared speech timing.
         phases: dict[str, float] = {}
         for name in FREQUENCIES_HZ:
+            # Native SwayRollRT.reset() retains seeded oscillator phases.
+            # Preserve that behavior across successive utterances for the
+            # opt-in smoothed renderer without altering legacy stream texture.
+            phase_owner = (
+                f"{performer_id}:persistent" if dynamics == "smoothed_v1"
+                else f"{performer_id}:{stream_id}"
+            )
             digest = hashlib.sha256(
-                f"{performer_id}:{stream_id}:{name}".encode()
+                f"{phase_owner}:{name}".encode()
             ).digest()
             phases[name] = math.tau * int.from_bytes(digest[:8], "big") / (2**64)
         self._phases = phases
@@ -285,7 +292,7 @@ class SpeechEnvelopeWindow:
             "intensity": self._latest_hop.intensity,
             "active": self._latest_hop.active,
             "timing_source": "generated_pcm",
-            "stale": time.monotonic_ns() - self._received_at_ns > 750_000_000,
+            "stale": time.monotonic_ns() - self._received_at_ns > _STALE_NS,
             "performers": sorted(self._latest),
             "physical_motion_dispatched": False,
         }
