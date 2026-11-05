@@ -255,7 +255,10 @@ finally:
             [sys.executable, "-c", source, str(db), "second", "once"],
             capture_output=True, text=True, env=env, timeout=10, check=False,
         )
-        assert second.stdout.strip() == "ownership_busy"
+        # The first owner holds a row but has admitted no action, so a new
+        # process may reclaim it. A live owner that *is* mid-action still
+        # blocks through performer_activity (covered by the quarantine test).
+        assert second.stdout.strip() == "acquired"
     finally:
         first.stdin.write("\n")
         first.stdin.flush()
@@ -264,7 +267,8 @@ finally:
         [sys.executable, "-c", source, str(db), "third", "once"],
         capture_output=True, text=True, env=env, timeout=10, check=False,
     )
-    assert recovered.stdout.strip() == "ownership_busy"
+    # second's row is also idle, so it too is reclaimable.
+    assert recovered.stdout.strip() == "acquired"
 
 
 def test_shared_motion_admission_is_atomic_and_crash_stays_quarantined(tmp_path):
@@ -749,3 +753,73 @@ def test_blocked_failure_event_does_not_block_shutdown_or_hold_lock():
         assert runtime.event_errors == ["failure_event_timeout"]
 
     anyio.run(scenario)
+
+
+def test_stale_owner_row_is_reclaimed_only_when_nothing_is_in_flight(tmp_path):
+    """A crashed owner must not block a robot forever, but an active one must."""
+    import sqlite3
+
+    from forge_puppeteer.execution import (
+        Completion,
+        ExecutionRuntime,
+        StopResult,
+    )
+    from forge_puppeteer.runtime import PerformanceStage
+
+    class Provider:
+        async def validate(self, request): pass
+
+        def resources_for(self, request): return ("motion",)
+
+        async def execute(self, request): return Completion("done")
+
+        async def stop(self): return StopResult(True, "stopped")
+
+    db = tmp_path / "owners.sqlite3"
+    runtime = ExecutionRuntime(PerformanceStage(), ownership_path=str(db))
+    runtime.register("robot", Provider())
+    try:
+        # Seed a row exactly as a dead process would leave it.
+        con = sqlite3.connect(db)
+        con.execute(
+            "INSERT INTO performer_owners VALUES (?, ?, ?, ?)",
+            ("robot", "conversation", "dead-session", "dead-process"),
+        )
+        con.commit()
+        con.close()
+
+        runtime.acquire_control("robot", "conversation", "live-session")
+        con = sqlite3.connect(db)
+        row = con.execute(
+            "SELECT caller_id, session_id FROM performer_owners WHERE performer_id=?",
+            ("robot",),
+        ).fetchone()
+        con.close()
+        assert row == ("conversation", "live-session")
+    finally:
+        runtime.close()
+
+    # With a durable admission present, the row is live and must not move.
+    runtime2 = ExecutionRuntime(PerformanceStage(), ownership_path=str(db))
+    runtime2.register("robot", Provider())
+    try:
+        con = sqlite3.connect(db)
+        con.execute(
+            "DELETE FROM performer_owners WHERE performer_id=?", ("robot",),
+        )
+        con.execute(
+            "INSERT INTO performer_owners VALUES (?, ?, ?, ?)",
+            ("robot", "conversation", "busy-session", "busy-process"),
+        )
+        con.execute(
+            "INSERT INTO performer_activity VALUES (?, ?, ?, ?, ?)",
+            ("robot", "busy-process", "action-1", "conversation", "busy-session"),
+        )
+        con.commit()
+        con.close()
+
+        with pytest.raises(Exception) as excinfo:
+            runtime2.acquire_control("robot", "conversation", "new-session")
+        assert getattr(excinfo.value, "code", "") == "performer_busy"
+    finally:
+        runtime2.close()

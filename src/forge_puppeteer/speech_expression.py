@@ -156,7 +156,11 @@ class SpeechEnvelopeWindow:
     def clear(self) -> None:
         self._stream_id: str | None = None
         self._next_sequence = 0
+        # Each bound performer keeps its own shaper and sequence: two robots
+        # share one window but receive independently attributed streams, so a
+        # batch for one must not reset or invalidate the other's state.
         self._shapers: dict[str, SpeechExpressionShaper] = {}
+        self._performer_sequences: dict[str, tuple[str, int]] = {}
         self._latest: dict[str, ExpressionChannels] = {}
         self._latest_hop: SpeechEnvelopeHop | None = None
         self._received_at_ns: int | None = None
@@ -170,31 +174,46 @@ class SpeechEnvelopeWindow:
         if not performer_ids or len(set(performer_ids)) != len(performer_ids):
             raise ValueError("unique bound performer IDs required")
         parsed = [SpeechEnvelopeHop.model_validate(frame) for frame in frames]
-        new_stream = parsed[0].stream_id != self._stream_id
-        expected = 0 if new_stream else self._next_sequence
         stream_id = parsed[0].stream_id
+        # Validate the batch's own continuity first: a gap or mixed stream is
+        # invalid regardless of which performer it is attributed to.
+        for index, hop in enumerate(parsed):
+            if hop.stream_id != stream_id or hop.sequence != parsed[0].sequence + index:
+                raise ValueError("speech batch contains a gap or mixed stream")
+        # Continuity is tracked per performer. The window is room-wide while
+        # each performer receives its own attributed offers, so one performer's
+        # sequence must never gate another's.
+        previous_stream, previous_next = self._performer_sequences.get(
+            performer_ids[0], (stream_id, parsed[0].sequence)
+        )
+        new_stream = stream_id != previous_stream
+        expected = parsed[0].sequence if new_stream else previous_next
         for hop in parsed:
-            if hop.stream_id != stream_id or hop.sequence != expected:
+            if hop.sequence != expected:
                 raise ValueError("speech batch contains a gap or mixed stream")
             expected += 1
         # The source may switch at an explicit stream boundary, but cannot
         # implicitly reset the sequence of an existing stream.
-        if new_stream:
-            shapers = {
-                name: SpeechExpressionShaper(performer_id=name, stream_id=stream_id)
-                for name in performer_ids
-            }
-        else:
-            if set(self._shapers) != set(performer_ids):
-                raise ValueError("performer bindings changed during speech stream")
-            shapers = self._shapers
+        shapers = {}
+        for name in performer_ids:
+            bound_stream, _ = self._performer_sequences.get(name, (stream_id, 0))
+            existing = self._shapers.get(name)
+            if existing is None or bound_stream != stream_id:
+                shapers[name] = SpeechExpressionShaper(
+                    performer_id=name, stream_id=stream_id,
+                )
+            else:
+                shapers[name] = existing
         latest = {}
         for hop in parsed:
             latest = {name: shaper.render(hop) for name, shaper in shapers.items()}
-        self._shapers = shapers
-        self._latest = latest
+        self._shapers.update(shapers)
+        # Merge, never replace: an attributed batch updates only its own
+        # performer, otherwise one robot's envelope would erase the other's.
+        self._latest.update(latest)
         self._stream_id = stream_id
         self._next_sequence = expected
+        self._performer_sequences[performer_ids[0]] = (stream_id, expected)
         self._latest_hop = parsed[-1]
         self._received_at_ns = time.monotonic_ns()
         return {

@@ -141,3 +141,40 @@ def test_bad_batch_never_partially_updates_speech_window():
                       performer_ids=("reachy",))
     assert window.snapshot()["last_sequence"] == 0
     assert window.accept([sample(1)], performer_ids=("reachy",))["last_sequence"] == 1
+
+
+def test_attributed_performers_advance_independently():
+    """Two robots share one window but must not invalidate each other.
+
+    The room offers one attributed batch per performer; alternating batches
+    used to raise 'performer bindings changed' and erase the other robot's
+    channels, which silently stopped both robots mid-conversation.
+    """
+    window = SpeechEnvelopeWindow()
+    stream = "room-utterance"
+
+    def offer(performer, sequence):
+        return window.accept(
+            [sample(sequence=sequence, stream_id=stream)],
+            performer_ids=(performer,),
+        )
+
+    offer("reachy", 0)
+    offer("stackchan", 0)          # must not reset or reject reachy
+    offer("reachy", 1)
+    offer("stackchan", 1)
+    assert window.latest("reachy") is not None
+    assert window.latest("stackchan") is not None
+    offer("reachy", 2)
+    assert window.latest("stackchan") is not None, (
+        "a reachy batch erased stackchan's channels"
+    )
+
+
+def test_attributed_performer_still_rejects_its_own_gap():
+    window = SpeechEnvelopeWindow()
+    window.accept(
+        [sample(sequence=0)], performer_ids=("reachy",),
+    )
+    with pytest.raises(ValueError):
+        window.accept([sample(sequence=5)], performer_ids=("reachy",))

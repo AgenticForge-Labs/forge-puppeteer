@@ -129,6 +129,10 @@ class EnsembleConfig(BaseModel):
     # generated-PCM envelope instead of the authored pattern.
     speech_driven_performers: tuple[str, ...] = ()
     speech_seed: int = 7
+    # Hold the first spoken turn until startup motion (if any) has settled.
+    # The pinning of Reachy's own SDK wake-up is the alternative; raising the
+    # head and antennas to the reviewed neutral does not need the choreography.
+    startup_settle_s: float = Field(default=3.0, ge=0, le=30)
     reachy_expression_style: Literal["classic", "expressive"] = "classic"
     reachy_startup_behavior: Literal["none", "wake_up_if_sleeping"] = "none"
     reachy_neutral_antennas_rad: tuple[float, float] | None = None
@@ -498,6 +502,7 @@ def serve(config_path: str | Path) -> None:
         runtime, packs,
         presence_ttl_s=config.presence_ttl_s,
         stop_timeout_s=config.stop_timeout_s,
+        startup_settle_s=config.startup_settle_s,
     )
     create_ensemble_server(
         runtime, ensemble, connected=connected,
@@ -505,6 +510,7 @@ def serve(config_path: str | Path) -> None:
         speech_driven_performers=speech_driven,
         speech_neutral_heads=speech_neutral,
         speech_seeds=speech_seeds,
+        startup_settle_s=config.startup_settle_s,
         presentation_presets=stackchan_display_presets(config),
     ).run(transport="stdio")
 
