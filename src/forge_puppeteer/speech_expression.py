@@ -197,6 +197,7 @@ class SpeechEnvelopeWindow:
         self._latest: dict[str, ExpressionChannels] = {}
         self._latest_hop: SpeechEnvelopeHop | None = None
         self._received_at_ns: int | None = None
+        self._performer_received_at_ns: dict[str, int] = {}
 
     def accept(
         self, frames: list[dict[str, object]], *, performer_ids: tuple[str, ...],
@@ -251,6 +252,8 @@ class SpeechEnvelopeWindow:
         self._next_sequence = expected
         self._latest_hop = parsed[-1]
         self._received_at_ns = time.monotonic_ns()
+        for name in performer_ids:
+            self._performer_received_at_ns[name] = self._received_at_ns
         return {
             "frames_accepted": len(parsed),
             "stream_id": stream_id,
@@ -267,7 +270,8 @@ class SpeechEnvelopeWindow:
         """
         if self._received_at_ns is None:
             return None
-        if (time.monotonic_ns() - self._received_at_ns) > _STALE_NS:
+        received_at = self._performer_received_at_ns.get(performer_id)
+        if received_at is None or time.monotonic_ns() - received_at > _STALE_NS:
             return None
         return self._latest.get(performer_id)
 

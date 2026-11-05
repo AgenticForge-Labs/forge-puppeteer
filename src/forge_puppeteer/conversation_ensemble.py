@@ -657,6 +657,7 @@ class ConversationEnsemble:
         interval = self._speech_intervals.get(name, self._speech_interval_s)
         with slot.scope:
             index = 0
+            last_dispatched: tuple[str, int] | None = None
             started = anyio.current_time()
             try:
                 while True:
@@ -680,6 +681,15 @@ class ConversationEnsemble:
                                 "speech_envelope_awaiting",
                                 extra={"performer_id": name, "interval_s": interval},
                             )
+                        await anyio.sleep(interval)
+                        continue
+                    # Later fresh PCM features replace unsent hops; neither
+                    # replay a dispatched sequence nor animate VAD inactivity.
+                    if values.get("active") is False:
+                        await anyio.sleep(interval)
+                        continue
+                    identity = (str(values.get("stream_id", "")), values.get("sequence"))
+                    if identity[1] is not None and identity == last_dispatched:
                         await anyio.sleep(interval)
                         continue
                     if warp is not None:
@@ -732,26 +742,45 @@ class ConversationEnsemble:
                         return
                     slot.status = "active"
                     slot.evidence = "speech_envelope_dispatch"
+                    last_dispatched = identity
                     index += 1
                     if anyio.current_time() - started > interval:
                         # Another performer held the gate past this interval.
                         self._dispatch_overruns += 1
                     await anyio.sleep(interval)
+            except anyio.get_cancelled_exc_class():
+                slot.status = "cancelling"
+                slot.evidence = "speech_slot_cancelled"
+            except ExecutionError as exc:
+                slot.status = "blocked" if (
+                    slot.pending or exc.code == "stop_unconfirmed"
+                ) else "unavailable"
+                slot.evidence = exc.code
+            except Exception:  # noqa: BLE001 - uncertain SDK outcome
+                slot.status = "blocked"
+                slot.evidence = "speech_execution_unknown"
             finally:
                 if slot.pending:
-                    # A cancelled slot must still report the real outcome: the
-                    # device call has not returned yet, so end the slot only
-                    # after the in-flight target settles. Otherwise the next
-                    # performer acquires the shared gate while this device is
-                    # still busy.
+                    # Cancellation of runtime.wait does NOT cancel its SDK task.
+                    # An unconfirmed STOP must quarantine, never auto-rearm.
                     with anyio.CancelScope(shield=True):
-                        with anyio.move_on_after(self.stop_timeout_s):
-                            await slot.action_done.wait()
+                        try:
+                            with anyio.fail_after(self.stop_timeout_s):
+                                stopped = await self.runtime.stop(name)
+                            if not stopped.confirmed:
+                                slot.status = "blocked"
+                                slot.evidence = "device_stop_unconfirmed"
+                            else:
+                                slot.pending = False
+                        except Exception:  # noqa: BLE001 - unknown STOP
+                            slot.status = "blocked"
+                            slot.evidence = "device_stop_unknown"
+                        slot.action_done.set()
                 if slot.status not in {"blocked", "unavailable"}:
                     slot.status = "completed"
-                    slot.evidence = "behavior_pattern_finished"
-                # Without this the transition stop waits for the full timeout
-                # and then quarantines a perfectly healthy performer.
+                    slot.evidence = "speech_presence_finished"
+                if slot.status == "blocked":
+                    self._blocked.add(name)
                 slot.done.set()
 
     def _speech_cue(
@@ -806,7 +835,7 @@ class ConversationEnsemble:
                 if offset >= pattern.max_duration_s:
                     return
                 now = anyio.current_time()
-                if pattern.mode == "loop" and now - target > (pattern.period_s or 0.0):
+                if pattern.mode == "loop" and now - target > 0.5:
                     # Slow hardware must not trigger high-rate catch-up bursts.
                     continue
                 await anyio.sleep(max(0, target - now))
