@@ -916,9 +916,14 @@ async def test_speech_does_not_reissue_same_hop_or_animate_inactive_hop():
             event_id="start", session_id="room", sequence=0,
             state="speaking", source="agent_state",
         ))
-        with anyio.fail_after(2):
+        with anyio.move_on_after(2):
             while len(provider.calls) < 1:
                 await anyio.sleep(0.01)
+        assert provider.calls, (
+            f"no speech dispatch: {ensemble.snapshot()} "
+            f"runtime_inhibited={runtime._inhibited} "
+            f"entries={[(key, value.record.state, value.record.error) for key, value in runtime._entries.items()]}"
+        )
         await anyio.sleep(0.12)
         assert len(provider.calls) == 1
         channel.value["sequence"] = 1
