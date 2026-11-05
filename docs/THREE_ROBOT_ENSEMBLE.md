@@ -59,6 +59,45 @@ The original v1 mode is unchanged and retains its seven SHA-pinned SO-ARM
 programs, watchdog, human lease rules and simulation default.
 
 
+### Operator-selected motion profiles (PR #40 software)
+
+All schemas v1 (Reachy, StackChan, SO-ARM), v2 (Reachy only) and v3
+(Reachy + StackChan) accept optional `motion_profiles`, with independently
+selected `idle` and `speaking` values of `legacy` (default),
+`native_v1` or `smooth_v2`. They may select only **existing reviewed**
+authoring packs; no arbitrary actuator targets, new SDK connection or
+auto-fallback is allowed.
+
+A **review-only example** for the v3 duo, to be merged into an otherwise
+complete operator-reviewed config:
+
+```json
+{
+  "reachy_neutral_antennas_rad": [-0.17, 0.17],
+  "speech_driven_performers": ["reachy", "stackchan"],
+  "motion_profiles": {
+    "reachy": {"idle": "native_v1", "speaking": "smooth_v2"},
+    "stackchan": {"idle": "legacy", "speaking": "smooth_v2"}
+  }
+}
+```
+
+The Reachy selection requires the explicit `pose_and_antennas` grant and
+physically reviewed antenna neutrals; these numeric examples are **not**
+operator permission or recommended physical calibration. StackChan
+`native_v1` speaking uses native mouth WEIGHT and `smooth_v2` adds
+content-free latest-hop smoothing with a single silent release. Unknown
+performers or profile names, unauthorized Reachy expressive motion, duplicate
+speech performer IDs, and SO-ARM audio-reactive streaming all fail closed.
+`smooth_v2` speaking requires that performer in
+`speech_driven_performers`, not merely an LLM expression request.
+
+These selections remain software-only until physical approval. Their motion
+samples are upstream-inspired, **not exact Reachy raw PCM output**; the
+generated-PCM clock is not a measured speaker clock. See
+[PR #40 acceptance](PR40_MOTION_ENGINE_COMPLETION.md) and
+[continuity contract](MOTION_CONTINUITY_IMPLEMENTATION.md).
+
 ## Architecture
 
 ```text
