@@ -259,3 +259,11 @@ def test_duo_smooth_stackchan_speaking_selects_native_sdk_face_and_dynamics(
         "mouth"
     ]["weight"] == 45
     assert "weight" not in ensemble.packs["reachy"].behaviors["speaking"].cues[0].parameters
+
+    data["motion_profiles"]["stackchan"]["idle"] = "smooth_v2"
+    config.write_text(json.dumps(data))
+    launcher.serve(config)
+    smooth_ensemble, _ = captured[-1]
+    assert smooth_ensemble.packs["stackchan"].behaviors["idle"].cues[2].parameters[
+        "yaw"
+    ]["angle"] == 20  # half of the native_v1 authored 80-tenths envelope

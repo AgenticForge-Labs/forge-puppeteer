@@ -86,7 +86,10 @@ The Reachy selection requires the explicit `pose_and_antennas` grant and
 physically reviewed antenna neutrals; these numeric examples are **not**
 operator permission or recommended physical calibration. StackChan
 `native_v1` speaking uses native mouth WEIGHT and `smooth_v2` adds
-content-free latest-hop smoothing with a single silent release. Unknown
+content-free latest-hop smoothing with a single silent release.
+Separately, `smooth_v2` idle uses a 60%-amplitude Reachy expressive idle
+or StackChan's smaller 40-tenths-degree yaw authoring. These reduced
+software targets are **not** physical clearance guarantees. Unknown
 performers or profile names, unauthorized Reachy expressive motion, duplicate
 speech performer IDs, and SO-ARM audio-reactive streaming all fail closed.
 `smooth_v2` speaking requires that performer in
