@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import deque
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
@@ -24,6 +24,7 @@ from .behavior_contract import (
     Presence,
 )
 from .conversation_native import _head
+from .motion_profiles import select_motion_patterns
 
 logger = logging.getLogger(__name__)
 from .execution import ActionRequest, ExecutionError, ExecutionRuntime
@@ -71,6 +72,7 @@ class ConversationEnsemble:
         presence_ttl_s: float = 30,
         stop_timeout_s: float = 5,
         startup_settle_s: float = 0.0,
+        motion_patterns: Mapping[str, Mapping[str, PerformerBehaviors]] | None = None,
     ):
         if not caller_id or not 1 <= presence_ttl_s <= 3600 or not 0.1 <= stop_timeout_s <= 60:
             raise ValueError("invalid conversation coordinator settings")
@@ -82,8 +84,21 @@ class ConversationEnsemble:
         )
         if not items or len({p.performer_id for p in items}) != len(items):
             raise ValueError("one or more unique performer bindings are required")
+        # Optional, explicitly authored replacements; absent means unchanged
+        # legacy behavior. Validate every selector before any SDK action.
+        selected = {p.performer_id: p for p in items}
+        for performer_id, choices in (motion_patterns or {}).items():
+            if performer_id not in selected:
+                raise ValueError("motion profile references an unknown performer")
+            if any(name not in {"idle", "speaking"} for name in choices):
+                raise ValueError("unsupported motion profile behavior")
+            selected[performer_id] = select_motion_patterns(
+                selected[performer_id],
+                idle=choices.get("idle"),
+                speaking=choices.get("speaking"),
+            )
         self.runtime = runtime
-        self.packs = {p.performer_id: p for p in items}
+        self.packs = selected
         self.caller_id = caller_id
         self.presence_ttl_s = presence_ttl_s
         self.stop_timeout_s = stop_timeout_s
