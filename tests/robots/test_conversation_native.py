@@ -540,3 +540,24 @@ async def test_two_speaking_performers_do_not_contend_for_one_runtime():
     # Both performers moved, and never at the same time on the shared runtime.
     assert reachy_provider.calls and stack_provider.calls
     assert shared["peak"] == 1, f"two performers executed concurrently: {shared}"
+
+
+@pytest.mark.anyio
+async def test_attributed_envelope_feeds_only_its_own_performer():
+    """A batch attributed to one robot must not move the other."""
+    from forge_puppeteer.speech_expression import SpeechEnvelopeWindow
+
+    window = SpeechEnvelopeWindow()
+    frames = [
+        {
+            "schema": "forge.speech_envelope.v1", "stream_id": "tts-1",
+            "sequence": i, "offset_ms": i * 50, "duration_ms": 50,
+            "active": True, "intensity": 0.8, "rms_dbfs": -16.0,
+            "timing_source": "generated_pcm",
+            "acoustic_playout_measured": False,
+        }
+        for i in range(4)
+    ]
+    window.accept(frames, performer_ids=("reachy",))
+    assert window.latest("reachy") is not None
+    assert window.latest("stackchan") is None

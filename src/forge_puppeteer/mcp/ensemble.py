@@ -176,20 +176,32 @@ def create_ensemble_server(
     @server.tool()
     async def ensemble_speech_envelope(
         session_id: str, frames: list[dict[str, object]],
+        performer_id: str | None = None,
     ) -> dict[str, object]:
         """Optional generated-PCM feature ingress; preview only, NO SDK motion.
 
         This is a room-owned, content-free observation tool, not an LLM tool
         or an extra actuator scheduler. Existing action/STOP authority is
         unchanged. The feature source is not a measured speaker clock.
+
+        ``performer_id`` attributes the batch so two robots sharing one
+        runtime are gated independently. An attributed batch only feeds that
+        performer's channel; omitting it keeps the original behaviour of
+        feeding every configured channel.
         """
         if not motion_enabled:
             raise ToolError("ensemble_motion_not_operator_authorized")
         if not session_id or session_id != ensemble.snapshot()["session_id"]:
             return {"outcome": "denied", "reason": "inactive_or_foreign_room"}
+        if performer_id is not None and performer_id not in ensemble.packs:
+            return {"outcome": "denied", "reason": "unknown_performer"}
         try:
             result = speech_window.accept(
-                frames, performer_ids=tuple(ensemble.packs),
+                frames,
+                performer_ids=(
+                    (performer_id,) if performer_id is not None
+                    else tuple(ensemble.packs)
+                ),
             )
             return {"outcome": "observed", **result}
         except (TypeError, ValueError):
