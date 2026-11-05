@@ -462,3 +462,81 @@ def test_stackchan_speaking_warp_uses_firmware_style_targets():
     assert all(100 <= s <= 200 for s in speeds)
     # And it varies rather than repeating one target.
     assert len(set(zip(yaws, pitches, strict=True))) > 5
+
+
+@pytest.mark.anyio
+async def test_two_speaking_performers_do_not_contend_for_one_runtime():
+    """Reachy's 250 ms hop and StackChan's 2 s drift share one runtime.
+
+    Without a cross-performer gate, the faster channel submits while the
+    slower performer's target is still executing. The gate serializes submit
+    and execution, so active executions never exceed one.
+    """
+
+    class Channel:
+        def latest(self):
+            return {"yaw": 0.2, "pitch": 0.2, "roll": 0.0, "z": 0.0, "antenna": 0.0}
+
+    shared = {"active": 0, "peak": 0}
+
+    class SlowProvider:
+        """Records *cross-performer* concurrency, the property the gate owns."""
+
+        def __init__(self):
+            self.calls = []
+
+        async def validate(self, request):
+            return None
+
+        async def execute(self, request):
+            from forge_puppeteer.execution import Completion
+            shared["active"] += 1
+            shared["peak"] = max(shared["peak"], shared["active"])
+            self.calls.append(request.operation)
+            try:
+                await anyio.sleep(0.12)
+                return Completion("ok")
+            finally:
+                shared["active"] -= 1
+
+        def resources_for(self, request):
+            return ("head.pose",)
+
+        async def stop(self):
+            from forge_puppeteer.execution import StopResult
+            return StopResult(True, "stopped")
+
+    reachy_provider = SlowProvider()
+    stack_provider = SlowProvider()
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("reachy", reachy_provider)
+    runtime.register("stackchan", stack_provider)
+    packs = (
+        reachy_conversation_pack(
+            "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+            available_recordings=("yes1", "no1"), speaking_axis="tilt",
+        ),
+        stackchan_conversation_pack("stackchan"),
+    )
+    ensemble = ConversationEnsemble(runtime, packs)
+    ensemble.bind_speech_channel(
+        "reachy", Channel(), amplitude=0.05, neutral_head=NEUTRAL, interval_s=0.02,
+    )
+    ensemble.bind_speech_channel(
+        "stackchan", Channel(), amplitude=0.08,
+        warp=stackchan_firmware_warp(seed=7), interval_s=0.02,
+    )
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(EnsemblePresence(
+            event_id="event-0", session_id="one-4g-room", sequence=0,
+            state="speaking", source="agent_state",
+        ))
+        await anyio.sleep(0.6)
+        await ensemble.observe(EnsemblePresence(
+            event_id="event-1", session_id="one-4g-room", sequence=1,
+            state="listening", source="agent_state",
+        ))
+        await anyio.sleep(0.05)
+    # Both performers moved, and never at the same time on the shared runtime.
+    assert reachy_provider.calls and stack_provider.calls
+    assert shared["peak"] == 1, f"two performers executed concurrently: {shared}"

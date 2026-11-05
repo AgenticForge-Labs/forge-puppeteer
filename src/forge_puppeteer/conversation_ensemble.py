@@ -86,6 +86,11 @@ class ConversationEnsemble:
             str, tuple[object, float, list | None, object | None]
         ] = {}
         self._speech_intervals: dict[str, float] = {}
+        # One device connection per performer, but the execution runtime is
+        # shared. Targets that would run while another performer's target is
+        # still executing contend for it, so dispatch is serialized.
+        self._dispatch_gate = anyio.Lock()
+        self._dispatch_overruns = 0
         # Bounded dispatch rate for audio-driven targets: slow hardware must
         # never receive a burst of catch-up commands.
         self._speech_interval_s: float = 0.25
@@ -548,10 +553,14 @@ class ConversationEnsemble:
                         asset_id=cue.asset_id, asset_revision=cue.asset_revision,
                     )
                     slot.last_action_id = request.id
-                    await self.runtime.submit(request)
-                    slot.pending = True
-                    slot.action_done = anyio.Event()
-                    record = await self.runtime.wait(request.id)
+                    # Hold the gate across submit *and* execution so another
+                    # performer's target cannot queue up behind this one.
+                    started = anyio.current_time()
+                    async with self._dispatch_gate:
+                        await self.runtime.submit(request)
+                        slot.pending = True
+                        slot.action_done = anyio.Event()
+                        record = await self.runtime.wait(request.id)
                     slot.pending = record.state == ActionState.UNKNOWN
                     slot.action_done.set()
                     if record.state != ActionState.COMPLETED:
@@ -566,6 +575,9 @@ class ConversationEnsemble:
                     slot.status = "active"
                     slot.evidence = "speech_envelope_dispatch"
                     index += 1
+                    if anyio.current_time() - started > interval:
+                        # Another performer held the gate past this interval.
+                        self._dispatch_overruns += 1
                     await anyio.sleep(interval)
             finally:
                 slot.status = "completed"
