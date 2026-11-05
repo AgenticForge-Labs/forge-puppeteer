@@ -3,6 +3,7 @@
 import hashlib
 import json
 import math
+from itertools import pairwise
 from pathlib import Path
 
 import anyio
@@ -56,7 +57,9 @@ def test_reachy_native_pack_uses_exact_sdk_ops_and_asset_pins():
     assert len(z) == round(10.0 / IDLE_BREATH_SAMPLE_S)
     offsets = [cue.at_s for cue in idle.cues]
     assert offsets == sorted(offsets)
-    assert all(b - a == pytest.approx(IDLE_BREATH_SAMPLE_S) for a, b in zip(offsets, offsets[1:]))
+    assert all(
+        b - a == pytest.approx(IDLE_BREATH_SAMPLE_S) for a, b in pairwise(offsets)
+    )
     assert z[0] == pytest.approx(0)
     assert max(z) == pytest.approx(0.004, abs=1e-3)
     assert min(z) == pytest.approx(-0.004, abs=1e-3)
@@ -713,4 +716,4 @@ def test_idle_breath_loop_does_not_snap_the_head():
     # The breath still actually moves within the cycle.
     assert min(z) < -0.002 < 0.002 < max(z)
     offsets = [cue.at_s for cue in idle.cues]
-    assert all(b - a < idle.period_s for a, b in zip(offsets, offsets[1:]))
+    assert all(b - a < idle.period_s for a, b in pairwise(offsets))
