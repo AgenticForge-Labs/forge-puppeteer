@@ -7,6 +7,7 @@ actions. A denied/busy/uncertain device cannot be silently retried or replaced.
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from collections.abc import Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
@@ -22,6 +23,8 @@ from .behavior_contract import (
     Presence,
 )
 from .conversation_native import _head
+
+logger = logging.getLogger(__name__)
 from .execution import ActionRequest, ExecutionError, ExecutionRuntime
 from .robot_contracts import ActionState
 
@@ -536,6 +539,13 @@ class ConversationEnsemble:
                     if values is None:
                         slot.status = "active"
                         slot.evidence = "awaiting_speech_envelope"
+                        if index == 0:
+                            # Logged once per speaking slot: the channel exists
+                            # but no fresh hop has arrived yet.
+                            logger.debug(
+                                "speech_envelope_awaiting",
+                                extra={"performer_id": name, "interval_s": interval},
+                            )
                         await anyio.sleep(interval)
                         continue
                     if warp is not None:
@@ -553,6 +563,20 @@ class ConversationEnsemble:
                         asset_id=cue.asset_id, asset_revision=cue.asset_revision,
                     )
                     slot.last_action_id = request.id
+                    # Per-dispatch evidence: distinguishes "waiting for a fresh
+                    # envelope" from "envelope accepted and target submitted".
+                    # Without this an operator cannot tell a gated channel from
+                    # a sleeping robot.
+                    logger.debug(
+                        "speech_envelope_dispatch",
+                        extra={
+                            "performer_id": name,
+                            "action_id": request.id,
+                            "operation": request.operation,
+                            "cue_id": request.cue_id,
+                            "index": index,
+                        },
+                    )
                     # Hold the gate across submit *and* execution so another
                     # performer's target cannot queue up behind this one.
                     started = anyio.current_time()
