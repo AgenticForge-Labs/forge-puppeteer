@@ -784,3 +784,23 @@ async def test_a_conversation_keeps_producing_speech_targets_turn_after_turn():
         cues = [cue.split(":")[0] for cue in provider.calls]
         # One speech slot per turn, and each delivers more than one target.
         assert cues.count("speaking") >= 6, f"speech stopped after a turn: {cues}"
+
+
+@pytest.mark.parametrize("amplitude,interval", [
+    (float("nan"), 0.25), (float("inf"), 0.25),
+    (-0.1, 0.25), (1.1, 0.25),
+    (0.1, float("nan")), (0.1, 0.0),
+    (0.1, 6.0),
+])
+def test_speech_channel_rejects_unsafe_operator_budgets(amplitude, interval):
+    runtime = ExecutionRuntime(PerformanceStage())
+    pack = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1", "no1"),
+    )
+    ensemble = ConversationEnsemble(runtime, [pack])
+    with pytest.raises(ValueError):
+        ensemble.bind_speech_channel(
+            "reachy", object(), amplitude=amplitude,
+            neutral_head=NEUTRAL, interval_s=interval,
+        )
