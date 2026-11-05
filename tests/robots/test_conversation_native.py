@@ -872,8 +872,9 @@ async def test_cancelled_speech_runtime_requires_confirmed_stop():
 @pytest.mark.anyio
 async def test_speech_does_not_reissue_same_hop_or_animate_inactive_hop():
     class Channel:
-        value = {"stream_id": "one", "sequence": 0, "active": True,
-                 "yaw": 0.3, "pitch": 0, "roll": 0, "z": 0, "antenna": 0}
+        def __init__(self):
+            self.value = {"stream_id": "one", "sequence": 0, "active": True,
+                          "yaw": 0.3, "pitch": 0, "roll": 0, "z": 0, "antenna": 0}
 
         def latest(self):
             return dict(self.value)

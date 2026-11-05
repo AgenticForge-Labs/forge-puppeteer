@@ -95,7 +95,7 @@ def stackchan_native_mouth_cue(
     """
     level = values.get("mouth")
     if isinstance(level, bool) or not isinstance(level, (float, int)):
-        raise ValueError("StackChan mouth level must be numeric")
+        raise TypeError("StackChan mouth level must be numeric")
     if not math.isfinite(level) or not 0 <= level <= 1:
         raise ValueError("StackChan mouth level must be normalized")
     active = values.get("active")

@@ -82,8 +82,10 @@ def test_smooth_mouth_renderer_is_pure_bounded_and_releases_on_silence():
                   "parameters": active.parameters})
     quiet = stackchan_native_mouth_cue({"mouth": 0.9, "active": False}, 0.08)
     assert quiet.parameters == {"mouth": {"weight": 0}}
-    for bad in (float("nan"), -0.1, 1.1, True):
+    for bad in (float("nan"), -0.1, 1.1):
         with pytest.raises(ValueError):
             stackchan_native_mouth_cue({"mouth": bad, "active": True}, 0.08)
+    with pytest.raises(TypeError):
+        stackchan_native_mouth_cue({"mouth": True, "active": True}, 0.08)
     with pytest.raises(ValueError):
         stackchan_native_mouth_cue({"mouth": 0.5}, 0.08)

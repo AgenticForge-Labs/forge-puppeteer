@@ -208,7 +208,11 @@ def anyio_backend():
 def test_duo_smooth_stackchan_speaking_selects_native_sdk_face_and_dynamics(
     tmp_path, monkeypatch,
 ):
-    from forge_puppeteer.behavior_contract import BehaviorCue, BehaviorPattern, PerformerBehaviors
+    from forge_puppeteer.behavior_contract import (
+        BehaviorCue,
+        BehaviorPattern,
+        PerformerBehaviors,
+    )
 
     class FakeProvider:
         def __init__(self, config):
