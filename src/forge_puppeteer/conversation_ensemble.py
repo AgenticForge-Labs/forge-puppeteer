@@ -505,6 +505,14 @@ class ConversationEnsemble:
         """
         if performer_id not in self.packs:
             raise ValueError("speech channel requires a configured performer")
+        # Reject unsafe/undefined operator budgets at configuration time,
+        # before any presence event can admit SDK motion.
+        if not math.isfinite(amplitude) or not 0 <= amplitude <= 1:
+            raise ValueError("speech amplitude must be finite and within 0..1 rad")
+        if not math.isfinite(interval_s) or not 0.05 <= interval_s <= 5:
+            raise ValueError("speech dispatch interval must be within 0.05..5 seconds")
+        if neutral_head is None and warp is None:
+            raise ValueError("Reachy speech requires a neutral pose or explicit warp")
         if neutral_head is not None and (
             len(neutral_head) != 4 or any(len(row) != 4 for row in neutral_head)
         ):
