@@ -69,11 +69,13 @@ def test_reachy_operator_can_select_bounded_tilt_speaking_and_listening():
     )
     speaking = pack.behaviors["speaking"].cues
     listening = pack.behaviors["listening"].cues
-    assert speaking[0].parameters["pose"][2][1] == pytest.approx(math.sin(amplitude))
-    assert speaking[1].parameters["pose"][2][1] == pytest.approx(-math.sin(amplitude))
+    # Pitch is a rotation about y under the daemon's readback convention,
+    # so a tilt lands in matrix element [0][2], not [2][1].
+    assert speaking[0].parameters["pose"][0][2] == pytest.approx(math.sin(amplitude))
+    assert speaking[1].parameters["pose"][0][2] == pytest.approx(-math.sin(amplitude))
     assert speaking[2].parameters["pose"] == NEUTRAL
-    assert listening[0].parameters["pose"][2][1] == pytest.approx(math.sin(amplitude))
-    assert listening[1].parameters["pose"][2][1] == pytest.approx(math.sin(amplitude * 0.75))
+    assert listening[0].parameters["pose"][0][2] == pytest.approx(math.sin(amplitude))
+    assert listening[1].parameters["pose"][0][2] == pytest.approx(math.sin(amplitude * 0.75))
     for changes in ({"speaking_axis": "invalid"}, {"listening_tilt_rad": 0.08},
                     {"wobble_amplitude_rad": 0.08}):
         with pytest.raises(ValueError):
@@ -410,3 +412,33 @@ async def test_speech_channel_drives_speaking_without_changing_other_slots():
         assert "head" in provider.calls
         await ensemble.observe(presence(1, "listening"))
         await anyio.sleep(0.05)
+
+
+def test_head_axes_match_the_daemon_readback_convention():
+    """The daemon reads a head matrix with as_euler("xyz") = (roll, pitch, yaw).
+
+    A wrong axis order still yields the right rotation magnitude, so only an
+    axis-aware assertion catches it.
+    """
+    from scipy.spatial.transform import Rotation
+
+    from forge_puppeteer.conversation_native import _head
+
+    identity = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+
+    def euler(matrix):
+        roll, pitch, yaw = Rotation.from_matrix(
+            [row[:3] for row in matrix[:3]]
+        ).as_euler("xyz")
+        return (math.degrees(roll), math.degrees(pitch), math.degrees(yaw))
+
+    for name, kwargs, axis in (
+        ("roll", {"roll_rad": math.radians(10)}, 0),
+        ("pitch", {"pitch_rad": math.radians(10)}, 1),
+        ("yaw", {"yaw_rad": math.radians(10)}, 2),
+    ):
+        angles = euler(_head(identity, **kwargs))
+        assert abs(angles[axis] - 10.0) < 0.01, (name, angles)
+        others = [abs(a) for i, a in enumerate(angles) if i != axis]
+        assert max(others) < 0.01, (name, angles)

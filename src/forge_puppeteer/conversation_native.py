@@ -113,38 +113,32 @@ def _head(
 ) -> list[list[float]]:
     """Compute a small orientation/translation offset around an OPERATOR pose.
 
+    Axes follow the pinned SDK's own convention: the daemon reads a head
+    matrix with ``R.from_matrix(...).as_euler("xyz")``, so ``roll`` is a
+    rotation about x, ``pitch`` about y and ``yaw`` about z. Building them in
+    any other order silently moves the head on the wrong axis.
+
     This creates the transform; Reachy SDK remains the validation/execution
     authority. Physical +Z and clearance are not inferred from this formula.
     """
-    cp, sp = math.cos(pitch_rad), math.sin(pitch_rad)
-    cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
-    cr, sr = math.cos(roll_rad), math.sin(roll_rad)
-    rotation = (
-        (1.0, 0.0, 0.0),
-        (0.0, cp, -sp),
-        (0.0, sp, cp),
-    )
-    ry = (
-        (cy, 0.0, sy),
-        (0.0, 1.0, 0.0),
-        (-sy, 0.0, cy),
-    )
-    rz = (
-        (cr, -sr, 0.0),
-        (sr, cr, 0.0),
-        (0.0, 0.0, 1.0),
-    )
-    pitched_yawed = [
-        [sum(rotation[i][k] * ry[k][j] for k in range(3)) for j in range(3)]
-        for i in range(3)
-    ]
-    local = [
-        [sum(pitched_yawed[i][k] * rz[k][j] for k in range(3)) for j in range(3)]
-        for i in range(3)
-    ]
+    def axis(angle: float, index: int) -> list[list[float]]:
+        c, s_ = math.cos(angle), math.sin(angle)
+        if index == 0:  # roll
+            return [[1.0, 0.0, 0.0], [0.0, c, -s_], [0.0, s_, c]]
+        if index == 1:  # pitch
+            return [[c, 0.0, s_], [0.0, 1.0, 0.0], [-s_, 0.0, c]]
+        return [[c, -s_, 0.0], [s_, c, 0.0], [0.0, 0.0, 1.0]]  # yaw
+
+    local = axis(roll_rad, 0)
+    for angle, index in ((pitch_rad, 1), (yaw_rad, 2)):
+        rotation = axis(angle, index)
+        local = [
+            [sum(local[i][k] * rotation[k][j] for k in range(3)) for j in range(3)]
+            for i in range(3)
+        ]
     result = [
         [sum(base[i][k] * local[k][j] for k in range(3)) for j in range(3)]
-         + [float(base[i][3]) + (vertical_m if i == 2 else 0.0)]
+        + [float(base[i][3]) + (vertical_m if i == 2 else 0.0)]
         for i in range(3)
     ]
     return result + [[0.0, 0.0, 0.0, 1.0]]
