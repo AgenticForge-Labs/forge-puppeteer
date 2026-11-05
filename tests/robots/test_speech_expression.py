@@ -257,3 +257,48 @@ def test_smoothed_new_utterance_does_not_inherit_previous_envelope():
         sample(0, stream_id="two", intensity=0.8)
     ))
     assert initial.mouth == pytest.approx(0.8 * (1 - math.exp(-1)))
+
+
+def test_window_smoothing_is_per_performer_and_default_remains_legacy():
+    window = SpeechEnvelopeWindow(performer_dynamics={"reachy": "smoothed_v1"})
+    frame = sample(0, intensity=1.0)
+    window.accept([frame], performer_ids=("reachy", "stackchan"))
+    reachy = window.latest("reachy")
+    stackchan = window.latest("stackchan")
+    assert reachy is not None and stackchan is not None
+    assert 0 < reachy.mouth < 1
+    assert stackchan.mouth == 1
+    assert window.snapshot()["physical_motion_dispatched"] is False
+
+
+def test_window_dynamics_survive_clear_but_not_envelope_history():
+    window = SpeechEnvelopeWindow(performer_dynamics={"reachy": "smoothed_v1"})
+    window.accept([sample(0, intensity=1.0)], performer_ids=("reachy",))
+    first = window.latest("reachy")
+    assert first is not None
+    window.clear()
+    window.accept([sample(0, intensity=1.0, stream_id="new")], performer_ids=("reachy",))
+    second = window.latest("reachy")
+    assert second is not None
+    assert second.mouth == pytest.approx(first.mouth)
+
+
+def test_window_invalid_speech_dynamics_rejected_before_accept():
+    with pytest.raises(ValueError, match="invalid"):
+        SpeechEnvelopeWindow(performer_dynamics={"reachy": "not_a_profile"})
+    with pytest.raises(ValueError, match="invalid"):
+        SpeechEnvelopeWindow(performer_dynamics={"": "smoothed_v1"})
+
+
+def test_window_inactive_residual_intensity_zero_for_both_modes():
+    window = SpeechEnvelopeWindow(performer_dynamics={"reachy": "smoothed_v1"})
+    window.accept(
+        [sample(0, intensity=0.9, active=False)],
+        performer_ids=("reachy", "stackchan"),
+    )
+    for name in ("reachy", "stackchan"):
+        item = window.latest(name)
+        assert item is not None and item.mouth == 0
+        assert all(getattr(item, axis) == 0 for axis in (
+            "pitch", "yaw", "roll", "x", "y", "z", "antenna",
+        ))
