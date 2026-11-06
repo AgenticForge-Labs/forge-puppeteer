@@ -15,6 +15,46 @@ from mcp.client.stdio import stdio_client
 
 
 @pytest.mark.anyio
+async def test_startup_speech_features_dispatch_through_real_stdio(tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    log = tmp_path / "fake-actions.txt"
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(root / "tests/robots/mcp_speech_resume_fake_server.py"), str(log)],
+        env={**os.environ, "PYTHONPATH": str(root / "src")},
+    )
+    async with stdio_client(params) as (reader, writer), ClientSession(reader, writer) as session:
+        await session.initialize()
+        event = await session.call_tool("ensemble_presence", {
+            "session_id": "room", "event_id": "start", "sequence": 0,
+            "state": "speaking", "source": "manual",
+        })
+        assert event.structured_content["outcome"] == "accepted"
+        with anyio.fail_after(3):
+            while not log.exists() or "startup" not in log.read_text():
+                await anyio.sleep(0.01)
+        await anyio.sleep(0.1)
+        assert log.read_text().splitlines() == ["startup"]
+        result = await session.call_tool("ensemble_speech_envelope", {
+            "session_id": "room", "performer_id": "reachy", "frames": [{
+                "schema": "forge.speech_envelope.v1", "stream_id": "speech",
+                "sequence": 0, "offset_ms": 0, "duration_ms": 50,
+                "active": True, "intensity": 0.6, "rms_dbfs": -18.0,
+                "timing_source": "generated_pcm", "acoustic_playout_measured": False,
+            }],
+        })
+        assert result.structured_content["outcome"] == "observed"
+        with anyio.fail_after(2):
+            while "head_pose" not in log.read_text().splitlines():
+                await anyio.sleep(0.01)
+        assert "authored_speaking" not in log.read_text().splitlines()
+        await session.call_tool("ensemble_presence", {
+            "session_id": "room", "event_id": "end", "sequence": 1,
+            "state": "disconnected", "source": "manual",
+        })
+
+
+@pytest.mark.anyio
 async def test_real_stdio_mcp_one_room_controls_three_mock_devices():
     root = Path(__file__).resolve().parents[2]
     params = StdioServerParameters(
