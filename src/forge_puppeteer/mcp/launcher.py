@@ -234,7 +234,7 @@ class ReachySDKProvider:
     _TOOLS = frozenset({
         "device_info", "device_state", "list_assets", "action_lookup",
         "play_move", "head_pose", "antenna_targets", "pose_and_antennas",
-        "wake_up", "action_cancel", "device_stop",
+        "wake_up", "action_cancel", "device_stop", "original_idle", "original_speech",
     })
 
     def __init__(
@@ -258,7 +258,7 @@ class ReachySDKProvider:
         unknown = set(config.allowed_tools) - self._TOOLS
         if unknown:
             raise ValueError(f"unsupported Reachy allowed_tools: {sorted(unknown)}")
-        if config.restricted_actions and set(config.allowed_tools) & {"head_pose", "antenna_targets", "pose_and_antennas"}:
+        if config.restricted_actions and set(config.allowed_tools) & {"head_pose", "antenna_targets", "pose_and_antennas", "original_idle", "original_speech"}:
             raise ValueError("restricted Reachy mode cannot grant arbitrary native targets")
         if set(config.allowed_tools) & {"play_move", "head_pose", "antenna_targets", "pose_and_antennas", "wake_up", "action_cancel", "device_stop"} and config.physical_authority != "I_AUTHORIZE_REACHY_CONTROL":
             raise ValueError("Reachy motion tools require explicit physical authority")
@@ -292,6 +292,15 @@ class ReachySDKProvider:
             )
         self._adapter = None
         self._robot = None
+        self._native_speech_source = None
+
+    def bind_native_speech_source(self, source) -> None:
+        """Bind one room-owned observation channel without opening the SDK."""
+        if "original_speech" not in self.grants or not callable(source):
+            raise PermissionError("native speech source requires explicit authorization")
+        if self._adapter is not None or self._native_speech_source is not None:
+            raise RuntimeError("native speech source cannot be rebound")
+        self._native_speech_source = source
 
     @asynccontextmanager
     async def connected(self):
@@ -332,6 +341,9 @@ class ReachySDKProvider:
                 motion_authorized=True,
                 restricted_actions=self.config.restricted_actions,
                 approved_moves=self.approved_moves,
+                original_idle_authorized="original_idle" in self.grants,
+                native_speech_authorized="original_speech" in self.grants,
+                native_speech_source=self._native_speech_source,
             )
             yield
         finally:
@@ -345,6 +357,9 @@ class ReachySDKProvider:
                     await self._daemon.close()
 
     async def permitted(self, tool: str) -> bool:
+        if tool in {"original_idle", "original_speech"}:
+            return (tool in self.grants and self._adapter is not None
+                    and await self._adapter.permitted(tool))
         return tool in self.grants
 
     async def validate(self, request: ActionRequest) -> None:

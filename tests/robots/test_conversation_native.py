@@ -33,6 +33,53 @@ NEUTRAL = [
 REV = "sha256:" + "a" * 64
 
 
+@pytest.mark.anyio
+async def test_legacy_speaking_without_envelope_keeps_issuing_head_only_cues():
+    from forge_puppeteer.execution import Completion, StopResult
+
+    class FakeProvider:
+        def __init__(self):
+            self.calls = []
+
+        async def validate(self, request):
+            assert request.operation == "head_pose"
+
+        def resources_for(self, request):
+            return ("head.pose",)
+
+        async def execute(self, request):
+            self.calls.append((request.operation, anyio.current_time()))
+            return Completion("fake head target returned")
+
+        async def stop(self):
+            return StopResult(True, "fake stop")
+
+    pack = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1",),
+    )
+    provider = FakeProvider()
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("reachy", provider)
+    ensemble = ConversationEnsemble(runtime, [pack])
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(EnsemblePresence(
+            session_id="room", event_id="start", sequence=0,
+            state="speaking", source="manual",
+        ))
+        await anyio.sleep(3.2)
+        assert len(provider.calls) >= 5
+        assert provider.calls[-1][1] - provider.calls[0][1] >= 2.5
+        assert {operation for operation, _ in provider.calls} == {"head_pose"}
+        await ensemble.observe(EnsemblePresence(
+            session_id="room", event_id="end", sequence=1,
+            state="disconnected", source="manual",
+        ))
+        count = len(provider.calls)
+        await anyio.sleep(0.1)
+        assert len(provider.calls) == count
+
+
 def test_reachy_native_pack_uses_exact_sdk_ops_and_asset_pins():
     pack = reachy_conversation_pack(
         "reachy", neutral_head=NEUTRAL, recording_revision=REV,

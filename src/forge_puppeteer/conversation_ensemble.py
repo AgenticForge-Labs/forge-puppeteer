@@ -73,6 +73,7 @@ class ConversationEnsemble:
         stop_timeout_s: float = 5,
         startup_settle_s: float = 0.0,
         motion_patterns: Mapping[str, Mapping[str, PerformerBehaviors]] | None = None,
+        continuous_presence_performers: Iterable[str] = (),
     ):
         if not caller_id or not 1 <= presence_ttl_s <= 3600 or not 0.1 <= stop_timeout_s <= 60:
             raise ValueError("invalid conversation coordinator settings")
@@ -97,6 +98,17 @@ class ConversationEnsemble:
                 idle=choices.get("idle"),
                 speaking=choices.get("speaking"),
             )
+        continuous = tuple(continuous_presence_performers)
+        if len(set(continuous)) != len(continuous) or set(continuous) - set(selected):
+            raise ValueError("continuous presence requires unique configured performers")
+        for name in continuous:
+            idle = selected[name].behaviors.get("idle")
+            speaking = selected[name].behaviors.get("speaking")
+            if (idle is None or speaking != idle or len(idle.cues) != 1
+                    or idle.cues[0].operation != "original_idle"):
+                raise ValueError("continuous presence requires the same reviewed original idle action")
+        self._continuous_presence = frozenset(continuous)
+        self._presence_observers: list[Callable[[EnsemblePresence], None]] = []
         self.runtime = runtime
         self.packs = selected
         self.caller_id = caller_id
@@ -158,6 +170,12 @@ class ConversationEnsemble:
                         self._release_owners()
                 self._tasks = None
                 tasks.cancel_scope.cancel()
+
+    def add_presence_observer(self, observer: Callable[[EnsemblePresence], None]) -> None:
+        """Register a synchronous state invalidator before the room starts."""
+        if self._tasks is not None or not callable(observer):
+            raise ValueError("presence observers must be registered before room startup")
+        self._presence_observers.append(observer)
 
     def snapshot(self) -> dict[str, object]:
         return {
@@ -226,6 +244,10 @@ class ConversationEnsemble:
                     return {"outcome": "denied", "reason": "conflicting_sequence", **self.snapshot()}
             elif event.state == "disconnected":
                 return {"outcome": "no_session", **self.snapshot()}
+            # Observers invalidate old optional data only after identity and
+            # sequence admission, before waiting for any performer's STOP.
+            for observer in self._presence_observers:
+                observer(event)
             previous = self._state
             if self._session is None:
                 self._session = event.session_id
@@ -240,9 +262,15 @@ class ConversationEnsemble:
                 # acknowledging a requested gesture) must not preempt that
                 # finite gesture. Real interruption/disconnect remains urgent.
                 preserve_expressions = event.state != "disconnected" and not event.interrupted
+                preserve_continuous = (
+                    not event.interrupted and previous in {"idle", "speaking"}
+                    and event.state in {"idle", "speaking"}
+                )
                 await self._stop_slots(
                     tuple(name for name, slot in self._slots.items()
-                          if not (preserve_expressions and slot.expression_active)),
+                          if not (preserve_expressions and slot.expression_active)
+                          and not (preserve_continuous and name in self._continuous_presence
+                                   and slot.behavior in {"idle", "speaking"})),
                     graceful=event.state != "disconnected" and not event.interrupted,
                 )
             if event.state == "disconnected":
@@ -415,7 +443,7 @@ class ConversationEnsemble:
             if pattern is None:
                 slot.done.set()
                 return
-            if name in self._speech_channels:
+            if name in self._speech_channels and name not in self._continuous_presence:
                 await self._play_speech_driven(name, pattern, slot, action_id)
             else:
                 await self._play(
@@ -474,7 +502,8 @@ class ConversationEnsemble:
         )
         if pattern is None:
             return  # Missing device behavior is unsupported, never substituted.
-        if behavior == "speaking" and name in self._speech_channels:
+        if (behavior == "speaking" and name in self._speech_channels
+                and name not in self._continuous_presence):
             if not self.startup_complete():
                 # Startup motion owns the robot; defer rather than talk over it.
                 self._spawn_deferred_speaking(name, action_id, resume=resume)
@@ -599,13 +628,17 @@ class ConversationEnsemble:
                                 name, resume_id, resume=True,
                             )
                             return
-                        if self._state == "speaking" and name in self._speech_channels:
-                            # Resume speech through the same reactive channel
-                            # used for ordinary speaking transitions.
+                        if (self._state == "speaking" and name in self._speech_channels
+                                and name not in self._continuous_presence):
+                            # Resume speech through the same reactive channel used
+                            # for ordinary speaking transitions. Executing the
+                            # authored pattern here bypasses the feature channel
+                            # and can move unintended actuators.
                             resume_id = f"{action_id}-resume"
                             await self._retire_slot(name, slot)
                             self._spawn(name, "speaking", resume_id)
                             return
+                        slot.behavior = self._state
                         await self._execute_pattern(
                             name, self._state, background, slot, f"{action_id}-resume"
                         )
@@ -892,6 +925,12 @@ class ConversationEnsemble:
                     await self.runtime.submit(request)
                     slot.pending = True
                     slot.action_done = anyio.Event()
+                    if cue.operation != "original_idle":
+                        record = await self.runtime.wait(request.id)
+                if cue.operation == "original_idle":
+                    # A continuous action owns only its performer's runtime
+                    # resources; waiting under the shared admission gate would
+                    # starve every other performer for the action's lifetime.
                     record = await self.runtime.wait(request.id)
                 slot.pending = record.state == ActionState.UNKNOWN
                 slot.action_done.set()

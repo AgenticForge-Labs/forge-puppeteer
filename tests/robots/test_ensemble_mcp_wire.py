@@ -126,6 +126,160 @@ async def test_real_stdio_mcp_one_room_controls_three_mock_devices():
         assert disconnected.structured_content["state"] == "disconnected"
 
 
+@pytest.mark.anyio
+async def test_original_idle_uses_one_real_stdio_child_and_stops(tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    pytest.importorskip("reachy_mini")
+    log = tmp_path / "fake-targets.txt"
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(root / "tests/robots/mcp_original_idle_fake_server.py"), str(log)],
+        env={**os.environ, "PYTHONPATH": str(root / "src")},
+    )
+    async with stdio_client(params) as (reader, writer), ClientSession(reader, writer) as session:
+        await session.initialize()
+        accepted = await session.call_tool("ensemble_presence", {
+            "session_id": "room", "event_id": "start", "sequence": 0,
+            "state": "idle", "source": "manual",
+        })
+        assert accepted.structured_content["outcome"] == "accepted"
+        with anyio.fail_after(3):
+            while not log.exists() or len(log.read_text().splitlines()) < 2:
+                await anyio.sleep(0.02)
+        ended = await session.call_tool("ensemble_presence", {
+            "session_id": "room", "event_id": "stop", "sequence": 1,
+            "state": "disconnected", "source": "manual",
+        })
+        assert ended.structured_content["state"] == "disconnected"
+        assert ended.structured_content["performers"]["reachy"]["status"] == "idle"
+        count = len(log.read_text().splitlines())
+        await anyio.sleep(0.1)
+        assert len(log.read_text().splitlines()) == count
+
+
+@pytest.mark.anyio
+async def test_native_speech_composes_over_idle_on_same_fake_sdk_action(tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    pytest.importorskip("reachy_mini")
+    log = tmp_path / "fake-targets.txt"
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(root / "tests/robots/mcp_original_idle_fake_server.py"), str(log), "speech"],
+        env={**os.environ, "PYTHONPATH": str(root / "src")},
+    )
+    async with stdio_client(params) as (reader, writer), ClientSession(reader, writer) as session:
+        await session.initialize()
+        async def presence(seq, state, interrupted=False):
+            return await session.call_tool("ensemble_presence", {
+                "session_id": "room", "event_id": str(seq), "sequence": seq,
+                "state": state, "source": "manual", "interrupted": interrupted,
+            })
+        await presence(0, "idle")
+        with anyio.fail_after(3):
+            while not log.exists() or len(log.read_text().splitlines()) < 2:
+                await anyio.sleep(0.02)
+        initial = await session.call_tool("ensemble_state", {})
+        action_id = initial.structured_content["performers"]["reachy"]["action_id"]
+        await presence(1, "speaking")
+        speaking = await session.call_tool("ensemble_state", {})
+        assert speaking.structured_content["performers"]["reachy"]["action_id"] == action_id
+        observed = await session.call_tool("ensemble_native_speech_gain", {
+            "session_id": "room", "performer_id": "reachy", "frames": [{
+                "schema": "forge.native_speech_gain.v1", "stream_id": "speech",
+                "sequence": 0, "offset_ms": 0, "duration_ms": 50, "gain": 1.0,
+                "timing_source": "generated_pcm", "acoustic_playout_measured": False,
+            }],
+        })
+        assert observed.structured_content["physical_motion_dispatched"] is False
+        with anyio.fail_after(2):
+            while "speech" not in log.read_text().splitlines():
+                await anyio.sleep(0.01)
+        await presence(2, "listening", interrupted=True)
+        count = len(log.read_text().splitlines())
+        await anyio.sleep(0.1)
+        assert len(log.read_text().splitlines()) == count
+
+
+@pytest.mark.anyio
+async def test_native_gain_mcp_gates_speaking_and_fences_interrupted_stream():
+    root = Path(__file__).resolve().parents[2]
+    pytest.importorskip("numpy")
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(root / "tests/robots/mcp_fake_ensemble_server.py")],
+        env={**os.environ, "PYTHONPATH": str(root / "src")},
+    )
+    def feature(stream, seq):
+        return {"schema": "forge.native_speech_gain.v1", "stream_id": stream,
+                "sequence": seq, "offset_ms": seq * 50, "duration_ms": 50,
+                "gain": 0.5, "timing_source": "generated_pcm",
+                "acoustic_playout_measured": False}
+
+    async with stdio_client(params) as (reader, writer), ClientSession(reader, writer) as session:
+        await session.initialize()
+        async def send(frames, performer="reachy"):
+            return await session.call_tool("ensemble_native_speech_gain", {
+                "session_id": "room", "performer_id": performer, "frames": frames,
+            })
+        denied = await send([feature("old", 0)])
+        assert denied.structured_content["outcome"] == "denied"
+        await session.call_tool("ensemble_presence", {
+            "session_id": "room", "event_id": "0", "sequence": 0,
+            "state": "speaking", "source": "agent_state",
+        })
+        observed = await send([feature("old", 0), feature("old", 1)])
+        assert observed.structured_content["outcome"] == "observed"
+        assert observed.structured_content["physical_motion_dispatched"] is False
+        assert (await send([feature("old", 2)], performer="stackchan")).structured_content["outcome"] == "denied"
+        await session.call_tool("ensemble_presence", {
+            "session_id": "room", "event_id": "1", "sequence": 1,
+            "state": "listening", "source": "agent_state", "interrupted": True,
+        })
+        assert (await send([feature("old", 2)])).structured_content["outcome"] == "denied"
+        await session.call_tool("ensemble_presence", {
+            "session_id": "room", "event_id": "2", "sequence": 2,
+            "state": "speaking", "source": "agent_state",
+        })
+        assert (await send([feature("old", 0)])).is_error
+        assert (await send([feature("new", 0)])).structured_content["outcome"] == "observed"
+
+
+@pytest.mark.anyio
+async def test_native_gain_cannot_replay_after_presence_expiry():
+    root = Path(__file__).resolve().parents[2]
+    pytest.importorskip("numpy")
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(root / "tests/robots/mcp_fake_ensemble_server.py")],
+        env={**os.environ, "PYTHONPATH": str(root / "src"), "FAKE_PRESENCE_TTL_S": "1"},
+    )
+    def frame(seq):
+        return {"schema": "forge.native_speech_gain.v1", "stream_id": "expired",
+                "sequence": seq, "offset_ms": seq * 50, "duration_ms": 50,
+                "gain": 0.5, "timing_source": "generated_pcm",
+                "acoustic_playout_measured": False}
+
+    async with stdio_client(params) as (reader, writer), ClientSession(reader, writer) as session:
+        await session.initialize()
+        async def speaking(event_id):
+            return await session.call_tool("ensemble_presence", {
+                "session_id": "room", "event_id": event_id, "sequence": 0,
+                "state": "speaking", "source": "agent_state",
+            })
+        async def send(seq):
+            return await session.call_tool("ensemble_native_speech_gain", {
+                "session_id": "room", "performer_id": "reachy", "frames": [frame(seq)],
+            })
+        assert (await speaking("first")).structured_content["outcome"] == "accepted"
+        assert (await send(0)).structured_content["outcome"] == "observed"
+        with anyio.fail_after(4):
+            while not (await session.call_tool("ensemble_state", {})).structured_content["stale"]:
+                await anyio.sleep(0.1)
+        assert (await send(1)).structured_content["outcome"] == "denied"
+        assert (await speaking("second")).structured_content["outcome"] == "accepted"
+        assert (await send(1)).is_error
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"

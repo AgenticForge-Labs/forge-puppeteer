@@ -149,6 +149,44 @@ async def test_explicit_interruption_never_waits_for_provider_grace():
         assert native.stops >= 1
 
 
+@pytest.mark.anyio
+async def test_accepted_interrupt_invalidates_observations_before_waiting_for_stop():
+    class BlockingStop(SlowNative):
+        def __init__(self):
+            super().__init__()
+            self.stop_entered = anyio.Event()
+            self.release_stop = anyio.Event()
+
+        async def execute(self, request):
+            self.commands.append(request.operation)
+            await anyio.sleep_forever()
+
+        async def stop(self):
+            self.stop_entered.set()
+            await self.release_stop.wait()
+            return StopResult(True, "fake SDK stop confirmed")
+
+    native = BlockingStop()
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("arm", native)
+    ensemble = ConversationEnsemble(runtime, [pack()])
+    observed = []
+    ensemble.add_presence_observer(lambda event: observed.append(event.state))
+    async with runtime.run(), ensemble.run(), anyio.create_task_group() as tasks:
+        await ensemble.observe(event(0, "speaking"))
+        await anyio.sleep(0.03)
+        # A stale/conflicting event must not alter accepted observation state.
+        conflicting = event(0, "idle", interrupted=True).model_copy(update={"event_id": "conflict"})
+        rejected = await ensemble.observe(conflicting)
+        assert rejected["outcome"] == "denied"
+        assert observed == ["speaking"]
+        tasks.start_soon(ensemble.observe, event(1, "listening", interrupted=True))
+        with anyio.fail_after(1):
+            await native.stop_entered.wait()
+        assert observed == ["speaking", "listening"]
+        native.release_stop.set()
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"

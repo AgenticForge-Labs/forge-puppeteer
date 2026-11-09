@@ -159,6 +159,45 @@ IDLE_BREATH_SAMPLE_S = 1.6
 IDLE_BREATH_SAMPLES = 6
 
 
+def reachy_original_idle_sample(
+    t: float,
+    *,
+    start_head: Sequence[Sequence[float]],
+    start_antennas: Sequence[float],
+) -> tuple[object, object, float]:
+    """Evaluate the pinned Conversation App's breathing curve without moving a device.
+
+    This preserves its one-second interpolation and subsequent head and
+    antenna targets, including the transition at exactly one second. The
+    caller must obtain and validate the start pose through the SDK; evaluating
+    this reference curve does not grant motion authority.
+    """
+    import numpy as np
+    from reachy_mini.utils import create_head_pose
+    from reachy_mini.utils.interpolation import linear_pose_interpolation
+
+    if not math.isfinite(t) or t < 0:
+        raise ValueError("idle sample time must be finite and nonnegative")
+    head = np.asarray(start_head, dtype=np.float64)
+    antennas = np.asarray(start_antennas, dtype=np.float64)
+    if head.shape != (4, 4) or antennas.shape != (2,) or not (
+        np.isfinite(head).all() and np.isfinite(antennas).all()
+    ):
+        raise ValueError("finite starting head and two antenna positions required")
+    if t < 1.0:
+        neutral_head = create_head_pose(0, 0, 0, 0, 0, 0, degrees=True)
+        target_head = linear_pose_interpolation(head, neutral_head, t)
+        target_antennas = (1.0 - t) * antennas + t * np.array([-0.1745, 0.1745])
+    else:
+        elapsed = t - 1.0
+        z = 0.005 * np.sin(2 * np.pi * 0.1 * elapsed)
+        target_head = create_head_pose(x=0, y=0, z=z, roll=0, pitch=0, yaw=0,
+                                       degrees=True, mm=False)
+        sway = np.deg2rad(15) * np.sin(2 * np.pi * 0.5 * elapsed)
+        target_antennas = np.array([sway, -sway], dtype=np.float64)
+    return target_head, target_antennas, 0.0
+
+
 def reachy_conversation_pack(
     performer_id: str,
     *,

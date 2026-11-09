@@ -145,11 +145,18 @@ class ReachyPlaybackProvider:
     # exceed any usable grace; they are cancelled through the SDK's
     # acknowledged playback loop in ``stop`` instead. The ensemble caps this
     # grace at 5 s.
-    finish_before_interrupt_s = 3.0
     # The pinned SDK exposes no cancel for goto_target, so a barge-in that
     # cancels an in-flight segment can only produce an unconfirmed stop and a
     # session-wide quarantine. A finite segment is sub-second, so let it finish.
-    finish_on_interrupt_s = 3.0
+
+    @property
+    def finish_before_interrupt_s(self) -> float:
+        """Continuous targets can stop without waiting for a finite goto."""
+        return 0.0 if self._active_operation == "original_idle" else 3.0
+
+    @property
+    def finish_on_interrupt_s(self) -> float:
+        return 0.0 if self._active_operation == "original_idle" else 3.0
 
     def __init__(
         self,
@@ -159,12 +166,26 @@ class ReachyPlaybackProvider:
         motion_authorized: bool = False,
         restricted_actions: bool = False,
         approved_moves: frozenset[tuple[str, str]] | None = None,
+        original_idle_authorized: bool = False,
+        native_speech_authorized: bool = False,
+        native_speech_source: Callable[[], object | None] | None = None,
     ):
         self.catalog = catalog
         self.robot = robot
         self.motion_authorized = motion_authorized
         self.restricted_actions = restricted_actions
         self.approved_moves = frozenset(approved_moves or ())
+        if type(original_idle_authorized) is not bool:
+            raise ValueError("original idle authorization must be an explicit boolean")
+        if type(native_speech_authorized) is not bool:
+            raise ValueError("native speech authorization must be an explicit boolean")
+        if native_speech_source is not None and (
+            not callable(native_speech_source) or not native_speech_authorized
+        ):
+            raise ValueError("native speech source requires separate explicit authorization")
+        self.original_idle_authorized = original_idle_authorized
+        self.native_speech_authorized = native_speech_authorized
+        self._native_speech_source = native_speech_source
         if self.restricted_actions and not self.approved_moves:
             raise ValueError("restricted Reachy actions require an exact approved move allowlist")
         self._lock = threading.Lock()
@@ -173,6 +194,8 @@ class ReachyPlaybackProvider:
         self._quarantined = False
         self._playback: asyncio.Future[None] | None = None
         self._native: asyncio.Future[None] | None = None
+        self._continuous_stop: asyncio.Event | None = None
+        self._continuous_task: asyncio.Task[None] | None = None
 
     async def describe(self) -> DeviceDescriptor:
         from ..robot_contracts import ControlDescriptor
@@ -193,6 +216,21 @@ class ReachyPlaybackProvider:
         operations = ["list_assets", "play_move", "stop"]
         if not self.restricted_actions:
             operations.extend(("head_pose", "antenna_targets", "pose_and_antennas", "wake_up"))
+            if self.original_idle_authorized and self._supports_original_idle():
+                operations.append("original_idle")
+                controls.append(ControlDescriptor(
+                    id="reachy.original_idle",
+                    description="Run the operator-authorized original Reachy idle curve",
+                    effect="motion",
+                    parameters_schema={"type": "object", "properties": {
+                        "duration_s": {"type": "number", "exclusiveMinimum": 0, "maximum": 3600},
+                    }, "required": ["duration_s"], "additionalProperties": False},
+                    resources=_RESOURCES,
+                    concurrency_constraints=("serialized across all Reachy motion",),
+                ))
+            if (self.native_speech_authorized and self._native_speech_source is not None
+                    and self.original_idle_authorized and self._supports_original_idle()):
+                operations.append("original_speech")
             controls.append(ControlDescriptor(
                 id="reachy.wake_up",
                 description="Run the SDK wake-up sequence only when the head is in its SDK sleep pose",
@@ -266,6 +304,13 @@ class ReachyPlaybackProvider:
         """Explicit local tool grant, intersected with current motion authority."""
         known = {"device_info", "device_state", "list_assets", "action_lookup"}
         motion = {"play_move", "head_pose", "antenna_targets", "pose_and_antennas", "wake_up", "action_cancel", "device_stop"}
+        if tool == "original_idle":
+            return (self.motion_authorized and self.original_idle_authorized
+                    and not self.restricted_actions and self._supports_original_idle())
+        if tool == "original_speech":
+            return (self.motion_authorized and self.original_idle_authorized
+                    and self.native_speech_authorized and self._native_speech_source is not None
+                    and not self.restricted_actions and self._supports_original_idle())
         if self.restricted_actions and tool in {"head_pose", "antenna_targets", "pose_and_antennas"}:
             return False
         return tool in known or (tool in motion and self.motion_authorized)
@@ -280,7 +325,7 @@ class ReachyPlaybackProvider:
         return _RESOURCES
 
     async def validate(self, request: ActionRequest) -> None:
-        if request.operation not in {"play_move", "head_pose", "antenna_targets", "pose_and_antennas", "wake_up"}:
+        if request.operation not in {"play_move", "head_pose", "antenna_targets", "pose_and_antennas", "wake_up", "original_idle"}:
             raise ValueError("unsupported Reachy operation")
         if not self.motion_authorized:
             raise PermissionError("Reachy motion authority is not granted")
@@ -300,6 +345,16 @@ class ReachyPlaybackProvider:
             if self.restricted_actions and (request.asset_id, request.asset_revision) not in self.approved_moves:
                 raise PermissionError("Reachy move is not in the operator-approved asset allowlist")
             self.catalog.get(request.asset_id, request.asset_revision)
+        elif request.operation == "original_idle":
+            import math
+
+            duration = request.parameters.get("duration_s")
+            if not self.original_idle_authorized:
+                raise PermissionError("original Reachy idle requires a separate operator grant")
+            if set(request.parameters) != {"duration_s"} or isinstance(duration, bool) or not isinstance(duration, (int, float)) or not math.isfinite(duration) or not 0 < duration <= 3600:
+                raise ValueError("original idle requires a finite duration within 3600 seconds")
+            if not self._supports_original_idle():
+                raise ValueError("Reachy SDK does not support original idle execution")
         elif request.operation == "wake_up":
             if self.restricted_actions or request.parameters:
                 raise PermissionError("Reachy wake_up is unavailable in restricted move-only mode")
@@ -333,6 +388,21 @@ class ReachyPlaybackProvider:
                 finally:
                     self._playback = None
                 evidence = "SDK playback loop returned; physical settling unmeasured"
+            elif request.operation == "original_idle":
+                stop_event = asyncio.Event()
+                self._continuous_stop = stop_event
+                task = asyncio.create_task(self._run_original_idle(request, stop_event))
+                self._continuous_task = task
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    stop_event.set()
+                    await asyncio.shield(task)
+                    raise
+                finally:
+                    self._continuous_task = None
+                    self._continuous_stop = None
+                evidence = "continuous SDK target loop returned; physical settling unmeasured"
             elif request.operation == "wake_up":
                 wake = asyncio.create_task(asyncio.to_thread(self._wake_up_if_sleeping))
                 self._native = wake
@@ -364,6 +434,73 @@ class ReachyPlaybackProvider:
                 self._active = False
                 self._active_operation = None
         return Completion(evidence)
+
+    async def _run_original_idle(self, request: ActionRequest, stop_event: asyncio.Event) -> None:
+        """Issue the fixed authored curve through one SDK session at 60 Hz."""
+        from ..conversation_native import reachy_original_idle_sample
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + float(request.parameters["duration_s"])
+        # The pinned Conversation App starts its breathing move only after
+        # 0.3 seconds without primary activity. A STOP during this delay must
+        # finish without opening a new motion command.
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=min(0.3, float(request.parameters["duration_s"])))
+            return
+        except TimeoutError:
+            pass
+        if loop.time() >= deadline:
+            return
+        head = await asyncio.to_thread(self.robot.get_current_head_pose)
+        antennas = await asyncio.to_thread(self.robot.get_present_antenna_joint_positions)
+        # Validate the measured starting sample before the first target is sent.
+        reachy_original_idle_sample(0.0, start_head=head, start_antennas=antennas)
+        start = loop.time()
+        next_tick = start
+        while not stop_event.is_set():
+            elapsed = loop.time() - start
+            if loop.time() >= deadline:
+                return
+            target_head, target_antennas, body_yaw = reachy_original_idle_sample(
+                elapsed, start_head=head, start_antennas=antennas,
+            )
+            if self.native_speech_authorized and self._native_speech_source is not None:
+                offsets = self._native_speech_source()
+                if offsets is not None:
+                    from ..reachy_native_speech import compose_original_speech_offset
+
+                    target_head = compose_original_speech_offset(target_head, offsets)
+            # Apply the same native pose/antenna limits as finite moves before
+            # sending each combined target. No arbitrary caller target is used.
+            checked = request.model_copy(update={
+                "operation": "pose_and_antennas",
+                "parameters": {"pose": target_head.tolist(),
+                               "angles_rad": target_antennas.tolist()},
+            })
+            self._validate_native(checked)
+            await asyncio.to_thread(
+                self.robot.set_target, head=target_head,
+                antennas=target_antennas, body_yaw=body_yaw,
+            )
+            next_tick = max(next_tick + 1 / 60, loop.time())
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=max(0.0, next_tick - loop.time()))
+            except TimeoutError:
+                pass
+
+    def _supports_original_idle(self) -> bool:
+        return all(callable(getattr(self.robot, method, None)) for method in (
+            "get_current_head_pose", "get_present_antenna_joint_positions", "set_target",
+        ))
+
+    def bind_native_speech_source(self, source: Callable[[], object | None]) -> None:
+        """Bind a trusted observation source before a runtime action starts."""
+        if not self.native_speech_authorized or not callable(source):
+            raise PermissionError("native speech source requires explicit authorization")
+        with self._lock:
+            if self._active or self._native_speech_source is not None:
+                raise RuntimeError("native speech source cannot be rebound")
+            self._native_speech_source = source
 
     def _wake_up_if_sleeping(self) -> str:
         """Use the pinned SDK's sleep pose and wake-up choreography unchanged."""
@@ -452,6 +589,17 @@ class ReachyPlaybackProvider:
         with self._lock:
             active_operation = self._active_operation
             playback = self._playback
+            continuous_task = self._continuous_task
+            continuous_stop = self._continuous_stop
+        if active_operation == "original_idle" and continuous_task and continuous_stop:
+            continuous_stop.set()
+            try:
+                await asyncio.wait_for(asyncio.shield(continuous_task), 5.0)
+            except Exception:  # noqa: BLE001 - unknown execution outcome
+                with self._lock:
+                    self._quarantined = True
+                return StopResult(False, "continuous SDK loop did not stop cleanly; provider quarantined")
+            return StopResult(True, "continuous SDK loop returned; physical settling unmeasured")
         if active_operation == "play_move" and playback is not None:
             # The pinned SDK's cancel_move sets a flag that its playback loop
             # checks every iteration; the loop returning is the SDK's own

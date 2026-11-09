@@ -37,6 +37,8 @@ def create_ensemble_server(
     speech_dynamics: Mapping[str, str] | None = None,
     stackchan_performer_id: str | None = "stackchan",
     startup_settle_s: float = 0.0,
+    native_gain_performers: tuple[str, ...] = (),
+    native_motion_performers: tuple[str, ...] = (),
 ) -> MCPServer:
     """An opt-in single-room stdio server with operator startup gate.
 
@@ -51,6 +53,37 @@ def create_ensemble_server(
         raise RuntimeError("Install forge-puppeteer[mcp] for ensemble tools") from exc
 
     speech_window = SpeechEnvelopeWindow(performer_dynamics=speech_dynamics)
+    if len(set(native_gain_performers)) != len(native_gain_performers) or not set(
+        native_gain_performers
+    ) <= set(ensemble.packs):
+        raise ValueError("native gain performers must be unique configured performers")
+    if native_gain_performers:
+        from ..reachy_native_speech import NativeSpeechGainWindow
+        native_windows = {name: NativeSpeechGainWindow(allow_gaps=True)
+                          for name in native_gain_performers}
+    else:
+        native_windows = {}
+    if (len(set(native_motion_performers)) != len(native_motion_performers)
+            or not set(native_motion_performers) <= set(native_windows)):
+        raise ValueError("native motion requires unique configured gain performers")
+    for performer in native_motion_performers:
+        provider = runtime._provider(performer)
+        bind = getattr(provider, "bind_native_speech_source", None)
+        if not callable(bind):
+            raise TypeError("native speech provider cannot bind a trusted gain source")
+        bind(native_windows[performer].latest)
+    native_armed = False
+    if native_windows:
+        def invalidate_native_on_presence(event: EnsemblePresence) -> None:
+            nonlocal native_armed
+            previous = ensemble.snapshot()
+            native_armed = False
+            if (event.state != "speaking" or event.interrupted
+                    or previous["session_id"] != event.session_id or previous["stale"]):
+                for window in native_windows.values():
+                    window.invalidate()
+
+        ensemble.add_presence_observer(invalidate_native_on_presence)
     if set(speech_dynamics or {}) - set(ensemble.packs):
         raise ValueError("speech dynamics refer to an unknown performer")
     # Opt-in audio-driven wording texture. Disabled unless every bound
@@ -122,6 +155,9 @@ def create_ensemble_server(
             async with AsyncExitStack() as stack:
                 if connected is not None:
                     await stack.enter_async_context(connected())
+                for performer in native_motion_performers:
+                    if not await runtime._provider(performer).permitted("original_speech"):
+                        raise RuntimeError("native speech SDK capability unavailable")
                 await stack.enter_async_context(runtime.run())
                 await stack.enter_async_context(ensemble.run())
                 yield {}
@@ -137,6 +173,9 @@ def create_ensemble_server(
         """Current room state and independent per-performer action evidence."""
         return {"outcome": "observed", **ensemble.snapshot(),
                 "speech_envelope": speech_window.snapshot(),
+                "native_speech_gain": {
+                    name: window.snapshot() for name, window in native_windows.items()
+                },
                 "presentation_presets_configured": {
                     name: sorted(options) for name, options in presets.items()
                 }}
@@ -147,6 +186,7 @@ def create_ensemble_server(
         state: str, source: str = "agent_state", interrupted: bool = False,
     ) -> dict[str, object]:
         """Ordered shared idle/listening/speaking/disconnected event for all robots."""
+        nonlocal native_armed
         if not motion_enabled:
             raise ToolError("ensemble_motion_not_operator_authorized")
         try:
@@ -158,6 +198,8 @@ def create_ensemble_server(
             result = await ensemble.observe(event)
             if event.interrupted or event.state == "disconnected":
                 speech_window.clear()
+            if result.get("outcome") == "accepted":
+                native_armed = event.state == "speaking" and not event.interrupted
             return result
         except Exception as exc:
             if isinstance(exc, ToolError):
@@ -231,5 +273,25 @@ def create_ensemble_server(
             return {"outcome": "observed", **result}
         except (TypeError, ValueError):
             raise ToolError("invalid_or_stale_speech_envelope") from None
+
+    if native_windows:
+        @server.tool()
+        async def ensemble_native_speech_gain(
+            session_id: str, performer_id: str, frames: list[dict[str, object]],
+        ) -> dict[str, object]:
+            """Observe bounded generated-PCM gain; no robot action is submitted."""
+            if not motion_enabled:
+                raise ToolError("ensemble_motion_not_operator_authorized")
+            status = ensemble.snapshot()
+            if (session_id != status["session_id"] or status["state"] != "speaking"
+                    or status["stale"] or not native_armed):
+                return {"outcome": "denied", "reason": "inactive_speaking_session"}
+            window = native_windows.get(performer_id)
+            if window is None:
+                return {"outcome": "denied", "reason": "unknown_performer"}
+            try:
+                return window.accept(frames)
+            except (TypeError, ValueError):
+                raise ToolError("invalid_or_stale_native_speech_gain") from None
 
     return server
