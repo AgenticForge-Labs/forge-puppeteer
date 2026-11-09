@@ -237,6 +237,7 @@ class EnsembleConfig(BaseModel):
     # Operator opt-in: performers whose speaking slot follows the live
     # generated-PCM envelope instead of the authored pattern.
     speech_driven_performers: tuple[str, ...] = ()
+    reachy_legacy_speech_fallback: bool = Field(default=False, strict=True)
     speech_seed: int = 7
     motion_profiles: dict[str, PerformerMotionSelection] = Field(default_factory=dict)
     # Hold the first spoken turn until startup motion (if any) has settled.
@@ -277,6 +278,12 @@ class EnsembleConfig(BaseModel):
             ids.append(self.soarm101.instance_id)
         if len(set(ids)) != len(ids):
             raise ValueError("unique performer IDs required")
+        if self.reachy_legacy_speech_fallback and (
+            self.reachy.instance_id not in self.speech_driven_performers
+            or self.reachy_expression_style != "classic"
+            or self.motion_profiles.get(self.reachy.instance_id, PerformerMotionSelection()).speaking != "smooth_v2"
+        ):
+            raise ValueError("legacy speech fallback requires smooth_v2, speech-driven Reachy and classic style")
         _validate_motion_selection(
             self.motion_profiles, tuple(ids),
             reachy_id=self.reachy.instance_id,
@@ -340,6 +347,7 @@ class ReachyOnlyEnsembleConfig(BaseModel):
     listening_tilt_rad: float = Field(default=0.02, ge=0, le=0.07)
     listening_mode: Literal["tilt", "hold"] = "tilt"
     speech_driven_performers: tuple[str, ...] = ()
+    reachy_legacy_speech_fallback: bool = Field(default=False, strict=True)
     motion_profiles: dict[str, PerformerMotionSelection] = Field(default_factory=dict)
     reachy_expression_style: Literal["classic", "expressive"] = "classic"
     reachy_startup_behavior: Literal["none", "wake_up_if_sleeping"] = "none"
@@ -356,6 +364,12 @@ class ReachyOnlyEnsembleConfig(BaseModel):
             raise ValueError("Reachy native SDK provider required")
         if self.reachy.restricted_actions:
             raise ValueError("head expression requires Reachy's normal native SDK mode")
+        if self.reachy_legacy_speech_fallback and (
+            self.reachy.instance_id not in self.speech_driven_performers
+            or self.reachy_expression_style != "classic"
+            or self.motion_profiles.get(self.reachy.instance_id, PerformerMotionSelection()).speaking != "smooth_v2"
+        ):
+            raise ValueError("legacy speech fallback requires smooth_v2, speech-driven Reachy and classic style")
         _check_reachy_expression_authority(
             self.reachy_expression_style, self.reachy_neutral_antennas_rad,
             self.reachy.allowed_tools, self.reachy_antenna_sway_rad,
@@ -622,6 +636,8 @@ def serve(config_path: str | Path) -> None:
                 Path(config.reachy_neutral_head).read_text()
             )} if speech_driven else {},
             speech_dynamics=speech_dynamics,
+            speech_fallbacks={config.reachy.instance_id: pack.behaviors["speaking"]}
+            if config.reachy_legacy_speech_fallback else {},
             native_gain_performers=(config.reachy.instance_id,) if original_speech else (),
             native_motion_performers=(config.reachy.instance_id,) if original_speech else (),
             stackchan_performer_id=None,
@@ -728,6 +744,8 @@ def serve(config_path: str | Path) -> None:
         speech_neutral_heads=speech_neutral,
         speech_seeds=speech_seeds,
         speech_dynamics=speech_dynamics,
+        speech_fallbacks={config.reachy.instance_id: reachy_pack.behaviors["speaking"]}
+        if config.reachy_legacy_speech_fallback else {},
         native_gain_performers=(config.reachy.instance_id,) if original_speech else (),
         native_motion_performers=(config.reachy.instance_id,) if original_speech else (),
         stackchan_performer_id=config.stackchan.instance_id,

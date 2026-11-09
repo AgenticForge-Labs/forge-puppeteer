@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING
 
-from ..behavior_contract import BehaviorCue, EnsemblePresence
+from ..behavior_contract import BehaviorCue, BehaviorPattern, EnsemblePresence
 from ..conversation_ensemble import ConversationEnsemble
 from ..conversation_native import stackchan_firmware_warp
 from ..execution import ExecutionRuntime
@@ -35,6 +35,7 @@ def create_ensemble_server(
     speech_neutral_heads: Mapping[str, object] | None = None,
     speech_seeds: Mapping[str, int] | None = None,
     speech_dynamics: Mapping[str, str] | None = None,
+    speech_fallbacks: Mapping[str, BehaviorPattern] | None = None,
     stackchan_performer_id: str | None = "stackchan",
     startup_settle_s: float = 0.0,
     native_gain_performers: tuple[str, ...] = (),
@@ -92,6 +93,8 @@ def create_ensemble_server(
     speech_seeds = dict(speech_seeds or {})
     if not speech_driven <= set(ensemble.packs):
         raise ValueError("speech-driven performers must be configured performers")
+    if set(speech_fallbacks or {}) - speech_driven:
+        raise ValueError("speech fallbacks require speech-driven performers")
 
     class _WindowChannel:
         """Adapter exposing only the latest unitless channels to the ensemble."""
@@ -143,6 +146,7 @@ def create_ensemble_server(
                 performer, _WindowChannel(performer), amplitude=0.12,
                 neutral_head=(speech_neutral_heads or {}).get(performer),
                 interval_s=0.2,
+                fallback=(speech_fallbacks or {}).get(performer),
             )
     # This is operator-selected trusted code/data, never LLM-provided cues.
     presets = {name: dict(options) for name, options in (presentation_presets or {}).items()}

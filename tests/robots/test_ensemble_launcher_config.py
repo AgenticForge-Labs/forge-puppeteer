@@ -477,6 +477,13 @@ def test_operator_motion_profile_validation_covers_all_performers(tmp_path):
         EnsembleConfig.model_validate(data)
     data["speech_driven_performers"] = ["reachy"]
     assert EnsembleConfig.model_validate(data).motion_profiles["reachy"].speaking == "smooth_v2"
+    data["reachy_legacy_speech_fallback"] = True
+    assert EnsembleConfig.model_validate(data).reachy_legacy_speech_fallback is True
+    with pytest.raises(ValueError):
+        EnsembleConfig.model_validate({**data, "reachy_legacy_speech_fallback": "true"})
+    with pytest.raises(ValueError, match="classic style"):
+        EnsembleConfig.model_validate({**data, "reachy_expression_style": "expressive"})
+    data.pop("reachy_legacy_speech_fallback")
     data["speech_driven_performers"] = ["reachy", "reachy"]
     with pytest.raises(ValueError, match="unique"):
         EnsembleConfig.model_validate(data)

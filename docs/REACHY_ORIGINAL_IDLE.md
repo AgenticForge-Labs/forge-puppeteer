@@ -45,3 +45,12 @@ prototype and fake-device integration exist but remain unqualified on hardware.
 Neither path yet clones the original app's listening blend, audio timing,
 gesture composition, or tracking. Both are unqualified on hardware. Fake
 SDK and MCP tests do not constitute physical acceptance.
+
+For the separately selected `smooth_v2` speaking profile, an operator may set
+`reachy_legacy_speech_fallback: true` with classic Reachy expression style and
+speech-driven Reachy enabled. When no fresh speech features are available,
+the existing runtime plays the reviewed head-only legacy speaking rhythm. It
+does not replay stale features and does not activate after an unconfirmed motor
+outcome. Fresh features resume the reactive path; interruption still uses the
+same STOP and quarantine behavior. This fallback is rhythmic, not synchronized
+to speech, and has not been physically validated in this configuration.

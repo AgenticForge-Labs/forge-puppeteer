@@ -122,6 +122,7 @@ class ConversationEnsemble:
         ] = {}
         self._speech_intervals: dict[str, float] = {}
         self._speech_release_on_silence: dict[str, bool] = {}
+        self._speech_fallbacks: dict[str, BehaviorPattern] = {}
         # One device connection per performer, but the execution runtime is
         # shared. Targets that would run while another performer's target is
         # still executing contend for it, so dispatch is serialized.
@@ -526,6 +527,7 @@ class ConversationEnsemble:
         warp: Callable[[dict[str, float], float], BehaviorCue] | None = None,
         interval_s: float = 0.25,
         release_on_silence: bool = False,
+        fallback: BehaviorPattern | None = None,
     ) -> None:
         """Attach an optional audio-driven channel for one verbal performer.
 
@@ -546,6 +548,11 @@ class ConversationEnsemble:
             raise ValueError("Reachy speech requires a neutral pose or explicit warp")
         if type(release_on_silence) is not bool or (release_on_silence and warp is None):
             raise ValueError("silent release requires a reviewed native warp")
+        if fallback is not None:
+            fallback = BehaviorPattern.model_validate_json(fallback.model_dump_json())
+            if (fallback.mode != "loop" or not fallback.cues or not fallback.period_s
+                    or any(cue.operation != "head_pose" for cue in fallback.cues)):
+                raise ValueError("speech fallback requires a reviewed head-only loop")
         if neutral_head is not None and (
             len(neutral_head) != 4 or any(len(row) != 4 for row in neutral_head)
         ):
@@ -557,9 +564,17 @@ class ConversationEnsemble:
         )
         self._speech_intervals[performer_id] = float(interval_s)
         self._speech_release_on_silence[performer_id] = release_on_silence
+        if fallback is None:
+            self._speech_fallbacks.pop(performer_id, None)
+        else:
+            self._speech_fallbacks[performer_id] = fallback
 
     async def _stop_slots(self, names: tuple[str, ...], *, graceful: bool = False):
         active = [(n, self._slots.pop(n)) for n in names if n in self._slots]
+        # Prevent the speaking loop from admitting another cue while a
+        # bounded in-flight action is being allowed to finish.
+        for _, slot in active:
+            slot.cancel_requested = True
         # On ordinary semantic transitions, an opt-in SDK can complete its
         # already-admitted finite native segment before we cancel the *loop*.
         # This must be time-bounded: a stuck SDK action still takes the
@@ -589,7 +604,6 @@ class ConversationEnsemble:
                     with anyio.move_on_after(grace):
                         await slot.action_done.wait()
         for _, slot in active:
-            slot.cancel_requested = True
             slot.scope.cancel()
         for name, slot in active:
             with anyio.move_on_after(self.stop_timeout_s) as deadline:
@@ -700,11 +714,15 @@ class ConversationEnsemble:
         """
         channel, amplitude, _neutral, warp = self._speech_channels[name]
         interval = self._speech_intervals.get(name, self._speech_interval_s)
+        fallback = self._speech_fallbacks.get(name)
         with slot.scope:
             index = 0
             last_dispatched: tuple[str, int] | None = None
             silence_released = False
             started = anyio.current_time()
+            missing_since: float | None = None
+            fallback_step: tuple[int, int] | None = None
+            fallback_generation = 0
             try:
                 while True:
                     # A transition cancels this scope while we are asleep
@@ -720,6 +738,31 @@ class ConversationEnsemble:
                     if values is None:
                         slot.status = "active"
                         slot.evidence = "awaiting_speech_envelope"
+                        now = anyio.current_time()
+                        if missing_since is None:
+                            missing_since = now
+                            fallback_generation += 1
+                        if fallback is not None and now - missing_since >= 0.1:
+                            elapsed = now - missing_since - 0.1
+                            cycle = int(elapsed // fallback.period_s)
+                            position = elapsed - cycle * fallback.period_s
+                            cue_index = max(
+                                (i for i, cue in enumerate(fallback.cues) if cue.at_s <= position),
+                                default=-1,
+                            )
+                            step = (cycle, cue_index)
+                            if cue_index >= 0 and step != fallback_step:
+                                cue = fallback.cues[cue_index].model_copy(update={"at_s": 0.0})
+                                one = BehaviorPattern(source="procedural", mode="once", cues=(cue,))
+                                await self._execute_pattern(
+                                    name, "speaking_fallback", one, slot,
+                                    f"{action_id}-fallback-{fallback_generation}-{cycle}-{cue_index}",
+                                )
+                                if slot.status in {"blocked", "unavailable"}:
+                                    return
+                                fallback_step = step
+                                slot.status = "active"
+                                slot.evidence = "legacy_speech_fallback"
                         if index == 0:
                             # Logged once per speaking slot: the channel exists
                             # but no fresh hop has arrived yet.
@@ -729,6 +772,8 @@ class ConversationEnsemble:
                             )
                         await anyio.sleep(interval)
                         continue
+                    missing_since = None
+                    fallback_step = None
                     # Later fresh PCM features replace unsent hops; neither
                     # replay a dispatched sequence nor animate VAD inactivity.
                     if values.get("active") is False and (

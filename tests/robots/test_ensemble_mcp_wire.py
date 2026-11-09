@@ -15,6 +15,36 @@ from mcp.client.stdio import stdio_client
 
 
 @pytest.mark.anyio
+async def test_opted_in_fallback_runs_and_interrupts_over_real_stdio(tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    log = tmp_path / "fallback.txt"
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(root / "tests/robots/mcp_speech_fallback_fake_server.py"), str(log)],
+        env={**os.environ, "PYTHONPATH": str(root / "src")},
+    )
+    async with stdio_client(params) as (reader, writer), ClientSession(reader, writer) as session:
+        await session.initialize()
+        started = await session.call_tool("ensemble_presence", {
+            "session_id": "room", "event_id": "start", "sequence": 0,
+            "state": "speaking", "source": "manual",
+        })
+        assert started.structured_content["outcome"] == "accepted"
+        with anyio.fail_after(3):
+            while not log.exists() or len(log.read_text().splitlines()) < 3:
+                await anyio.sleep(0.02)
+        assert all(line.startswith("speaking_fallback") for line in log.read_text().splitlines())
+        ended = await session.call_tool("ensemble_presence", {
+            "session_id": "room", "event_id": "stop", "sequence": 1,
+            "state": "disconnected", "source": "manual", "interrupted": True,
+        })
+        assert ended.structured_content["state"] == "disconnected"
+        count = len(log.read_text().splitlines())
+        await anyio.sleep(0.2)
+        assert len(log.read_text().splitlines()) == count
+
+
+@pytest.mark.anyio
 async def test_startup_speech_features_dispatch_through_real_stdio(tmp_path):
     root = Path(__file__).resolve().parents[2]
     log = tmp_path / "fake-actions.txt"
