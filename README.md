@@ -57,10 +57,6 @@ The server communicates over **stdio**; it must be launched by an MCP client rat
 
 Real hardware requires operator-reviewed configuration, device-specific permissions and appropriate safety checks. Software tests and simulations do not qualify physical motion or establish that a device has safely stopped. Start with the [robot deployment and safety guide](docs/ROBOT_DEPLOYMENT.md) and the relevant [ensemble guide](docs/THREE_ROBOT_ENSEMBLE.md).
 
-## AgenticForge production repositories
-
-[Forge Worlds](https://github.com/AgenticForge-Labs/forge-worlds) owns persistent world/story reasoning and authors the current EpisodePackage contract. [Forge Studios](https://github.com/AgenticForge-Labs/forge-studios) executes approved generated-media packages. This repository provides the physical-performance backend and may also be used independently; device-level control and safety remain with each robot's SDK or broker.
-
 ## Robot SDKs
 
 Puppeteer coordinates semantic performance through device-specific controls. These SDKs are also useful independently:
