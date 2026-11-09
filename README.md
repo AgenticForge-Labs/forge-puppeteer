@@ -86,4 +86,4 @@ Thanks to the projects and communities making these robots and tools possible:
 
 Forge Puppeteer is in active development. Hardware qualification and integration work are ongoing; see [STATUS.md](STATUS.md) for details.
 
-This public repository does not currently include a license file. Public visibility alone does not grant general reuse or redistribution rights.
+AgenticForge Labs-authored code is licensed under the [Apache License 2.0](LICENSE). Third-party dependencies, datasets, recordings, and other externally sourced materials retain their respective licenses and attribution requirements.
