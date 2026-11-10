@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 import uuid
@@ -9,7 +10,18 @@ from urllib.parse import urlsplit
 
 import anyio
 
-from ..execution import ActionRequest, Completion, StopResult
+from ..execution import ActionRefused, ActionRequest, Completion, StopResult
+
+# SDK broker refusals that are issued before any motion is dispatched. Anything
+# else the broker reports mid-request is treated as an unknown outcome.
+PRE_DISPATCH_REFUSALS = (
+    "active bound host watchdog required",
+    "unknown or stale operator-pinned choreography",
+    "persistent SDK executor/watchdog unavailable",
+    "request cancelled by a newer STOP",
+)
+# The SDK validates the whole path against its joint limits before it moves.
+_LIMIT_REFUSAL = re.compile(r"joint \w+ target -?\d+(\.\d+)? rad is outside \[-?\d+(\.\d+)?, -?\d+(\.\d+)?\]")
 
 
 class _NoRedirects(urllib.request.HTTPRedirectHandler):
@@ -52,11 +64,29 @@ class SOARM101TrustedChoreographyHTTP:
             )
             with opener.open(request, timeout=45) as response:
                 result = json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            refusal = self._refusal(exc)
+            if refusal is not None:
+                raise ActionRefused(f"SDK declined before moving: {refusal}") from None
+            raise RuntimeError("SDK trusted choreography broker outcome unknown") from None
         except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError, ValueError):
             raise RuntimeError("SDK trusted choreography broker outcome unknown") from None
         if not isinstance(result, dict) or result.get("ok") is not True:
             raise RuntimeError("SDK trusted choreography broker rejected request")
         return result
+
+    @staticmethod
+    def _refusal(error: urllib.error.HTTPError) -> str | None:
+        """The broker's error text when it is a definitive pre-dispatch refusal."""
+        try:
+            body = json.loads(error.read())
+        except (OSError, ValueError):
+            return None
+        message = body.get("error") if isinstance(body, dict) else None
+        if error.code == 409 and isinstance(message, str) and (
+                message in PRE_DISPATCH_REFUSALS or _LIMIT_REFUSAL.fullmatch(message)):
+            return message
+        return None
 
     def _catalog(self) -> dict[str, dict[str, object]]:
         request = urllib.request.Request(self.url.removesuffix("/choreography") + "/catalog",

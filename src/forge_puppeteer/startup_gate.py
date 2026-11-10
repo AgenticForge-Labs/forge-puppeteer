@@ -157,7 +157,7 @@ class StartupGate:
         cue = self.sleep_cues.get(performer_id)
         if cue is None:
             return {"outcome": "unsupported", "reason": "no_sleep_move_configured", **self.snapshot()}
-        if self.ensemble.snapshot()["state"] != "disconnected" and not (
+        if not self.ensemble.is_settled() and not (
                 allow_held_during_session and self.ensemble.is_idle_held(performer_id)):
             return {"outcome": "denied", "reason": "conversation_session_active", **self.snapshot()}
         if len(action_id) > 128:
@@ -188,9 +188,20 @@ class StartupGate:
             return bad
         return await self._sleep_move(performer_id, action_id, allow_held_during_session=True)
 
-    async def park(self, action_id: str) -> dict[str, object]:
-        """End of session: every performer to sleep, re-checked. Stops at the first fault."""
+    async def park(self, action_id: str, *, settle_session: bool = False) -> dict[str, object]:
+        """End of session: every performer to sleep, re-checked. Stops at the first fault.
+
+        With ``settle_session`` the caller that owns the live conversation asks the
+        ensemble to finish its running behaviors (no STOP) and release the robots
+        first; the caller then ends the conversation after this returns. Without
+        it a live conversation refuses the move.
+        """
         results: dict[str, object] = {}
+        if settle_session:
+            settled = await self.ensemble.settle()
+            if settled.get("blocked"):
+                return {"outcome": "stopped_on_fault", "performer": settled["blocked"][0],
+                        "results": {}, "reason": "behavior_did_not_finish", **self.snapshot()}
         for name in self.readers:
             if name not in self.sleep_cues:
                 entry = await self._read(name)

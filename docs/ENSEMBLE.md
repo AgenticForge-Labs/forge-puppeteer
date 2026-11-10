@@ -54,9 +54,13 @@ At startup the ensemble reads each real robot's pose and compares it with its st
 sleep pose (`src/forge_puppeteer/poses/`, ±5° by default). A robot not at sleep stays
 still; the caller relays the per-joint deltas and asks. A held robot can be answered
 while the conversation carries on with the other robots (it joins at the next presence
-change); `ensemble_park` is refused until the conversation ends. MCP tools: `ensemble_startup_check`
-(re-read, no motion), `ensemble_prepare` (`move_to_sleep` / `confirm_at_sleep`),
-`ensemble_park` (end of session: sleep move, re-check, report), `ensemble_recover`
+change). `ensemble_state` reports `startup_complete` (per robot and overall) once the
+wake-up motion has finished and settled; a caller should not speak before then. MCP tools:
+`ensemble_startup_check` (re-read, no motion), `ensemble_prepare` (`move_to_sleep` /
+`confirm_at_sleep`), `ensemble_park` (end of session: sleep move, re-check, report; refused
+during a conversation unless `settle_session` is true, which lets the running behaviors finish
+without a STOP and releases the robots first, so the caller should disconnect afterwards),
+`ensemble_recover`
 (lift a quarantine once the robot is seen settled). See `AGENTS.md` for the working
 rules, including that faults stop the run and are never retried.
 

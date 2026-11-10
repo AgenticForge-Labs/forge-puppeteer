@@ -142,8 +142,11 @@ class ConversationEnsemble:
         # The first spoken turn waits until startup motion has finished, so an
         # opening greeting never talks over a wake-up or a neutral rise.
         self._startup_settle_s = float(startup_settle_s)
-        self._startup_done = anyio.Event()
-        self._startup_deadline: float | None = None
+        # Startup is tracked per performer (never one state for the ensemble):
+        # pending -> running (its action is in flight) -> ready (settled).
+        self._settled = False
+        self._startup_running: set[str] = set()
+        self._startup_ready_at: dict[str, float] = {}
 
     @asynccontextmanager
     async def run(self):
@@ -223,9 +226,13 @@ class ConversationEnsemble:
                     "startup_behavior": self.packs[name].startup is not None,
                     "startup_configured": self.packs[name].startup is not None,
                     "startup_pending": name in self._startup_pending,
+                    "startup_complete": self.startup_complete(name),
                 }
                 for name in self.packs
             },
+            # Every performer that can start has finished its startup motion
+            # (held, blocked or unavailable robots do not keep the rest waiting).
+            "startup_complete": self.startup_complete(),
         }
 
     async def observe(self, event: EnsemblePresence) -> dict[str, object]:
@@ -280,6 +287,9 @@ class ConversationEnsemble:
             if event.state == "disconnected":
                 self._release_owners()
                 self._session = None
+                self._settled = False
+            elif self._settled:
+                pass  # The caller is ending the session; no new motion starts.
             else:
                 # Exclusive runtime ownership prevents an automatic device-wide
                 # STOP from interrupting an unrelated manipulation controller.
@@ -295,12 +305,11 @@ class ConversationEnsemble:
                             self._startup_pending.discard(name)
                             # Startup motion owns the robot until it settles;
                             # the first spoken turn must not talk over it.
-                            self._mark_startup_pending()
                             self._spawn(
                                 name, "startup", f"{event.session_id}-{event.sequence}",
                                 resume=True,
                             )
-                        elif event.state == "speaking" and not self.startup_complete():
+                        elif event.state == "speaking" and not self.startup_complete(name):
                             # Defer the opening turn rather than interrupting
                             # the rise to neutral.
                             self._spawn_deferred_speaking(
@@ -487,7 +496,7 @@ class ConversationEnsemble:
             # The scope is entered for the wait only, because both callees
             # open their own 'with' block on it.
             with scope:
-                while not self.startup_complete():
+                while not self.startup_complete(name):
                     if self._session is None or self._state == "disconnected":
                         slot.done.set()
                         return
@@ -508,21 +517,28 @@ class ConversationEnsemble:
 
         self._tasks.start_soon(wait_then_play)
 
-    def startup_complete(self) -> bool:
-        """True once startup motion settled, or when no performer needs it.
+    def startup_complete(self, name: str | None = None) -> bool:
+        """True once startup motion has settled (for one performer, or for all).
 
-        ``_startup_deadline`` is unset until a startup action is actually
-        spawned. A fresh room has no startup work yet, so treat that as
-        not-yet-ready while any startup is still pending: this keeps the very
-        first presence event (which carries the greeting) from racing the
-        startup action that is spawned in the same call.
+        A performer that is held by the startup gate, quarantined or otherwise
+        unavailable has no startup motion to wait for, so it never keeps the
+        others waiting. Until a performer's startup has been spawned it is
+        pending, which also keeps the very first presence event (the greeting)
+        from racing the startup action spawned in the same call.
         """
-        if self._startup_deadline is None:
-            return not self._startup_pending
-        return anyio.current_time() >= self._startup_deadline
+        if name is None:
+            return all(self.startup_complete(n) for n in self.packs)
+        if name in self._gate or name in self._blocked or name in self._unavailable:
+            return True
+        if name in self._startup_pending or name in self._startup_running:
+            return False
+        ready_at = self._startup_ready_at.get(name)
+        return ready_at is None or anyio.current_time() >= ready_at
 
-    def _mark_startup_pending(self) -> None:
-        self._startup_deadline = anyio.current_time() + self._startup_settle_s
+    def _startup_finished(self, name: str) -> None:
+        if name in self._startup_running:
+            self._startup_running.discard(name)
+            self._startup_ready_at[name] = anyio.current_time() + self._startup_settle_s
 
     def is_blocked(self, name: str) -> bool:
         return name in self._blocked
@@ -615,8 +631,10 @@ class ConversationEnsemble:
         )
         if pattern is None:
             return  # Missing device behavior is unsupported, never substituted.
+        if behavior == "startup":
+            self._startup_running.add(name)
         if behavior == "speaking" and name in self._speech_channels:
-            if not self.startup_complete():
+            if not self.startup_complete(name):
                 # Startup motion owns the robot; defer rather than talk over it.
                 self._spawn_deferred_speaking(name, action_id, resume=resume)
                 return
@@ -698,7 +716,30 @@ class ConversationEnsemble:
             else:
                 self._spawn(name, self._state, f"{self._session}-{self._sequence}-deferred")
 
-    async def _stop_slots(self, names: tuple[str, ...], *, graceful: bool = False):
+    def is_settled(self) -> bool:
+        """True when no session is active, or the session was settled for parking."""
+        return self._session is None or self._settled
+
+    async def settle(self, *, timeout_s: float = 10.0) -> dict[str, object]:
+        """End motion for the active session without a STOP, keeping the session open.
+
+        Each running behavior is allowed to finish (they begin and end at the
+        robot's neutral pose), no new behavior starts, and the robots are released
+        so a sleep move can run. A later ``disconnected`` presence event closes the
+        session as usual. If a program does not finish within ``timeout_s`` it is
+        stopped the normal way and its performer is reported as blocked.
+        """
+        async with self._lock:
+            if self._tasks is None or self._session is None:
+                return {"outcome": "no_session"}
+            self._settled = True
+            await self._stop_slots(tuple(self._slots), graceful=True, grace_s=timeout_s)
+            self._release_owners()
+            return {"outcome": "settled", "blocked": sorted(self._blocked)}
+
+    async def _stop_slots(
+        self, names: tuple[str, ...], *, graceful: bool = False, grace_s: float | None = None,
+    ):
         active = [(n, self._slots.pop(n)) for n in names if n in self._slots]
         # Prevent the speaking loop from admitting another cue while a
         # bounded in-flight action is being allowed to finish.
@@ -714,8 +755,10 @@ class ConversationEnsemble:
                 if not slot.pending:
                     continue
                 provider = self.runtime._provider(name)
-                grace = getattr(provider, "finish_before_interrupt_s", 0.0)
-                if isinstance(grace, (int, float)) and 0 < grace <= 5.0:
+                grace = grace_s if grace_s is not None else getattr(
+                    provider, "finish_before_interrupt_s", 0.0)
+                if isinstance(grace, (int, float)) and 0 < grace <= (
+                        30.0 if grace_s is not None else 5.0):
                     with anyio.move_on_after(grace):
                         await slot.action_done.wait()
         else:
@@ -747,6 +790,8 @@ class ConversationEnsemble:
         with slot.scope:
             try:
                 completed = await self._execute_pattern(name, behavior, pattern, slot, action_id)
+                if behavior == "startup":
+                    self._startup_finished(name)
                 slot.expression_active = False
                 # An expression returns to the *latest* conversational presence
                 # only if it was not interrupted or blocked.
@@ -760,7 +805,7 @@ class ConversationEnsemble:
                         # while the next SDK action is being admitted.
                         slot.status = "starting"
                         slot.evidence = "resuming_presence_behavior"
-                        if self._state == "speaking" and not self.startup_complete():
+                        if self._state == "speaking" and not self.startup_complete(name):
                             # The resume itself may be the startup rise that
                             # just settled; the greeting still waits for the
                             # settle window instead of talking over it.
@@ -815,6 +860,8 @@ class ConversationEnsemble:
                             slot.evidence = "device_stop_unknown"
                 if slot.status == "blocked":
                     self._blocked.add(name)
+                if behavior == "startup":
+                    self._startup_finished(name)
                 slot.done.set()
 
     async def _retire_slot(self, name: str, slot: _Slot) -> None:

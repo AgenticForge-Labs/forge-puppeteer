@@ -33,6 +33,16 @@ from .robot_contracts import ActionRecord, ActionState, ContractModel
 from .runtime import PerformanceStage
 
 
+class ActionRefused(RuntimeError):
+    """The device's controller declined the action before any motion began.
+
+    Providers raise this only when the refusal is definitive (for example the
+    SDK reporting that no active host watchdog exists), so the action is
+    recorded as failed instead of an unknown outcome that would quarantine the
+    performer for something that never moved it.
+    """
+
+
 class ExecutionError(RuntimeError):
     """Stable, bounded runtime error; backend exception text is not exposed."""
 
@@ -803,15 +813,16 @@ class ExecutionRuntime:
                     self._release_shared_activity(entry.request)
                     await self._emit(entry, EventType.ACTION_COMPLETED)
             except BaseException as exc:
+                refused = isinstance(exc, ActionRefused)
                 if entry.record.state not in _TERMINAL:
                     self._update(
                         entry,
-                        ActionState.UNKNOWN if submitted else ActionState.FAILED,
-                        error="execution_outcome_unknown"
-                        if submitted
-                        else "pre_execution_failed",
+                        ActionState.FAILED if refused or not submitted else ActionState.UNKNOWN,
+                        error="provider_refused_before_motion" if refused
+                        else "pre_execution_failed" if not submitted
+                        else "execution_outcome_unknown",
                     )
-                    if not submitted:
+                    if refused or not submitted:
                         entry.reserved = False
                         self._persist(entry)
                         self._release_shared_activity(entry.request)
