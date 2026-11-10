@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import sys
 import json
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import ModuleType
@@ -14,7 +14,11 @@ from forge_puppeteer.devices.soarm101_broker_http import (
     BrokerHTTPError,
     SOARM101BrokerHTTP,
 )
-from forge_puppeteer.mcp.launcher import BrokerProvider, ServerConfig, _soarm_startup_grants
+from forge_puppeteer.mcp.launcher import (
+    BrokerProvider,
+    ServerConfig,
+    _soarm_startup_grants,
+)
 
 
 @pytest.fixture

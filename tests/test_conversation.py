@@ -4,7 +4,9 @@ import anyio
 import pytest
 
 from forge_puppeteer.conversation import (
-    BehaviorAck, BehaviorUnavailable, ConversationBehaviors,
+    BehaviorAck,
+    BehaviorUnavailable,
+    ConversationBehaviors,
 )
 
 

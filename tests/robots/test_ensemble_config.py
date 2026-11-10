@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 
-from forge_puppeteer.mcp.ensemble_launcher import config_readiness
+from forge_puppeteer.ensemble.launcher import config_readiness
 
 
 def _sim_daemon_executable():
@@ -77,11 +77,13 @@ def test_v4_rejects_duplicate_kind_id_and_reference_identity_mismatch(tmp_path):
 
 
 def test_stackchan_only_assembly_uses_one_provider_and_never_imports_soarm(tmp_path, monkeypatch):
-    from forge_puppeteer.mcp import ensemble_v4, launcher
+    from forge_puppeteer.ensemble import build as ensemble_build
+    from forge_puppeteer.ensemble import config as ensemble_config
+    from forge_puppeteer.mcp import launcher
     from forge_puppeteer.mcp.launcher import ServerConfig
 
     config = ServerConfig.model_validate(provider("stackchan", "stage", tmp_path))
-    room = ensemble_v4.RoomConfigV4.model_validate({
+    room = ensemble_config.EnsembleConfig.model_validate({
         "schema_version": 4,
         "physical": True,
         "robots": [{"kind": "stackchan", "id": "stage", "file": "unused"}],
@@ -99,7 +101,7 @@ def test_stackchan_only_assembly_uses_one_provider_and_never_imports_soarm(tmp_p
 
     monkeypatch.setattr(launcher, "StackChanSDKProvider", FakeProvider)
     before = "soarm101_motion.broker_sdk" in sys.modules
-    runtime, packs, connected, _extras = ensemble_v4.build_v4(room, {"stackchan": config})
+    runtime, packs, connected, _extras = ensemble_build.build_ensemble(room, {"stackchan": config})
     assert set(runtime._providers) == {"stage"}
     assert [pack.performer_id for pack in packs] == ["stage"]
     assert ("soarm101_motion.broker_sdk" in sys.modules) == before
@@ -112,9 +114,10 @@ def test_stackchan_only_assembly_uses_one_provider_and_never_imports_soarm(tmp_p
 
 
 def test_soarm_only_assembly_selects_broker_provider_without_sdk_executor(tmp_path, monkeypatch):
-    from forge_puppeteer.mcp import ensemble_v4
+    from forge_puppeteer.ensemble import build as ensemble_build
+    from forge_puppeteer.ensemble import config as ensemble_config
 
-    room = ensemble_v4.RoomConfigV4.model_validate({
+    room = ensemble_config.EnsembleConfig.model_validate({
         "schema_version": 4,
         "physical": True,
         "robots": [{"kind": "soarm101", "id": "arm", "file": "unused"}],
@@ -124,7 +127,7 @@ def test_soarm_only_assembly_selects_broker_provider_without_sdk_executor(tmp_pa
 
     from forge_puppeteer.devices.soarm101 import SOARM101Provider
     from forge_puppeteer.devices.soarm101_broker_http import SOARM101BrokerHTTP
-    from forge_puppeteer.mcp.ensemble_v4 import SOARMBrokerConfig
+    from forge_puppeteer.ensemble.config import SOARMBrokerConfig
     config = SOARMBrokerConfig.model_validate(provider("soarm101", "arm", tmp_path))
 
     @asynccontextmanager
@@ -132,7 +135,7 @@ def test_soarm_only_assembly_selects_broker_provider_without_sdk_executor(tmp_pa
         yield
 
     monkeypatch.setenv("SOARM_TOKEN", "software-test-token")
-    runtime, packs, _connect, _extras = ensemble_v4.build_v4(room, {"soarm101": config})
+    runtime, packs, _connect, _extras = ensemble_build.build_ensemble(room, {"soarm101": config})
     assert set(runtime._providers) == {"arm"}
     assert len(packs) == 1
     assert set(packs[0].behaviors) == {"idle", "listening", "speaking"}
@@ -143,7 +146,8 @@ def test_soarm_only_assembly_selects_broker_provider_without_sdk_executor(tmp_pa
 
 
 def test_v4_rejects_saved_pose_presence_and_keeps_position_hold_patterns():
-    from forge_puppeteer.mcp.ensemble_v4 import SOARMBrokerConfig, _soarm_broker_pack
+    from forge_puppeteer.ensemble.build import _soarm_broker_pack
+    from forge_puppeteer.ensemble.config import SOARMBrokerConfig
 
     base = {"instance_id": "arm", "mode": "existing_broker", "broker_url": "http://127.0.0.1:8765",
             "token_env": "SOARM_TOKEN",
@@ -159,7 +163,8 @@ def test_v4_rejects_saved_pose_presence_and_keeps_position_hold_patterns():
 
 
 def test_pinned_pose_intent_never_becomes_automatic_presence():
-    from forge_puppeteer.mcp.ensemble_v4 import SOARMBrokerConfig, _soarm_broker_pack
+    from forge_puppeteer.ensemble.build import _soarm_broker_pack
+    from forge_puppeteer.ensemble.config import SOARMBrokerConfig
     revision = "sha256:" + "c" * 64
     config = SOARMBrokerConfig.model_validate({"instance_id": "arm", "mode": "existing_broker",
         "broker_url": "http://127.0.0.1:8765", "token_env": "TOKEN", "trusted_host_token_env": "HOST",
@@ -173,7 +178,8 @@ def test_pinned_pose_intent_never_becomes_automatic_presence():
 
 
 def test_v4_presence_uses_only_explicit_private_host_revision_pins():
-    from forge_puppeteer.mcp.ensemble_v4 import SOARMBrokerConfig, _soarm_broker_pack
+    from forge_puppeteer.ensemble.build import _soarm_broker_pack
+    from forge_puppeteer.ensemble.config import SOARMBrokerConfig
 
     pin = "sha256:" + "a" * 64
     config = SOARMBrokerConfig.model_validate({
@@ -192,7 +198,8 @@ def test_v4_presence_uses_only_explicit_private_host_revision_pins():
 
 
 def test_v4_explicit_expression_pins_become_one_shot_semantic_intents():
-    from forge_puppeteer.mcp.ensemble_v4 import SOARMBrokerConfig, _soarm_broker_pack
+    from forge_puppeteer.ensemble.build import _soarm_broker_pack
+    from forge_puppeteer.ensemble.config import SOARMBrokerConfig
 
     names = ("idle", "speaking", "yes", "no", "acknowledge", "neutral", "confused", "surprised")
     pins = {name: "sha256:" + format(index + 1, "064x") for index, name in enumerate(names)}
@@ -214,7 +221,7 @@ def test_v4_explicit_expression_pins_become_one_shot_semantic_intents():
 
 
 def test_v4_rejects_unrecognized_choreography_names():
-    from forge_puppeteer.mcp.ensemble_v4 import SOARMBrokerConfig
+    from forge_puppeteer.ensemble.config import SOARMBrokerConfig
     base = {"instance_id": "arm", "mode": "existing_broker", "broker_url": "http://127.0.0.1:8765",
             "token_env": "SOARM_TOKEN", "trusted_host_token_env": "SOARM_HOST_TOKEN",
             "choreography_revisions": {"idle": "sha256:" + "a" * 64,
@@ -227,7 +234,7 @@ def test_v4_rejects_unrecognized_choreography_names():
 
 
 def test_v4_trusted_presence_requires_duration_for_each_pin():
-    from forge_puppeteer.mcp.ensemble_v4 import SOARMBrokerConfig
+    from forge_puppeteer.ensemble.config import SOARMBrokerConfig
     base = {"instance_id": "arm", "mode": "existing_broker", "broker_url": "http://127.0.0.1:8765",
             "token_env": "SOARM_TOKEN", "trusted_host_token_env": "SOARM_HOST_TOKEN",
             "choreography_revisions": {"idle": "sha256:" + "a" * 64,
@@ -243,10 +250,8 @@ def test_sdk_owned_simulation_launch_uses_real_sdk_daemon_and_cleans_up(tmp_path
     import os
     import urllib.request
 
-    from forge_puppeteer.mcp.ensemble_v4 import (
-        SOARMBrokerConfig,
-        start_owned_simulation,
-    )
+    from forge_puppeteer.ensemble.build import start_owned_simulation
+    from forge_puppeteer.ensemble.config import SOARMBrokerConfig
 
     executable = _sim_daemon_executable()
     if not executable or not os.path.isfile(executable):
@@ -356,7 +361,7 @@ async def test_v4_real_stdio_mcp_simulation_idle_speaking_stop_and_cleanup(tmp_p
         "action_journal": str(tmp_path / "actions.db"),
         "ownership_db": str(tmp_path / "owners.db")}))
     root = str(__import__("pathlib").Path(__file__).resolve().parents[2])
-    code = f"from forge_puppeteer.mcp.ensemble_launcher import main; main(['--config', {str(room)!r}])"
+    code = f"from forge_puppeteer.ensemble.launcher import main; main(['--config', {str(room)!r}])"
     params = StdioServerParameters(command=sys.executable, args=["-c", code],
         env={**os.environ, "PYTHONPATH": root + os.pathsep + os.environ.get("PYTHONPATH", "")})
     try:
@@ -430,7 +435,7 @@ async def test_v4_real_stdio_mcp_simulation_idle_speaking_stop_and_cleanup(tmp_p
 @pytest.mark.parametrize("url", ["http://example.com:8765", "http://user@127.0.0.1:8765",
                                   "http://127.0.0.1:8765/redirect", "http://127.0.0.1:8765?x=1"])
 def test_v4_rejects_non_loopback_or_ambiguous_broker_urls(url):
-    from forge_puppeteer.mcp.ensemble_v4 import SOARMBrokerConfig
+    from forge_puppeteer.ensemble.config import SOARMBrokerConfig
     with pytest.raises(ValueError, match="loopback"):
         SOARMBrokerConfig.model_validate({"instance_id": "arm", "mode": "existing_broker", "broker_url": url,
             "token_env": "SOARM_TOKEN",
@@ -441,7 +446,8 @@ def test_physical_daemon_supervision_uses_private_tokens_and_only_child_sigterm(
     import json
     import os
 
-    from forge_puppeteer.mcp import ensemble_v4
+    from forge_puppeteer.ensemble import build as ensemble_build
+    from forge_puppeteer.ensemble import config as ensemble_config
 
     state = tmp_path / "state"
     state.mkdir(mode=0o700)
@@ -455,7 +461,7 @@ def test_physical_daemon_supervision_uses_private_tokens_and_only_child_sigterm(
         "calibration_id": "cal-1", "lease_path": str(tmp_path / "lease"),
         "operator_choreography_only": True,
         "trusted_catalog_path": str(catalog), "loopback_port": 9876, "state_dir": str(state)}))
-    cfg = ensemble_v4.SOARMBrokerConfig.model_validate({"instance_id": "arm", "mode": "sdk_physical_daemon",
+    cfg = ensemble_config.SOARMBrokerConfig.model_validate({"instance_id": "arm", "mode": "sdk_physical_daemon",
         "broker_url": "http://127.0.0.1:9876", "token_env": "UNUSED",
         "trusted_host_token_env": "UNUSED_HOST", "trusted_choreography_catalog": str(catalog),
         "physical_daemon_config": str(daemon_path), "sdk_physical_executable": "/fake/physical-daemon",
@@ -480,7 +486,7 @@ def test_physical_daemon_supervision_uses_private_tokens_and_only_child_sigterm(
         def poll(self): return self.returncode
         def send_signal(self, sig): self.signalled = sig
         def wait(self, timeout=None): self.returncode = 0; return 0
-    monkeypatch.setattr(ensemble_v4.subprocess, "Popen", Child)
+    monkeypatch.setattr(ensemble_build.subprocess, "Popen", Child)
 
     class Response:
         def __enter__(self): return self
@@ -490,15 +496,15 @@ def test_physical_daemon_supervision_uses_private_tokens_and_only_child_sigterm(
             {"name": "speaking", "revision": "sha256:" + "b" * 64}]}}).encode()
     class Opener:
         def open(self, req, timeout=None): return Response()
-    monkeypatch.setattr(ensemble_v4.urllib.request, "build_opener", lambda *args: Opener())
-    (tokens, cleanup) = ensemble_v4.start_owned_physical(cfg)
+    monkeypatch.setattr(ensemble_build.urllib.request, "build_opener", lambda *args: Opener())
+    (tokens, cleanup) = ensemble_build.start_owned_physical(cfg)
     assert tokens == ("broker-secret", "host-secret")
     cleanup()
     assert children[0].signalled == __import__("signal").SIGTERM
 
 
 def test_v4_accepts_long_presence_and_requires_a_wake_to_neutral_target_for_physical(tmp_path):
-    from forge_puppeteer.mcp.ensemble_v4 import SOARMBrokerConfig
+    from forge_puppeteer.ensemble.config import SOARMBrokerConfig
     base = {"instance_id": "arm", "mode": "sdk_physical_daemon",
         "broker_url": "http://127.0.0.1:9876", "token_env": "TOKEN",
         "trusted_host_token_env": "HOST_TOKEN", "trusted_choreography_catalog": str(tmp_path / "catalog.json"),
@@ -515,7 +521,8 @@ def test_v4_accepts_long_presence_and_requires_a_wake_to_neutral_target_for_phys
 
 
 def test_v4_startup_target_is_pinned_and_needs_choreography():
-    from forge_puppeteer.mcp.ensemble_v4 import SOARMBrokerConfig, _soarm_broker_pack
+    from forge_puppeteer.ensemble.build import _soarm_broker_pack
+    from forge_puppeteer.ensemble.config import SOARMBrokerConfig
     pin = 'sha256:' + 'a' * 64
     base = {'instance_id': 'arm', 'mode': 'existing_broker',
         'broker_url': 'http://127.0.0.1:8765', 'token_env': 'TOKEN',
@@ -537,7 +544,7 @@ def test_stale_daemon_state_is_cleared_but_running_daemon_blocks(tmp_path, monke
 
     import pytest as _pytest
 
-    from forge_puppeteer.mcp import ensemble_v4
+    from forge_puppeteer.ensemble import build as ensemble_build
 
     def seed(pid):
         (tmp_path / "daemon.json").write_text(_json.dumps({"pid": pid}))
@@ -545,22 +552,22 @@ def test_stale_daemon_state_is_cleared_but_running_daemon_blocks(tmp_path, monke
         (tmp_path / "trusted-host.token").write_text("h")
 
     seed(2**22 + 1)  # above default pid_max: never alive
-    ensemble_v4.clear_stale_daemon_state(tmp_path, "SDK physical")
+    ensemble_build.clear_stale_daemon_state(tmp_path, "SDK physical")
     assert not any(tmp_path.iterdir())
 
     (tmp_path / "broker.token").write_text("orphan")  # token without record
-    ensemble_v4.clear_stale_daemon_state(tmp_path, "SDK physical")
+    ensemble_build.clear_stale_daemon_state(tmp_path, "SDK physical")
     assert not any(tmp_path.iterdir())
 
     seed(_os.getpid())
-    monkeypatch.setattr(ensemble_v4, "_daemon_process_alive", lambda pid: True)
+    monkeypatch.setattr(ensemble_build, "_daemon_process_alive", lambda pid: True)
     with _pytest.raises(RuntimeError, match="already running"):
-        ensemble_v4.clear_stale_daemon_state(tmp_path, "SDK physical")
+        ensemble_build.clear_stale_daemon_state(tmp_path, "SDK physical")
     assert (tmp_path / "daemon.json").exists()
 
 
 def test_sleep_target_must_name_a_configured_pose_target():
-    from forge_puppeteer.mcp.ensemble_v4 import SOARMBrokerConfig
+    from forge_puppeteer.ensemble.config import SOARMBrokerConfig
 
     base = provider("soarm101", "arm", None)
     revision = "sha256:" + "a" * 64
@@ -575,7 +582,7 @@ def test_sleep_target_must_name_a_configured_pose_target():
 def test_startup_gate_covers_real_robots_and_skips_simulation_or_opt_out(tmp_path):
     from types import SimpleNamespace
 
-    from forge_puppeteer.mcp.ensemble_v4 import build_startup_gate
+    from forge_puppeteer.ensemble.build import build_startup_gate
 
     class Reader:
         async def read_pose(self):  # pragma: no cover - never called here
@@ -586,7 +593,8 @@ def test_startup_gate_covers_real_robots_and_skips_simulation_or_opt_out(tmp_pat
             return Reader()
 
     class Ensemble:
-        packs = {"arm": object(), "sim": object(), "off": object()}
+        def __init__(self):
+            self.packs = {"arm": object(), "sim": object(), "off": object()}
 
     def room_of(*ids):
         return SimpleNamespace(robots=[SimpleNamespace(id=i, kind="soarm101") for i in ids])
@@ -652,3 +660,42 @@ def test_sdk_physical_daemon_needs_physical_true(tmp_path):
     with pytest.raises(ValueError, match="needs physical: true"):
         config_readiness(_room_files(tmp_path, ["soarm101"], physical=False, provider_extra=extra))
     assert config_readiness(_room_files(tmp_path, ["soarm101"], provider_extra=extra))["performers"]
+
+
+def test_check_config_prints_a_readiness_summary_without_serving(tmp_path, monkeypatch, capsys):
+    from forge_puppeteer.ensemble.launcher import main
+
+    path = _room_files(tmp_path, ["reachy", "stackchan"])
+    monkeypatch.setattr("forge_puppeteer.ensemble.launcher.serve",
+                        lambda *_: pytest.fail("check mode must not start the ensemble"))
+    assert main(["--config", str(path), "--check-config"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary == {
+        "configuration": "valid", "schema_version": 4,
+        "performers": ["robot-reachy", "robot-stackchan"], "robot_kinds": ["reachy", "stackchan"],
+        "robot_files_resolved": True, "device_connections_attempted": False,
+        "motion_authority_checked": False,
+    }
+
+
+@pytest.mark.parametrize("selected", [
+    ("reachy",), ("stackchan",), ("soarm101",), ("reachy", "stackchan"),
+    ("reachy", "soarm101"), ("stackchan", "soarm101"), ("reachy", "stackchan", "soarm101"),
+])
+def test_robot_file_identity_must_match_its_reference(tmp_path, selected):
+    path = _room_files(tmp_path, list(selected))
+    assert config_readiness(path)["robot_kinds"] == list(selected)
+    robot_file = tmp_path / f"{selected[0]}.json"
+    data = json.loads(robot_file.read_text())
+    data["id"] = "wrong"
+    robot_file.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="identity mismatch"):
+        config_readiness(path)
+
+
+@pytest.mark.parametrize("version", [1, 2, 3])
+def test_older_schema_versions_point_to_the_migration_script(tmp_path, version):
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps({"schema_version": version}))
+    with pytest.raises(ValueError, match="migrate-room-config"):
+        config_readiness(path)

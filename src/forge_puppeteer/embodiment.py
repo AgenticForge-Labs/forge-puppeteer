@@ -8,7 +8,7 @@ and must retain their SDK/broker ownership, STOP and uncertainty semantics.
 from __future__ import annotations
 
 import time
-from typing import Literal, TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import anyio
 from pydantic import BaseModel, ConfigDict, Field
@@ -211,7 +211,7 @@ class FakeEmbodiment:
                         asset_revision=asset.revision,
                     ),
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - deliberate: an unknown device outcome must not be retried
                 # Submission with an ambiguous outcome is never retried here.
                 return {"outcome": "failed", "reason": "submission_unconfirmed",
                         "action_id": request.action_id, "retry_safe": False}

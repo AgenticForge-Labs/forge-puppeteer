@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from forge_puppeteer.mcp.ensemble_launcher import config_readiness
+from forge_puppeteer.ensemble.launcher import config_readiness
 
 spec = importlib.util.spec_from_file_location(
     "migrate_room_config", Path(__file__).resolve().parents[2] / "scripts/migrate-room-config.py")

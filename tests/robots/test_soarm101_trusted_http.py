@@ -5,8 +5,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from forge_puppeteer.devices.soarm101_trusted_http import SOARM101TrustedChoreographyHTTP
-
+from forge_puppeteer.devices.soarm101_trusted_http import (
+    SOARM101TrustedChoreographyHTTP,
+)
 
 PIN = "sha256:" + "a" * 64
 

@@ -36,13 +36,13 @@ async def _local_sim_daemon_mcp_smoke(directory: Path) -> None:
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
     cli = [sys.executable, "-m", "soarm101_motion.local_sim_daemon"]
-    started = subprocess.run(
+    started = subprocess.run(  # noqa: ASYNC221 - smoke script, blocking is fine
         [*cli, "start", "--state-dir", str(state_dir), "--port", str(port)],
         check=True, capture_output=True, text=True, timeout=15,
     )
     try:
         assert "ready" in started.stdout.lower(), started.stdout
-        status = subprocess.run(
+        status = subprocess.run(  # noqa: ASYNC221 - smoke script, blocking is fine
             [*cli, "status", "--state-dir", str(state_dir)],
             check=True, capture_output=True, text=True, timeout=5,
         )
@@ -95,7 +95,7 @@ async def _local_sim_daemon_mcp_smoke(directory: Path) -> None:
     finally:
         # The daemon owns its own SDK session and watchdog. Its supported
         # lifecycle command performs SDK STOP and closes both on teardown.
-        subprocess.run(
+        subprocess.run(  # noqa: ASYNC221 - smoke script, blocking is fine
             [*cli, "stop", "--state-dir", str(state_dir)],
             check=True, capture_output=True, text=True, timeout=10,
         )

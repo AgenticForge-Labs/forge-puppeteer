@@ -107,7 +107,7 @@ configured performer; no second motion controller is started. Use the
 review-only `scripts/author_three_robot_ensemble.py --reachy-stackchan-only`
 generator, then explicitly approve real SDK/daemon/USB identities and the
 normal motion grants before launching. See
-[Native conversational performers](docs/THREE_ROBOT_ENSEMBLE.md). This
+[Native conversational performers](docs/ENSEMBLE.md). This
 software does not authorize an unqualified Reachy motion or flash StackChan.
 
 ### Built today
@@ -171,7 +171,7 @@ platform services or the current 4G personality; those remain
 Conversationalist concerns in PR 5. Physical SO-ARM execution is
 attended-experimental and requires a human lease, existing torque
 HOLD and an exact reviewed content revision allowlist. The default
-setup is simulation-only. See [Three native performers](docs/THREE_ROBOT_ENSEMBLE.md).
+setup is simulation-only. See [Ensembles](docs/ENSEMBLE.md).
 
 ### Reachy expressive motion (merged, physical validation pending)
 

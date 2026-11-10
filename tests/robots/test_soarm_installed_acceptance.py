@@ -114,14 +114,14 @@ async def delayed_receipt(self, request):
     return result
 Transport.execute = delayed_receipt
 if BUSY:
-    from forge_puppeteer.mcp import ensemble_v4
-    original_build = ensemble_v4.build_v4
+    from forge_puppeteer.ensemble import build as ensemble_build, config as ensemble_config
+    original_build = ensemble_build.build_ensemble
     def busy_build(*args, **kwargs):
         runtime, packs, connected, extras = original_build(*args, **kwargs)
         runtime.acquire_control('arm', 'foreign-controller', 'foreign-session')
         return runtime, packs, connected, extras
-    ensemble_v4.build_v4 = busy_build
-from forge_puppeteer.mcp.ensemble_launcher import main
+    ensemble_build.build_ensemble = busy_build
+from forge_puppeteer.ensemble.launcher import main
 main()
 """
     code = (f"STOP_LOG={str(stop_log)!r}\nLOST_STOP={scenario == 'lost_stop'!r}\nBUSY={scenario == 'busy'!r}\n" + code)

@@ -2,9 +2,9 @@
 import json
 import os
 import socket
+import subprocess
 import sys
 import time
-import subprocess
 import urllib.request
 from pathlib import Path
 
@@ -65,7 +65,7 @@ def test_direct_check_config_rejects_ungranted_control_without_connecting(tmp_pa
               "broker_url": "http://127.0.0.1:1", "allowed_tools": ["robot_state", "jog_joint"]}
     path.write_text(json.dumps(config))
     command = [sys.executable, "-m", "forge_puppeteer.mcp.launcher", "--config", str(path), "--check-config"]
-    denied = subprocess.run(command, text=True, capture_output=True)
+    denied = subprocess.run(command, text=True, capture_output=True, check=False)
     assert denied.returncode != 0 and "physical_authority" in denied.stderr
     config["simulation_only"] = True
     path.write_text(json.dumps(config))
@@ -315,7 +315,7 @@ async def test_soarm_only_v4_stdio_runs_pinned_programs_through_real_sdk_broker(
             f"http://127.0.0.1:{port}/v1/trusted/catalog",
             headers={"Authorization": f"Bearer {trusted_token}"},
         )
-        with urllib.request.urlopen(catalog_request, timeout=3) as response:
+        with urllib.request.urlopen(catalog_request, timeout=3) as response:  # noqa: ASYNC210 - test helper, blocking is fine
             catalog = json.loads(response.read())["result"]["programs"]
         revisions = {item["name"]: item["revision"] for item in catalog}
         durations = {item["name"]: item["duration_s"] for item in catalog}
@@ -374,7 +374,7 @@ async def test_soarm_only_v4_stdio_runs_pinned_programs_through_real_sdk_broker(
         }))
         params = StdioServerParameters(
             command=sys.executable,
-            args=["-m", "forge_puppeteer.mcp.ensemble_launcher", "--config", str(room_path)],
+            args=["-m", "forge_puppeteer.ensemble.launcher", "--config", str(room_path)],
             env=child_env,
         )
         async with stdio_client(params) as (reader, writer), ClientSession(reader, writer) as session:

@@ -8,9 +8,9 @@ from forge_puppeteer.behavior_contract import (
     BehaviorPattern,
     PerformerBehaviors,
 )
-from forge_puppeteer.mcp import ensemble_options as opts
-from forge_puppeteer.mcp.ensemble_launcher import config_readiness
-from forge_puppeteer.mcp.ensemble_options import (
+from forge_puppeteer.ensemble import options as opts
+from forge_puppeteer.ensemble.launcher import config_readiness
+from forge_puppeteer.ensemble.options import (
     ReachyOptions,
     StackChanOptions,
     build_reachy_behavior,
@@ -188,7 +188,8 @@ def test_options_in_robot_files_are_validated_when_the_config_loads(tmp_path):
 
 
 def test_build_v4_returns_motion_patterns_and_speech_server_kwargs(tmp_path, monkeypatch):
-    from forge_puppeteer.mcp import ensemble_v4
+    from forge_puppeteer.ensemble import build as ensemble_build
+    from forge_puppeteer.ensemble import config as ensemble_config
 
     calls = _fake_pack(monkeypatch)
     path = _write_room(
@@ -196,7 +197,7 @@ def test_build_v4_returns_motion_patterns_and_speech_server_kwargs(tmp_path, mon
         {"idle": "original_v1", "speaking": "smooth_v2", "speech_driven": True,
          "legacy_speech_fallback": True, "neutral_antennas_rad": [-0.17, 0.17]},
         {"speaking_mode": "native_weight", "speech_driven": True})
-    room, robots, options = ensemble_v4.load_v4(path)
+    room, robots, options = ensemble_config.load_config(path)
 
     class FakeReachy:
         catalog = object()
@@ -217,7 +218,7 @@ def test_build_v4_returns_motion_patterns_and_speech_server_kwargs(tmp_path, mon
     from forge_puppeteer.mcp import launcher
     monkeypatch.setattr(launcher, "ReachySDKProvider", FakeReachy)
     monkeypatch.setattr(launcher, "StackChanSDKProvider", FakeStackChan)
-    runtime, packs, _connected, extras = ensemble_v4.build_v4(room, robots, options=options)
+    runtime, packs, _connected, extras = ensemble_build.build_ensemble(room, robots, options=options)
     try:
         assert [p.performer_id for p in packs] == ["reachy", "stackchan"]
         assert set(extras.motion_patterns["reachy"]) == {"idle", "speaking"}

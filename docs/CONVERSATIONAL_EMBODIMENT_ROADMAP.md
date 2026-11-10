@@ -85,6 +85,6 @@ authorized SO-ARM joint choreography. It uses PR #11's single
 `ConversationEnsemble` and execution journal. This is software
 integration, not physical qualification. The existing single-robot
 MCP tools remain available and are not duplicated as raw robot
-tools in the ensemble. See [Three native performers](THREE_ROBOT_ENSEMBLE.md).
+tools in the ensemble. See [Ensembles](ENSEMBLE.md).
 PR 5 connects the Conversationalist 4G voice/session signals to
 these semantic tools; the final physical Codex acceptance follows.
