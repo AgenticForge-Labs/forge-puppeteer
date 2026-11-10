@@ -93,3 +93,39 @@ def test_never_overwrites_and_main_reports_cleanly(tmp_path, capsys):
     assert (out / "reachy.json").read_text() == before
     assert "refusing to overwrite" in capsys.readouterr().err
     assert json.loads(old.read_text())["schema_version"] == 2  # input untouched
+
+
+def test_drop_unsupported_keeps_going_and_reports_every_dropped_option(tmp_path):
+    old = {**v2(tmp_path), "reachy_return_to_neutral_after_expression": True,
+           "motion_profiles": {"reachy-local": {"idle": "smooth_v2", "speaking": "original_v1"}},
+           "reachy_original_speech_authority": "x", "startup_settle_s": 2.0}
+    with pytest.raises(migrate_mod.MigrationError):
+        migrate_mod.migrate(old)
+    files = migrate_mod.migrate(old, drop_unsupported=True)
+    notes = " | ".join(files["_warnings"])
+    for expected in ("reachy_return_to_neutral_after_expression", "reachy_original_speech_authority",
+                     "idle profile 'smooth_v2'", "speaking profile 'original_v1'", "startup_settle_s",
+                     "legacy_speech_fallback needs smooth_v2"):
+        assert expected in notes
+    options = files["reachy.json"]["options"]
+    assert "idle" not in options and "speaking" not in options  # both fell back to default
+    out = tmp_path / "lenient"
+    migrate_mod.write({k: v for k, v in files.items() if not k.startswith("_")}, out)
+    assert config_readiness(out / "ensemble.json")["performers"] == ["reachy-local"]
+
+
+def test_main_flag_prints_notes(tmp_path, capsys):
+    old = tmp_path / "old.json"
+    old.write_text(json.dumps({**v2(tmp_path), "reachy_return_to_neutral_after_expression": True}))
+    assert migrate_mod.main([str(old), str(tmp_path / "strict")]) == 1
+    assert migrate_mod.main(["--drop-unsupported", str(old), str(tmp_path / "lenient")]) == 0
+    assert "note: reachy_return_to_neutral_after_expression" in capsys.readouterr().out
+
+
+def test_unknown_startup_behavior_is_strict_by_default_and_mapped_when_lenient(tmp_path):
+    old = {**v2(tmp_path), "reachy_startup_behavior": "wake_up"}
+    with pytest.raises(migrate_mod.MigrationError, match="startup behavior"):
+        migrate_mod.migrate(old)
+    files = migrate_mod.migrate(old, drop_unsupported=True)
+    assert files["reachy.json"]["options"]["startup_behavior"] == "wake_up_if_sleeping"
+    assert any("wake_up_if_sleeping" in note for note in files["_warnings"])
