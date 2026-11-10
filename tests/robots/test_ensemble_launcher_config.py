@@ -10,6 +10,7 @@ import pytest
 
 pytest.importorskip("soarm101_motion.choreography")
 
+from soarm101_motion.choreography import JointTarget
 from soarm101_motion.constants import ARM_JOINTS, HOME_JOINTS
 
 from forge_puppeteer.conversation_soarm import author_soarm_reference_programs
@@ -20,7 +21,10 @@ from forge_puppeteer.mcp.ensemble_launcher import (
     _check_original_idle_reference,
     _original_idle_pack,
     _profile_overrides,
+    _stackchan_startup_pack,
     build_ensemble,
+    config_readiness,
+    main,
     soarm_native_binding,
     stackchan_display_presets,
 )
@@ -87,6 +91,117 @@ def test_native_launcher_config_binds_three_distinct_approved_programs(tmp_path)
     assert pack.behaviors["yes"].cues[0].asset_revision == programs["yes"].revision
     assert "4g" not in pack.model_dump_json().lower()
     assert EnsembleConfig.model_validate_json(json.dumps(data)).reachy.host == "127.0.0.1"
+
+
+def test_config_readiness_is_read_only_and_cli_does_not_start_room(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "ensemble.json"
+    path.write_text(json.dumps(config_data(tmp_path)))
+    summary = config_readiness(path)
+    assert summary == {
+        "configuration": "valid",
+        "schema_version": 1,
+        "performers": ["reachy", "stackchan", "soarm101"],
+        "soarm101_mode": "simulation",
+        "device_connections_attempted": False,
+        "motion_authority_checked": False,
+    }
+    monkeypatch.setattr("forge_puppeteer.mcp.ensemble_launcher.serve",
+                        lambda *_: pytest.fail("check mode must not start the room"))
+    assert main(["--config", str(path), "--check-config"]) == 0
+    assert json.loads(capsys.readouterr().out) == summary
+
+
+def _without_marker(provider):
+    return {k: v for k, v in provider.items() if k != "physical_authority"}
+
+
+@pytest.mark.parametrize("selected", [
+    ("reachy",), ("stackchan",), ("soarm101",),
+    ("reachy", "stackchan"), ("reachy", "soarm101"),
+    ("stackchan", "soarm101"), ("reachy", "stackchan", "soarm101"),
+])
+def test_v4_room_resolves_each_nonempty_robot_subset_and_checks_file_identity(tmp_path, selected):
+    data = config_data(tmp_path)
+    robot_files = {
+        "reachy": {"kind": "reachy", "id": "reachy", "provider": _without_marker(data["reachy"])},
+        "stackchan": {"kind": "stackchan", "id": "stackchan", "provider": _without_marker(data["stackchan"])},
+        "soarm101": {"kind": "soarm101", "id": "soarm101", "provider": {
+            "instance_id": "soarm101", "mode": "existing_broker",
+            "broker_url": "http://127.0.0.1:8765", "token_env": "SOARM_TOKEN",
+            "allowed_tools": ["robot_capabilities", "robot_state", "stop"]}},
+    }
+    refs = []
+    for kind in selected:
+        name = f"{kind}.json"
+        (tmp_path / name).write_text(json.dumps(robot_files[kind]))
+        refs.append({"kind": kind, "id": kind, "file": name})
+    room = {
+        "schema_version": 4,
+        "physical": True,
+        "robots": refs,
+        "action_journal": str(tmp_path / "actions.db"),
+        "ownership_db": str(tmp_path / "owners.db"),
+    }
+    if "reachy" in selected:
+        room["reachy_neutral_head"] = data["reachy_neutral_head"]
+    path = tmp_path / "room.json"
+    path.write_text(json.dumps(room))
+    summary = config_readiness(path)
+    assert summary["schema_version"] == 4
+    assert summary["robot_kinds"] == list(selected)
+    assert summary["performers"] == list(selected)
+    assert summary["device_connections_attempted"] is False
+
+    robot_files[selected[0]]["id"] = "wrong"
+    (tmp_path / f"{selected[0]}.json").write_text(json.dumps(robot_files[selected[0]]))
+    with pytest.raises(ValueError, match="identity mismatch"):
+        config_readiness(path)
+
+
+def test_soarm_breathe_idle_requires_its_exact_configured_program(tmp_path):
+    data = config_data(tmp_path)
+    data["soarm101"]["idle_behavior"] = "breathe"
+    with pytest.raises(ValueError, match="pinned breathe program"):
+        EnsembleConfig.model_validate(data)
+
+
+def test_stackchan_neutral_startup_is_explicit_and_uses_existing_pack():
+    from forge_puppeteer.conversation_native import stackchan_conversation_pack
+
+    pack = stackchan_conversation_pack("stackchan")
+    assert _stackchan_startup_pack(pack, "none").startup is None
+    configured = _stackchan_startup_pack(pack, "neutral")
+    assert configured.startup == configured.behaviors["neutral"]
+    assert configured.revision == configured.content_revision()
+
+
+def test_wake_to_neutral_is_explicitly_opted_in_and_exactly_pinned(tmp_path):
+    data = config_data(tmp_path)
+    target = JointTarget.author(
+        "wake_to_neutral", "so101", "simulation",
+        tuple(HOME_JOINTS[name] for name in ARM_JOINTS),
+    )
+    arm = data["soarm101"]
+    arm.update({
+        "startup_behavior": "wake_to_neutral",
+        "startup_target_joints_rad": list(target.joints_rad),
+        "startup_target_revision": target.revision,
+        "approved_revisions": arm["approved_revisions"] + [target.revision],
+    })
+    cfg = EnsembleConfig.model_validate(data)
+    _programs, _policy, pack = soarm_native_binding(cfg.soarm101)
+    assert pack.startup is not None
+    cue = pack.startup.cues[0]
+    assert cue.operation == "wake_to_neutral"
+    assert cue.asset_revision == target.revision
+    assert cue.asset_id == "soarm101/target/wake_to_neutral"
+    arm["startup_target_joints_rad"][0] += 0.01
+    with pytest.raises(ValueError, match="content differs"):
+        SOARMEnsembleConfig.model_validate(arm)
+    arm["startup_target_joints_rad"][0] -= 0.01
+    arm["approved_revisions"].pop()
+    with pytest.raises(ValueError, match="exact pinned"):
+        SOARMEnsembleConfig.model_validate(arm)
 
 
 def test_reachy_only_configuration_needs_explicit_identity_and_authority(tmp_path):

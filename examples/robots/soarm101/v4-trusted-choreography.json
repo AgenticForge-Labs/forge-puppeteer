@@ -1,0 +1,74 @@
+{
+  "policy": {
+    "robot_id": "so101",
+    "calibration_id": "simulation",
+    "allowed_revisions": [
+      "sha256:5060947acf6c551a5721b2b6b9ace1fa52bc6f7fdde1aa1fef5bde5b89ca06f7",
+      "sha256:46edbb4e38187fc8e8dd2dd1d016865215216a2f1d57e5c9561cfbfd76a0d917"
+    ],
+    "max_duration_s": 2,
+    "max_samples": 256,
+    "max_start_error_rad": 0.02,
+    "max_speed_deg_s": 8,
+    "max_acceleration_deg_s2": 25,
+    "allow_physical_trial": false
+  },
+  "programs": [
+    {
+      "name": "idle",
+      "robot_id": "so101",
+      "calibration_id": "simulation",
+      "revision": "sha256:5060947acf6c551a5721b2b6b9ace1fa52bc6f7fdde1aa1fef5bde5b89ca06f7",
+      "frames": [
+        {
+          "at_s": 0.0,
+          "joints_rad": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at_s": 0.3,
+          "joints_rad": [
+            0.01,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "speaking",
+      "robot_id": "so101",
+      "calibration_id": "simulation",
+      "revision": "sha256:46edbb4e38187fc8e8dd2dd1d016865215216a2f1d57e5c9561cfbfd76a0d917",
+      "frames": [
+        {
+          "at_s": 0.0,
+          "joints_rad": [
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "at_s": 0.3,
+          "joints_rad": [
+            0.01,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    }
+  ]
+}

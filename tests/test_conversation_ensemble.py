@@ -117,6 +117,31 @@ def test_status_discovers_only_authored_performer_actions():
     assert "speaking" not in catalog["reachy"]["expressions"]
 
 
+@pytest.mark.anyio
+async def test_explicit_ready_runs_startup_then_idle_for_each_selected_performer():
+    providers = {name: FakeSDK() for name in ("reachy", "stackchan", "soarm101")}
+    packs = [
+        PerformerBehaviors.author(
+            name, pack(name).behaviors, startup=once("fake_wake_up"),
+        ) for name in providers
+    ]
+    runtime = ExecutionRuntime(PerformanceStage())
+    for name, provider in providers.items():
+        runtime.register(name, provider)
+    ensemble = ConversationEnsemble(runtime, packs, presence_ttl_s=5)
+    async with runtime.run(), ensemble.run():
+        # Construction and MCP-style discovery are read-only.
+        assert all(not provider.calls for provider in providers.values())
+        assert ensemble.snapshot()["session_id"] is None
+        accepted = await ensemble.observe(event("host-session", 0, "idle"))
+        assert accepted["outcome"] == "accepted"
+        with anyio.fail_after(2):
+            while any(len(provider.calls) < 2 for provider in providers.values()):
+                await anyio.sleep(0.01)
+        for provider in providers.values():
+            assert provider.calls[:2] == ["fake_wake_up", "fake_idle"]
+
+
 
 def test_behavior_contracts_are_persona_free_pinned_and_bounded():
     one = pack("reachy")
@@ -182,6 +207,118 @@ def test_normal_voice_transition_does_not_cancel_finite_gesture():
     anyio.run(run)
 
 
+def test_finite_soarm_breathe_and_yes_share_one_serialized_motion_slot():
+    async def run():
+        active = 0
+        peak = 0
+        calls = []
+
+        class FiniteSOARM(FakeSDK):
+            async def validate(self, request):
+                if request.operation not in {"fake_listen", "play_choreography"}:
+                    raise ValueError("unsupported fake SOARM operation")
+
+            async def execute(self, request):
+                nonlocal active, peak
+                calls.append(request.operation)
+                active += 1
+                peak = max(peak, active)
+                try:
+                    await anyio.sleep(0.025)
+                    return Completion("fake finite choreography completed")
+                finally:
+                    active -= 1
+
+        behaviors = {
+            "idle": loop("fake_idle"), "listening": loop("fake_listen"),
+            "speaking": loop("fake_talk"), "yes": once("play_choreography"),
+            "breathe": once("play_choreography"),
+        }
+        # Both semantic actions model pinned native choreography requests.
+        for name in ("yes", "breathe"):
+            behaviors[name] = BehaviorPattern(source="recorded", mode="once", cues=(
+                BehaviorCue(at_s=0, operation="play_choreography",
+                            asset_id=f"soarm101/choreography/{name}", asset_revision=REV),
+            ))
+        provider = FiniteSOARM()
+        runtime = ExecutionRuntime(PerformanceStage())
+        runtime.register("soarm101", provider)
+        ensemble = ConversationEnsemble(runtime, [PerformerBehaviors.author("soarm101", behaviors)])
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "listening"))
+            await anyio.sleep(0.02)
+            assert (await ensemble.express("breathe", action_id="breathe-1"))["outcome"] == "accepted"
+            await anyio.sleep(0.005)
+            assert (await ensemble.express("yes", action_id="yes-1"))["outcome"] == "accepted"
+            await anyio.sleep(0.12)
+            assert calls.count("play_choreography") == 2
+            assert peak == 1
+    anyio.run(run)
+
+
+@pytest.mark.parametrize("failure", ["interrupt", "fault"])
+def test_soarm_cancel_or_fault_cannot_late_complete_or_resume_neutral(failure):
+    async def run():
+        started = anyio.Event()
+        finish = anyio.Event()
+
+        class DelayedSOARM(FakeSDK):
+            async def validate(self, request):
+                if request.operation not in {"fake_listen", "play_choreography"}:
+                    raise ValueError("unsupported fake SOARM operation")
+
+            async def execute(self, request):
+                self.calls.append(request.operation)
+                if request.operation == "play_choreography":
+                    started.set()
+                    await finish.wait()
+                    if failure == "fault":
+                        raise OSError("simulated unknown SDK outcome")
+                return Completion("fake SDK completion")
+
+            async def stop(self):
+                self.stop_calls += 1
+                if failure == "interrupt":
+                    finish.set()
+                return StopResult(failure == "interrupt", "fake STOP evidence")
+
+        behaviors = {
+            "idle": loop("fake_idle"), "listening": loop("fake_listen"),
+            "speaking": loop("fake_talk"), "yes": once("play_choreography"),
+        }
+        behaviors["yes"] = BehaviorPattern(source="recorded", mode="once", cues=(
+            BehaviorCue(at_s=0, operation="play_choreography",
+                        asset_id="soarm101/choreography/yes", asset_revision=REV),
+        ))
+        provider = DelayedSOARM()
+        runtime = ExecutionRuntime(PerformanceStage())
+        runtime.register("soarm101", provider)
+        ensemble = ConversationEnsemble(runtime, [PerformerBehaviors.author("soarm101", behaviors)])
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "listening"))
+            await anyio.sleep(0.02)
+            await ensemble.express("yes", action_id="yes-1")
+            await started.wait()
+            if failure == "interrupt":
+                await ensemble.observe(event("room", 1, "listening", interrupted=True))
+            else:
+                finish.set()
+                await anyio.sleep(0.03)
+            await anyio.sleep(0.03)
+            before = list(provider.calls)
+            assert provider.stop_calls == 1
+            assert "fake_idle" not in before
+            assert before.count("play_choreography") == 1
+            # The interruption stops the expression and suppresses the
+            # listening behavior carried by that same event.
+            assert before == ["fake_listen", "play_choreography"]
+            expected_status = "idle" if failure == "interrupt" else "blocked"
+            assert ensemble.snapshot()["performers"]["soarm101"]["status"] == expected_status
+            await anyio.sleep(0.03)
+            assert provider.calls == before
+    anyio.run(run)
+
+
 def test_startup_behavior_runs_once_before_latest_presence_and_is_not_an_expression():
     async def run():
         startup_started = anyio.Event()
@@ -223,6 +360,73 @@ def test_startup_behavior_runs_once_before_latest_presence_and_is_not_an_express
             assert sdk.calls.count("fake_wake_up") == 1
             assert "fake_talk" in sdk.calls
             assert "fake_listen" not in sdk.calls
+
+    anyio.run(run)
+
+
+def test_failed_startup_does_not_resume_presence_motion():
+    async def run():
+        class FailedWake(FakeSDK):
+            async def execute(self, request):
+                self.calls.append(request.operation)
+                if request.operation == "fake_wake_up":
+                    raise OSError("wake outcome unknown")
+                return Completion("unexpected follow-on motion")
+
+        sdk = FailedWake()
+        runtime = ExecutionRuntime(PerformanceStage())
+        runtime.register("reachy", sdk)
+        base = pack("reachy")
+        authored = PerformerBehaviors.author(
+            "reachy", base.behaviors, startup=once("fake_wake_up"),
+        )
+        ensemble = ConversationEnsemble(runtime, [authored])
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "listening"))
+            await anyio.sleep(0.05)
+            assert sdk.calls == ["fake_wake_up"]
+            assert ensemble.snapshot()["performers"]["reachy"]["status"] == "blocked"
+
+    anyio.run(run)
+
+
+@pytest.mark.parametrize("kind", ["startup", "gesture"])
+def test_failed_action_record_does_not_resume_presence(kind):
+    async def run():
+        class FailedValidation(FakeSDK):
+            def __init__(self):
+                super().__init__()
+                self.validation_counts = {}
+
+            async def validate(self, request):
+                count = self.validation_counts.get(request.operation, 0) + 1
+                self.validation_counts[request.operation] = count
+                # Runtime submission validates once; the worker's pre-dispatch
+                # validation then produces a definite FAILED journal record.
+                if request.operation in {"fake_wake_up", "fake_yes"} and count == 2:
+                    raise ValueError("deterministic pre-dispatch failure")
+                await super().validate(request)
+
+        sdk = FailedValidation()
+        runtime = ExecutionRuntime(PerformanceStage())
+        runtime.register("reachy", sdk)
+        base = pack("reachy")
+        authored = PerformerBehaviors.author(
+            "reachy", base.behaviors,
+            startup=once("fake_wake_up") if kind == "startup" else None,
+        )
+        ensemble = ConversationEnsemble(runtime, [authored])
+        async with runtime.run(), ensemble.run():
+            await ensemble.observe(event("room", 0, "listening"))
+            if kind == "gesture":
+                await ensemble.express("yes", action_id="failed-yes")
+            await anyio.sleep(0.05)
+            failed_operation = "fake_wake_up" if kind == "startup" else "fake_yes"
+            records = [record for record in runtime._entries.values()
+                       if record.request.operation == failed_operation]
+            assert records and records[0].record.state.value == "failed"
+            assert sdk.calls == []
+            assert ensemble.snapshot()["performers"]["reachy"]["status"] == "unavailable"
 
     anyio.run(run)
 
@@ -302,8 +506,11 @@ def test_listening_hold_sends_no_motion_and_resumes_on_speaking():
 
 def test_hold_is_only_allowed_for_cueless_listening():
     hold = BehaviorPattern(source="procedural", mode="hold", cues=())
-    with pytest.raises(ValueError):
-        PerformerBehaviors.author("reachy", {"speaking": hold})
+    # A performer with no authored motion may hold still for any presence
+    # state; listening is not a special authority boundary.
+    PerformerBehaviors.author("reachy", {
+        state: hold for state in ("idle", "listening", "speaking")
+    })
     with pytest.raises(ValueError):
         BehaviorPattern(source="procedural", mode="hold", cues=(BehaviorCue(at_s=0, operation="x"),))
     with pytest.raises(ValueError):

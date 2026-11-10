@@ -1,294 +1,149 @@
-# Agent / Codex instructions
+# Agent instructions
 
-## Company authority and current qualification focus (2026-11-04)
+Forge Puppeteer is the physical execution backend for AgenticForge. It owns
+Stage (cameras, capture, lighting, calibration) and Performers (robot
+embodiment and control). It must also work as a standalone live robot/show
+system without Conversationalist or Platform.
 
-Puppeteer owns the semantic/Stage physical performance interface but is **not**
-the company Executive or operational WorkItem store. Conversationalist owns
-voice; Business Engine owns role/work intent; Platform owns approvals, tool
-federation and company evidence. A company notification or MCP discovery
-result does not authorize physical movement. Accept only explicit, bounded,
-validated performer capabilities through the existing SDK/broker authority.
+## Working with the robots
 
-Until operator-attended validation establishes real sensed neutral/settled
-state and safe room-close/interrupt behavior, retain unknown-outcome
-quarantine and no automatic retry/rearm. PR #20 remains an independent
-hardware-gated branch, not a behavior to assume merged. Puppeteer's
-standalone no-company-mode must continue to work. RoboConduit is an
-independent future transport/session layer rather than a substitute
-for hardware STOP/leases.
+These are small open-source desktop robots (SO-ARM101, Reachy Mini,
+StackChan), not industrial machinery. Lean toward doing the real physical
+work. Simulation is a quick sanity check, not a qualification process.
 
-See [company controls](https://github.com/AgenticForge-Labs/agenticforge-platform/blob/main/docs/company-control-and-delegation.md).
-This is documentation, not hardware qualification.
+### Workflow
 
-Forge Puppeteer is the public physical execution backend for AgenticForge. It owns Stage environment/capture and performer embodiment/control. It must also remain useful as a standalone live robot/show system.
+1. **Simulate once.** After changing motion or control code, run the relevant
+   tests or mock/sim run **once**. If it passes, move on to hardware. Don't
+   add more simulation rounds, review-only passes or "acceptance" reruns
+   unless something failed or the user asks.
+2. **Check the sleep position at session start.** Read the robot's current
+   joint positions (read-only, no torque change) and compare them to its
+   sleep pose below.
+   - Every joint within tolerance (default **±5°**): proceed without asking.
+   - Otherwise: report the per-joint deltas and ask the user.
+   - The ensemble room does this itself on startup (`startup_gate.py`). A robot
+     not at sleep stays still. Relay its `message`; on "yes" call
+     `ensemble_prepare(performer_id, "move_to_sleep", action_id)`. Robots that
+     report only commanded positions (StackChan) use `"confirm_at_sleep"`.
+     `ensemble_startup_check` re-reads without moving. A SO-ARM sleep move needs
+     `sleep_target` (a `pose_targets` name) in its robot config.
+3. **Do the physical work.** If the user asked for physical work in this
+   session, that is the authorization. Don't re-ask for each step, action or
+   restart, and don't ask for "physical qualification" first. Running it on
+   the hardware *is* the test.
+4. **End the session at sleep.** Call `ensemble_park(action_id)` (refused while a
+   conversation is active): sleep move, re-check, report. It stops at the first
+   fault and never retries.
 
-Physical safety takes precedence over autonomy.
+### Standard poses (every robot)
 
-## Operating modes
+Every robot defines `sleep` (parked start/end) and `neutral` (awake, ready).
+Defaults are in `src/forge_puppeteer/poses/<kind>.yaml`; per-unit overrides go
+in `~/.config/forge-puppeteer/standard_poses/<kind>.yaml`. Use
+`forge_puppeteer.standard_poses.pose_check` for the comparison. If a robot
+only reports commanded positions, or a pose isn't recorded yet, ask the user
+once per session.
 
-### Manual / rehearsal mode — default
+| Robot | sleep | neutral | feedback |
+|---|---|---|---|
+| SO-ARM101 | taught `sleep2`, shoulder_pan = 0 | taught `neutral_pup` | measured |
+| Reachy Mini | SDK sleep constants | end of daemon wake-up (SDK init pose, antennas ±10°) | measured |
+| StackChan | TBD | TBD | commanded only |
 
-Use this mode while adding hardware, calibrating a camera/performer, validating a semantic action, rehearsing a shot, or whenever explicit autonomous hardware permission has not been granted.
+### Hard rules (the only ones)
 
-Rules:
+- **One controller per robot.** Never run two controllers or MCP servers
+  against the same device at once.
+- **Faults stop the run.** On an SDK fault, collision, failed or uncertain
+  STOP, or unexpected position: stop, report the actual error and ask. Don't
+  retry the same motion in a loop and don't auto-rearm. A quarantined robot is
+  recovered with `ensemble_recover(performer_id)` once it has been seen settled:
+  a measured pose that stops changing near sleep or neutral, or a confirmed
+  STOP. No restart or typed confirmation phrase is needed.
+- **No bypassing.** Don't get around a fault or denial with raw serial, direct
+  motor calls or a different controller.
+- **No secrets in git.** Never commit credentials, Wi-Fi/device secrets,
+  tokens or private network addresses.
 
-- Prefer mock/dry-run execution first.
-- Inspect capabilities and calibration before commanding a device.
-- Run one semantic action/take at a time while developing new behavior.
-- Keep semantic commands separate from device coordinates/motor packets.
-- Capture the requested semantic performance, resolved device action, timestamps, configuration/calibration references, result, and take lineage.
-- Never infer that hardware is safe/available from configuration alone; adapters must report readiness.
-- Fail closed on missing calibration, unavailable devices, unsafe ranges, unsupported capabilities, or ambiguous targets.
-- Do not move/energize physical hardware solely to test higher-level plumbing when mocks can test it.
-- A useful manual operation should become a reusable function + CLI/API + test before it is added to orchestration.
+### Not required
 
-### Agentic mode
+- Repeated permission prompts within a session.
+- Multiple simulation passes for code that already passed tests.
+- Hardware "qualification" or attended-acceptance gates before trying
+  something on hardware.
+- Reading `docs/ROBOT_NOTES.md` as a list of blockers. It is design
+  background.
 
-Use only when an upstream caller/user has explicitly authorized physical execution.
+## Architecture
 
-Rules:
+- **Stage vs Performer.** Stage handles cameras, recording, lighting, rigs,
+  calibration and stage locks. Performers handle robot motion, gestures and
+  multi-character coordination. Keep them separate.
+- **Semantic contracts.** Exposed APIs use intents (`look_at`, `gesture`,
+  `move_to_mark`, `record_take`). Vendor SDK calls, serial ports, servo units
+  and motor coordinates stay inside device adapters.
+- **One execution path.** Motion goes through the existing `ExecutionRuntime`
+  and each robot's native SDK/broker. Don't add a parallel dispatcher or a
+  direct-servo path. Manual and agentic use share the same primitives.
+- **Standalone.** Puppeteer must not require Conversationalist or the
+  AgenticForge Platform to run robots. Those are optional callers.
+- **Provenance.** Physical takes keep production/scene/shot/take IDs when
+  supplied, performer IDs, the semantic request, config/calibration refs,
+  start/end times, the result and media references.
+- **Reusable work.** A useful manual operation should become a tested
+  function plus CLI/API before it goes into orchestration.
+- **Direction: live first, scripts later (issue #56).** Today a live
+  conversation drives one robot, or all three with the same behaviors. Later,
+  Studios (the coordinator; it also drives video recording and calls
+  Conversationalist for audio) will send scripts (timed events that wait for
+  behaviors and lines to finish; silence is explicit) with one robot per
+  character, and characters such
+  as "4g" or a dog-like one will restyle the standard behaviors. Write live code
+  so that stays easy: treat each robot separately (never one state for the whole
+  ensemble), layer character style over standard behaviors, prefer "after X
+  completes" over fixed timestamps, and keep start/end timestamps for every
+  behavior. Don't build script features yet.
+- **Name.** The unit that owns a set of robots is an *ensemble*, not a "room"
+  (that is LiveKit's word; Puppeteer must work without LiveKit).
 
-- Agentic orchestration may sequence already validated semantic actions; it does not bypass adapter safety checks.
-- Hardware permission is necessary but not sufficient: readiness, calibration, capability, resource locks, and safety checks must all pass.
-- Keep bounded retries. Never repeatedly re-drive a failed physical motion without a safe retry policy.
-- Stop and return a structured failure on collision/safety/calibration/device errors.
-- Never silently substitute a different performer, motion, camera, or stage configuration if that changes creative or safety intent.
-- Autonomous camera/performer coordination must use the same Stage/Performer primitives exercised manually.
+## SO-ARM101 notes
 
-## Stage vs Puppeteer boundary
+- The live demo is started through the configured Puppeteer MCP launcher
+  (`mcp/ensemble_launcher.py`, v4 configs in `examples/robots/soarm101/`). It
+  owns the SDK daemon and the single device connection.
+- Named taught poses live in the SDK pose store
+  (`~/.config/soarm101/poses/so101.json`). Expose them via `pose_targets`.
+- The interactive `soarm101` MCP tools are fine for direct jog/pose/camera
+  requests. Just don't run them at the same time as the ensemble launcher.
 
-**Stage** controls/observes the environment and capture system:
+## Migration
 
-- cameras and recording,
-- camera motion,
-- lighting,
-- sets/props/rigs,
-- calibration,
-- stage state and resource locks.
+This repo supersedes the physical parts of `robo-puppeteer` and the
+Stage/capture parts of `robo-studio`. Keep external SDKs such as
+`soarm101-motion-sdk` as dependencies, not copies. Migrate tests along with
+behavior, and update `docs/MIGRATION.md` before calling an old repo
+superseded.
 
-**Performers/Puppeteer** control embodied performers:
+Robot-specific design history (Reachy expressive packs, StackChan face scale,
+ensemble schema versions, speech-reactive expression) is in
+`docs/ROBOT_NOTES.md`.
 
-- semantic character actions,
-- robot motion/performance,
-- gestures/blocking,
-- multi-character coordination,
-- embodiment-specific execution.
+## Planning and roadmap
 
-Do not merge these abstractions merely because one production uses both.
+Plans, roadmaps and status live in **GitHub issues** and the AgenticForge
+Project board ("AgenticForge Roadmap",
+https://github.com/users/AgenticForge-Labs/projects/1), not in markdown files.
+The current roadmap is epic #54. New issues go on the board
+(`gh project item-add 1 --owner AgenticForge-Labs --url <issue-url>`); move
+the card's Status (Todo → In Progress → Done) as work progresses.
 
-## Semantic contract rule
-
-Contracts exposed to Forge Studios should express intent such as `look_at`, `move_to_mark`, `speak`, `gesture`, `record_take`, or a semantic performance description. Vendor SDK calls, serial ports, servo units, raw PTZ values, and motor coordinates stay inside adapters.
-
-## Manual -> agentic implementation rule
-
-```text
-manual rehearsal
-→ stable semantic action
-→ plain tested function
-→ adapter capability + safety contract
-→ CLI/API exposure
-→ orchestration step
-→ agentic policy authorization
-```
-
-Do not introduce an autonomous-only hardware path.
-
-## Migration / legacy transfer
-
-This repository supersedes physical functionality from `robo-puppeteer` and the Stage/camera/capture portions of `robo-studio`.
-
-When transferring:
-
-- preserve reusable action/event/resource abstractions, timeline coordination, plugin/embodiment interfaces, voice/speech support, camera calibration/capture/motion, production profiles, and SO-ARM adapters where useful;
-- rename/consolidate concepts into Stage vs Performer rather than preserving old repo boundaries;
-- retain external SDK packages such as `soarm101-motion-sdk` as adapters/dependencies rather than copying them unless there is a concrete reason;
-- migrate tests with behavior;
-- update the migration matrix before considering old repos superseded.
-
-## Provenance
-
-Every physical take should retain stable production/episode/scene/shot/take IDs when supplied, performer IDs, semantic request, device/config/calibration references, start/end times, success/failure, retake parent, selected state, and captured media references.
-
-## Secrets and safety
-
-Never commit credentials, Wi-Fi/device secrets, private network addresses, tokens, or local calibration secrets. Do not weaken safety limits for convenience or autonomous throughput.
-
-
-## Shared conversational behavior implementation (2026-11-02)
-
-- 4G is a conversation/persona name, **not** a Reachy, StackChan or SO-ARM
-  hardware identity. The same conversational source may address all three.
-  Do not encode persona prompts, voice models, Platform tools or company
-  permissions inside device behavior packs.
-- `forge.behavior.v1` and `ConversationEnsemble` are the PR 1 semantic
-  authoring and orchestration foundation. Reuse the existing
-  `ExecutionRuntime`, action IDs, journal, resource locks and provider
-  permission checks; do not add a second servo or MCP execution authority.
-- A procedural loop is a finite SDK-validated cue repeated only while the
-  host session remains fresh. Never approximate untrusted agent jog limits
-  by chaining tiny commands, or infer physical STOP from task cancellation.
-- When command admission is denied by resource ownership, **never** send an
-  automatic device STOP that could disrupt a manipulation controller.
-  Only potentially dispatched work owned by this coordinator warrants
-  its existing STOP/HOLD escalation path.
-- The new foundation is software-only until the next PRs bind each robot's
-  native SDK. Conversationalist remains an optional caller; standalone
-  releases must not import it or AgenticForge Platform to run robots.
-
-
-## Native Reachy/StackChan expressive packs (PR 2)
-
-- `conversation_native.py` is the only owner of these named expressive
-  behaviors. Keep motion definitions out of the native SDK libraries and do
-  not copy the Reachy Conversation App's runtime/movement manager.
-- The Reachy dataset importer uses the source-controlled official manifest,
-  exact upstream commit and SHA-256 inventory. No auto-refresh and no
-  replacement of an installed snapshot; do not run a download at normal
-  robot startup. Associated recording audio is disabled by default.
-- Reachy's neutral head pose is operator-provided and reviewed; the default
-  vertical breathing amplitude is zero pending physical qualification. Do
-  not infer safe world +Z or physical settling from SDK completion.
-- StackChan's pose authoring uses tenths-of-degree native semantics and the
-  same existing provider/SDK STOP-generation contract. Never put pitch zero
-  into a native head pose. Live firmware limits and operator grants still
-  override the authoring envelope.
-- PR 4 (Puppeteer PR #13) binds these software-only behavior packs to
-  explicit native SDK sessions through a three-performer MCP launcher.
-  No physical hardware operation is qualified by CI. PR 5 adds
-  Conversationalist as an optional caller; Puppeteer remains standalone.
-
-
-## Reachy expressive pack (merged PR #16, awaiting hardware acceptance)
-
-- PR #16 merged the opt-in expressive style into `main` at
-  `c83efcbbf470f9f72052d2090398f1092e6670dd`. Do not present
-  its physical motion envelope as qualified until attended testing.
-- `classic` is the unchanged default; yes/no use the existing SHA-pinned
-  `play_move` path and must not regress.
-- `pose_and_antennas` composes both bounded targets in one pinned SDK
-  `goto_target` through the **existing** ExecutionRuntime. It is not a
-  raw target MCP tool and requires an explicit operator grant.
-- An operator must independently review antenna neutral and head geometry.
-  Breathing defaults to zero displacement, and numerical bounds do not
-  establish safe clearance or physical settling.
-- Never launch the upstream Conversation App motion manager concurrently
-  with Puppeteer; retain uncertain STOP quarantine, no autorearm, no
-  auto-retry and honest `agent_state` timing provenance.
-- Physical acceptance and audio/playback synchronization are separate
-  gates. See `docs/REACHY_EXPRESSIVE_MOTION.md`.
-
-## Two-performer native ensemble
-
-- Schema v3 deliberately includes Reachy and StackChan only. It must not
-  instantiate, configure, import, or falsely report a simulated SO-ARM101
-  performer. Keep one room, one journal, one SDK session per selected robot.
-- The original v1 three-robot and v2 Reachy-only configs remain supported
-  without semantic conversion, new controller ownership or weaker grants.
-- The review-only generator cannot provide motion permission or guess
-  Reachy's neutral transform, daemon identity, StackChan serial port,
-  firmware revision, or calibration. Local Codex must verify the actual
-  hardware before any physical trial.
-- Conversationalist's validated `performer_ids` must match exactly what
-  Puppeteer advertises. Robot omission is explicit, not a startup fallback.
-
-## Three-performer native ensemble (PR 4/5)
-
-- `mcp/ensemble_launcher.py` is the operator-configured standalone MCP
-  room owner. The existing `ConversationEnsemble` and `ExecutionRuntime`
-  are its only action/state/ownership path; do not add direct servo motion
-  or a parallel dispatcher. Reachy/StackChan SDK sessions are explicit.
-- `devices/soarm101_choreography.py` must receive one existing persistent
-  SDKAgentExecutor, its bound BrokerWatchdog and immutable ChoreographyPolicy.
-  The adapter may request ONLY exact operator-approved native programs.
-  It is **not** a new untrusted agent broker/MCP capability.
-- SO-ARM candidate idle/listen/talk/nod/shake definitions belong in
-  `conversation_soarm.py` as authored semantic content. SDK owns full
-  path validation, measured start, human lease, calibration, watchdog,
-  gripper-free trajectory execution, HOLD and STOP.
-- A *normal* semantic transition may wait up to the provider's bounded
-  completion grace before canceling a finite native segment; interrupt,
-  disconnect, heartbeat expiry and shutdown use immediate SDK STOP.
-  Never claim coroutine cancellation has stopped motors. If a device's
-  STOP terminalizes its session, return unavailability/quarantine and
-  require operator reconciliation; do not automatically rearm/reconnect.
-- The review-only generator must not emit authorization markers by default,
-  open ports, start robots or grant physical motion. All physical clearance,
-  sound timing and STOP drift checks remain for the final Codex handoff.
-- Only the *caller* defines current 4G persona and tool grants; Puppeteer
-  remains useful independently of Conversationalist or Platform.
-
-
-## Shared speech-reactive expression contract
-
-- The source-controlled speech_expression.py is a pure, device-independent
-  renderer for generated-PCM envelope features from Conversationalist. All
-  channels are unitless; they never grant motor or speaker access.
-- Do not put PCM, audio sinks, microphone access, personas or LLM providers in
-  Puppeteer. Do not copy the upstream Reachy HeadWobbler motor scheduler or
-  bypass the existing ExecutionRuntime and SDK authority.
-- An unconfirmed STOP or unsensed neutral/sleep state blocks any new physical
-  reactive movement; never automatically retry or rearm.
-- The optional ensemble_speech_envelope MCP tool can collect bounded features
-  only inside the existing room. It must never dispatch physical actions,
-  rearm unknown devices, or run a second task scheduler.
-- Per-performer mapping remains separately operator-authored and
-  SDK-preflighted. SO-ARM101 may only use exact approved finite choreography,
-  never an arbitrary per-hop joint stream.
-- See docs/SPEECH_DRIVEN_EMBODIMENT.md for pending live transport,
-  integration, timing calibration and physical qualification.
-
-
-## StackChan native expressions versus face presentation scale
-
-- Shared semantic emotion/gesture names belong in Puppeteer's authored behavior
-  packs; StackChan SDK owns native eye/mouth/head/light values and validation.
-  New finite StackChan faces may be authored with existing operations, but are
-  not an SDK-provided built-in emotion engine.
-- A separate optional SDK/firmware `display.face_scale` 100%/170% setting
-  changes only the LVGL face panel, not geometry, motor ranges, expressions or
-  calibration. Never silently enlarge faces from dialogue or model output.
-- Do not require a firmware update to run existing native expressions, and do
-  not infer physical approval of software-authored expressions from CI.
-
-
-- The StackChanSpeechFacePreview is a hardware-free candidate mapper and
-  MUST NOT be treated as a live face animation driver. It emits SDK-valid
-  native mouth cue shapes with bounded rate and release semantics; only the
-  existing ExecutionRuntime may dispatch after a separate operator grant.
-
-
-- Source-grounded StackChan behaviors may use pinned upstream modifier
-  semantics (mouth WEIGHT for speaking, eye weight for blink, paired eye
-  x/y for glance) but may not run a second firmware modifier controller.
-  The optional `stackchan_speaking_mode: native_weight` is operator-only,
-  while `legacy_size` remains the default. Never silently switch styles
-  based on model interpretation or infer measured face appearance.
-
-## Optional StackChan display scale in Puppeteer
-
-- The merged SDK 0.4.0 defines `display.face_scale` (100 or 170 percent).
-  Puppeteer's corresponding `face_scale_update` is a separate operator-granted,
-  journaled visual operation. Do not add it to semantic emotion packs, infer it
-  from speech, or automatically change it at startup.
-- Require the installed SDK 0.4.0 and current firmware's advertised capability;
-  older firmware must fail closed for this operation without losing other
-  existing controls. Each display request still passes SDK STOP-generation
-  fencing and shared resource serialization; firmware completion is not visual
-  inspection. No reconnect, automatic retry, firmware flashing, or physical
-  qualification is implied by CI.
-
-
-## Three-robot presentation presets
-
-- The optional room-owned `ensemble_presentation` is for trusted authored
-  visual presets, not free-form SDK commands. StackChan normal/enlarged
-  face options require `stackchan_display_presets_enabled: true`, installed
-  native SDK 0.4.0, and the existing explicit `face_scale_update` grant.
-- Reuse `ConversationEnsemble.present` and the same `_play`/ExecutionRuntime
-  scheduling, journal, ownership and quarantine as finite expressions.
-  Preflight before replacing an ambient behavior. A denied or unsupported
-  display operation must not issue motor STOP or alter Reachy/SO-ARM.
-- Do not start a second StackChan MCP server for a three-robot room, add
-  arbitrary percentages to MCP, or interpret a firmware command-completed
-  result as measured face rendering.
+- **Before starting work,** find its issue (`gh issue list`, `gh issue view N`).
+  If there is none, create one with a checkbox task list.
+- **While working,** tick checkboxes in the issue as items land
+  (`gh issue edit N --body-file …`). Add new findings as issue comments.
+- **PRs** reference their issue with `Fixes #N` so merging closes it.
+- **Don't create** `PLAN`, `STATUS`, `ROADMAP`, handoff or per-PR markdown files.
+  `docs/` is for durable reference only (architecture, setup, how to run).
+  History is git plus `CHANGELOG.md`.
+- **Design discussions** go in the issue body (e.g. #53), not a new doc.

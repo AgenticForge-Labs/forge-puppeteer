@@ -20,10 +20,12 @@ dev = ["pytest>=8", "pytest-anyio>=0.0.0", "ruff>=0.6"]
 forge-puppeteer = "forge_puppeteer.cli:main"
 forge-puppeteer-mcp = "forge_puppeteer.mcp.launcher:main"
 forge-puppeteer-ensemble = "forge_puppeteer.mcp.ensemble_launcher:main"
-forge-puppeteer-reconcile = "forge_puppeteer.operator_reconcile:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+forge_puppeteer = ["poses/*.yaml"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -38,6 +38,17 @@ class FakeBroker:
         return SimpleNamespace(is_error=False, structured_content={"result": result})
 
 
+def test_transition_grace_is_exposed_only_for_trusted_choreography():
+    class Trusted:
+        finish_before_interrupt_s = 3.5
+
+    direct = SOARM101Provider("arm", FakeBroker(), allowed_tools=frozenset())
+    trusted = SOARM101Provider("arm", FakeBroker(), allowed_tools=frozenset(),
+                               trusted_choreography=Trusted())
+    assert direct.finish_before_interrupt_s == 0.0
+    assert trusted.finish_before_interrupt_s == 3.5
+
+
 async def test_controls_only_forward_to_live_visible_broker_tools():
     broker = FakeBroker()
     provider = SOARM101Provider("arm", broker, allowed_tools=frozenset(broker.visible))

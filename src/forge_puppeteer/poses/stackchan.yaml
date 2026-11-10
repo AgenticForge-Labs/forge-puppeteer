@@ -1,0 +1,12 @@
+# StackChan standard poses. Channels are head servos in degrees.
+# Firmware reports commanded positions only, so checks ask the user once per session.
+kind: stackchan
+feedback: commanded
+default_tolerance_deg: 5
+poses:
+  sleep:
+    note: TBD - verify with the user and record head_yaw / head_pitch
+    channels_deg: null
+  neutral:
+    note: TBD - verify with the user and record head_yaw / head_pitch
+    channels_deg: null

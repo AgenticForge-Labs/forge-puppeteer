@@ -104,6 +104,35 @@ The direct HTTP client intentionally returns a small compatibility
 object matching the previous internal broker-session methods. It is
 not a second MCP server and does not send MCP over HTTP to the SDK.
 
+### Practical local daemon run
+
+The SDK's `soarm101-sim-daemon` is usable with this fixed-route direct MCP
+backend. Start the daemon separately, then launch this config with the
+credential loaded into the Puppeteer process environment (never into the
+config or MCP arguments):
+
+```bash
+soarm101-sim-daemon start
+export SOARM101_BROKER_TOKEN="$(cat ~/.local/state/soarm101/sim-daemon/broker.token)"
+forge-puppeteer-mcp --config examples/robots/soarm101/direct-broker-simulation.json
+```
+
+Use MCP `robot_health`, `robot_capabilities`, `robot_state`, the profile's
+bounded `jog_joint`, and `device_stop`; shut down with
+`soarm101-sim-daemon stop`. The default daemon profile limits joint delta to
+2 degrees and only supports reads, `jog_joint`, and STOP. Keep this session
+separate from `ConversationEnsemble` / `SOARM101Choreography`: ensemble
+choreography is room-owned and uses its existing SDK executor rather than
+connecting to the standalone daemon. No physical hardware or physical
+authority is involved.
+
+The installed-wheel smoke in `scripts/soarm101-wheel-smoke.sh` now starts the
+real daemon in a temporary private state directory, checks daemon health and
+status, connects the installed Puppeteer stdio server, checks MCP readiness
+and state, submits a 0.5 degree simulated joint jog, requests broker-confirmed
+STOP, and verifies daemon/token cleanup. It exercises the existing SDK route
+registry and does not start the SDK-owned MCP server or an ensemble.
+
 ## Local Codex acceptance before marking migration complete
 
 Repository: `AgenticForge-Labs/forge-puppeteer`, branch

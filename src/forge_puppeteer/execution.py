@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
+import math
+import os
 import sqlite3
 import uuid
 from contextlib import asynccontextmanager
@@ -28,8 +29,6 @@ import anyio
 from pydantic import Field, JsonValue
 
 from .events import EventType, PerformanceEvent
-
-logger = logging.getLogger(__name__)
 
 from .robot_contracts import ActionRecord, ActionState, ContractModel
 from .runtime import PerformanceStage
@@ -131,8 +130,6 @@ class ExecutionRuntime:
         ownership_path: str | None = None,
     ):
         import math
-        import os
-
         if any(
             not math.isfinite(v) or v <= 0 for v in (execution_timeout, stop_timeout)
         ):
@@ -143,7 +140,8 @@ class ExecutionRuntime:
         self._providers: dict[str, ExecutionProvider] = {}
         self._entries: dict[str, _Entry] = {}
         self._owners: dict[str, tuple[str, str]] = {}
-        self._owner_process = uuid.uuid4().hex
+        # "pid<PID>-<uuid>": the PID lets other runtimes detect a dead owner.
+        self._owner_process = f"pid{os.getpid()}-{uuid.uuid4().hex}"
         self._generation: dict[str, int] = {}
         self._stopping: set[str] = set()
         self._inhibited: set[str] = set()
@@ -193,11 +191,53 @@ class ExecutionRuntime:
                 "CREATE TABLE IF NOT EXISTS performer_owners (performer_id TEXT PRIMARY KEY, caller_id TEXT NOT NULL, session_id TEXT NOT NULL, process_id TEXT NOT NULL)"
             )
             # A durable admission row prevents a second server from dispatching
-            # while this process has work in flight. Unknown/crashed work stays
-            # here until an operator reconciles the physical device.
+            # while this process has work in flight. Rows left by a process that
+            # has since died are reaped; the next session's sleep-pose check
+            # (see standard_poses) covers the robot's physical state.
             self._ownership_db.execute(
                 "CREATE TABLE IF NOT EXISTS performer_activity (performer_id TEXT NOT NULL, process_id TEXT NOT NULL, action_id TEXT NOT NULL, caller_id TEXT NOT NULL, session_id TEXT NOT NULL, PRIMARY KEY (performer_id, process_id, action_id))"
             )
+            self._reap_dead_owners_now()
+
+    @staticmethod
+    def _process_alive(process_id: str) -> bool:
+        """Liveness of an ownership row's process. Legacy IDs without a PID count as dead."""
+        if not process_id.startswith("pid") or "-" not in process_id:
+            return False
+        try:
+            pid = int(process_id[3:].split("-", 1)[0])
+        except ValueError:
+            return False
+        if pid == os.getpid():
+            return True
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def _reap_dead_owners(self, db) -> None:
+        """Delete ownership/activity rows whose process no longer exists. Caller holds the transaction."""
+        dead = {
+            pid for (pid,) in db.execute(
+                "SELECT process_id FROM performer_owners UNION SELECT process_id FROM performer_activity"
+            ) if pid != self._owner_process and not self._process_alive(pid)
+        }
+        for pid in dead:
+            db.execute("DELETE FROM performer_owners WHERE process_id=?", (pid,))
+            db.execute("DELETE FROM performer_activity WHERE process_id=?", (pid,))
+
+    def _reap_dead_owners_now(self) -> None:
+        db = self._ownership_db
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            self._reap_dead_owners(db)
+            db.execute("COMMIT")
+        except sqlite3.Error:
+            if db.in_transaction:
+                db.execute("ROLLBACK")
 
     def _persist(self, entry: _Entry) -> None:
         if self._journal is None:
@@ -232,6 +272,76 @@ class ExecutionRuntime:
         self._providers[performer_id] = provider
         self._generation[performer_id] = 0
 
+    def is_inhibited(self, performer_id: str) -> bool:
+        """True while an unconfirmed STOP or unknown outcome fences this performer."""
+        return performer_id in self._inhibited
+
+    def release_any_control(self, performer_id: str, caller_id: str) -> bool:
+        """Release this process's ownership held by ``caller_id``, whatever its session.
+
+        Used after recovery, when the session that held ownership is gone. Refuses
+        (``performer_busy``) while any action is active. Returns False if this
+        caller held nothing.
+        """
+        owner = self._owners.get(performer_id)
+        session = owner[1] if owner is not None and owner[0] == caller_id else None
+        if session is None and self._ownership_db is not None:
+            try:
+                row = self._ownership_db.execute(
+                    "SELECT caller_id, session_id, process_id FROM performer_owners WHERE performer_id=?",
+                    (performer_id,),
+                ).fetchone()
+            except sqlite3.Error:
+                raise ExecutionError("ownership_unavailable") from None
+            if row is not None and row[0] == caller_id and row[2] == self._owner_process:
+                session = row[1]
+        if session is None:
+            return False
+        self.release_control(performer_id, caller_id, session)
+        return True
+
+    def recover_unknown(self, performer_id: str, evidence: str) -> int:
+        """Clear the unknown-outcome fence from fresh, independent evidence.
+
+        The caller has just observed the robot settled (for example a measured
+        pose that stopped changing near a standard pose). Actions stay recorded as
+        ``unknown`` with this evidence attached; their reservations are released.
+        Refuses while any action is in flight or another live process has work
+        admitted. Returns the number of released actions.
+        """
+        self._provider(performer_id)
+        if not evidence or len(evidence) > 900:
+            raise ValueError("recovery evidence is required (at most 900 characters)")
+        if performer_id in self._stopping:
+            raise ExecutionError("stop_in_progress")
+        mine = [e for e in self._entries.values() if e.request.performer_id == performer_id]
+        if any(e.record.state not in _TERMINAL for e in mine):
+            raise ExecutionError("action_in_flight")
+        if self._ownership_db is not None:
+            self._reap_dead_owners_now()
+            try:
+                remote = self._ownership_db.execute(
+                    "SELECT 1 FROM performer_activity WHERE performer_id=? AND process_id<>? LIMIT 1",
+                    (performer_id, self._owner_process),
+                ).fetchone()
+            except sqlite3.Error:
+                raise ExecutionError("ownership_unavailable") from None
+            if remote is not None:
+                raise ExecutionError("other_process_active")
+        released = 0
+        for entry in mine:
+            if not entry.reserved:
+                continue
+            entry.reserved = False
+            entry.record = entry.record.model_copy(update={
+                "cancellation_outcome": f"recovered: {evidence}",
+            })
+            self._persist(entry)
+            self._release_shared_activity(entry.request)
+            released += 1
+        self._inhibited.discard(performer_id)
+        return released
+
     def _provider(self, performer_id):
         try:
             return self._providers[performer_id]
@@ -249,9 +359,9 @@ class ExecutionRuntime:
             db = self._ownership_db
             try:
                 db.execute("BEGIN IMMEDIATE")
-                # Any admitted-but-unsettled action keeps the performer busy,
-                # including one admitted by a process that later crashed: its
-                # physical outcome is unknown until an operator reconciles it.
+                self._reap_dead_owners(db)
+                # Any admitted-but-unsettled action of a live process keeps the
+                # performer busy. Dead processes were reaped above.
                 activity = db.execute(
                     "SELECT 1 FROM performer_activity WHERE performer_id=? LIMIT 1",
                     (performer_id,),
@@ -269,16 +379,10 @@ class ExecutionRuntime:
                         (performer_id, caller_id, session_id, self._owner_process),
                     )
                 elif row != (caller_id, session_id, self._owner_process):
-                    # A row from another process is stale only when nothing is
-                    # in flight for that performer. ``performer_activity`` is
-                    # the durable admission fence, so an empty table proves no
-                    # action was admitted by that owner. A live owner keeps its
-                    # row; an unconfirmed action still blocks through the
-                    # journal check below.
-                    if not self._stale_owner_reclaimable(performer_id, row):
-                        db.execute("ROLLBACK")
-                        raise ExecutionError("ownership_busy")
-                    self._reclaim_owner(performer_id, row, caller_id, session_id)
+                    # A live owner (dead ones were reaped above) keeps the
+                    # fence until it releases control.
+                    db.execute("ROLLBACK")
+                    raise ExecutionError("ownership_busy")
                 db.execute("COMMIT")
             except ExecutionError:
                 raise
@@ -299,64 +403,6 @@ class ExecutionRuntime:
         scope = self._ambient_scopes.pop(performer_id, None)
         if scope is not None:
             scope.cancel()
-
-    def _stale_owner_reclaimable(self, performer_id: str, row: tuple) -> bool:
-        """True only when the recorded owner provably has nothing in flight.
-
-        Requirements: the row belongs to a *different* process, no durable
-        admission exists for that performer, and this runtime holds no
-        unresolved action for it. That keeps a crashed owner from blocking a
-        robot forever while never reclaiming a live or uncertain one.
-        """
-        if self._ownership_db is None:
-            return False
-        _caller, _session, process_id = row
-        if process_id == self._owner_process:
-            return False
-        db = self._ownership_db
-        try:
-            activity = db.execute(
-                "SELECT 1 FROM performer_activity WHERE performer_id=? LIMIT 1",
-                (performer_id,),
-            ).fetchone()
-        except sqlite3.Error:
-            return False
-        # An activity row means an admission from that owner is unresolved,
-        # so the performer stays quarantined until reconciliation. This holds
-        # even when the owner process died: its physical outcome is unknown.
-        if activity is not None:
-            return False
-        return not any(
-            entry.request.performer_id == performer_id
-            and (entry.reserved or entry.record.state not in _TERMINAL)
-            for entry in self._entries.values()
-        )
-
-    def _reclaim_owner(
-        self, performer_id: str, row: tuple, caller_id: str, session_id: str,
-    ) -> None:
-        """Replace a stale owner row, recording both identities for audit."""
-        db = self._ownership_db
-        # Drop the dead owner's activity rows too, otherwise they keep
-        # reporting the performer busy after the owner is gone.
-        db.execute(
-            "DELETE FROM performer_activity WHERE performer_id=? AND process_id=?",
-            (performer_id, row[2]),
-        )
-        db.execute(
-            "DELETE FROM performer_owners WHERE performer_id=? "
-            "AND caller_id=? AND session_id=? AND process_id=?",
-            (performer_id, row[0], row[1], row[2]),
-        )
-        db.execute(
-            "INSERT INTO performer_owners VALUES (?, ?, ?, ?)",
-            (performer_id, caller_id, session_id, self._owner_process),
-        )
-        logger.warning(
-            "reclaimed stale performer ownership: performer=%s previous_caller=%s "
-            "previous_session=%s previous_process=%s new_caller=%s new_process=%s",
-            performer_id, row[0], row[1], row[2], caller_id, self._owner_process,
-        )
 
     def release_control(
         self, performer_id: str, caller_id: str, session_id: str
@@ -435,6 +481,7 @@ class ExecutionRuntime:
         db = self._ownership_db
         try:
             db.execute("BEGIN IMMEDIATE")
+            self._reap_dead_owners(db)
             owner = db.execute(
                 "SELECT caller_id, session_id, process_id FROM performer_owners WHERE performer_id=?",
                 (request.performer_id,),
@@ -725,8 +772,16 @@ class ExecutionRuntime:
                     or generation != self._generation[entry.request.performer_id]
                 ):
                     raise ExecutionError("stop_invalidated_submission")
+                timeout = self.execution_timeout
+                timeout_for = getattr(provider, "execution_timeout_for", None)
+                if timeout_for is not None:
+                    provider_timeout = timeout_for(entry.request.model_copy(deep=True))
+                    if provider_timeout is not None:
+                        if not math.isfinite(provider_timeout) or not 0 < provider_timeout <= 1800:
+                            raise ValueError("invalid provider execution timeout")
+                        timeout = provider_timeout
                 submitted = True
-                with anyio.fail_after(self.execution_timeout):
+                with anyio.fail_after(timeout):
                     completion = await provider.execute(
                         entry.request.model_copy(deep=True)
                     )
@@ -789,6 +844,7 @@ class ExecutionRuntime:
         if performer_id in self._stopping:
             raise ExecutionError("stop_in_progress")
         if self._ownership_db is not None:
+            self._reap_dead_owners_now()
             try:
                 remote = self._ownership_db.execute(
                     "SELECT 1 FROM performer_activity WHERE performer_id=? AND process_id<>? LIMIT 1",

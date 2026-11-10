@@ -1,0 +1,21 @@
+# SO-ARM101 standard poses. Channels are arm joints in degrees (gripper excluded).
+kind: soarm101
+feedback: measured
+default_tolerance_deg: 5
+poses:
+  sleep:
+    note: taught sleep2 (SDK pose store), shoulder_pan set to exactly 0
+    channels_deg:
+      shoulder_pan: 0.0
+      shoulder_lift: -102.95
+      elbow_flex: 95.47
+      wrist_flex: 49.05
+      wrist_roll: 0.26
+  neutral:
+    note: taught neutral_pup (pup pose asset)
+    channels_deg:
+      shoulder_pan: -0.26
+      shoulder_lift: -29.36
+      elbow_flex: -0.09
+      wrist_flex: 69.8
+      wrist_roll: 0.0

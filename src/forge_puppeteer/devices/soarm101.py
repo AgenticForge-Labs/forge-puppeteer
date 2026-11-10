@@ -87,13 +87,36 @@ class SOARM101Provider:
                         "jog_cartesian", "move_gripper", "sleep", "sleep_up",
                         "capture_camera", "stop"})
 
+    @property
+    def defer_normal_transition(self) -> bool:
+        return bool(self.trusted_choreography and
+                    getattr(self.trusted_choreography, "defer_normal_transition", False))
+
+    def execution_timeout_for(self, request: ActionRequest) -> float | None:
+        if request.operation in {"play_choreography", "wake_to_neutral", "play_joint_target"} and self.trusted_choreography:
+            timeout_for = getattr(self.trusted_choreography, "execution_timeout_for", None)
+            if timeout_for is not None:
+                return timeout_for(request)
+        return None
+
+    @property
+    def finish_before_interrupt_s(self) -> float:
+        """Allow only trusted finite choreography its authored transition grace.
+
+        Direct broker controls retain immediate cancellation/STOP semantics.
+        """
+        if self.trusted_choreography is None:
+            return 0.0
+        return float(getattr(self.trusted_choreography, "finish_before_interrupt_s", 0.0))
+
     def __init__(self, instance_id: str, session: BrokerSession, *, allowed_tools: frozenset[str],
-                 simulation_only: bool = False):
+                 simulation_only: bool = False, trusted_choreography=None):
         if not instance_id or allowed_tools - self._TOOLS:
             raise ValueError("invalid SO-ARM instance or broker tool grant")
         self.instance_id, self.session = instance_id, session
         self.allowed_tools = allowed_tools
         self.simulation_only = simulation_only
+        self.trusted_choreography = trusted_choreography
 
     async def _verify_simulation(self) -> None:
         if not self.simulation_only:
@@ -164,6 +187,11 @@ class SOARM101Provider:
 
     async def state(self) -> dict[str, object]:
         return await self._call("robot_state")
+
+    async def read_pose(self):
+        """Measured arm joints (gripper excluded) from the broker's read-only state."""
+        from ..standard_poses import soarm_measured_pose
+        return soarm_measured_pose(await self.state())
 
     async def list_assets(self) -> tuple[AssetDescriptor, ...]:
         # The broker returns a page and next_offset. Follow that wire contract
@@ -274,6 +302,8 @@ class SOARM101Provider:
         return await self._call("jog_joint", args.model_dump(exclude_none=True))
 
     async def stop(self) -> StopResult:
+        if self.trusted_choreography is not None:
+            return await self.trusted_choreography.stop()
         response = await self._call("stop")
         body = response.get("result", response)
         if not isinstance(body, Mapping):
@@ -293,6 +323,13 @@ class SOARM101Provider:
     # ExecutionRuntime adapter surface. Every validation and dispatch refreshes
     # broker tool visibility; the configured grant is only an upper bound.
     async def validate(self, request: ActionRequest) -> None:
+        if request.operation in {"play_choreography", "wake_to_neutral", "play_joint_target"}:
+            if self.trusted_choreography is None:
+                raise PermissionError("trusted choreography transport is not configured")
+            if request.performer_id != self.instance_id:
+                raise ValueError("invalid SO-ARM action target")
+            await self.trusted_choreography.validate(request)
+            return
         await self._verify_simulation()
         if request.performer_id != self.instance_id:
             raise ValueError("invalid SO-ARM action target")
@@ -336,6 +373,10 @@ class SOARM101Provider:
             raise PermissionError("broker_tool_unavailable")
 
     def resources_for(self, request: ActionRequest) -> tuple[str, ...]:
+        if request.operation in {"play_choreography", "wake_to_neutral", "play_joint_target"}:
+            if self.trusted_choreography is None:
+                raise PermissionError("trusted choreography transport is not configured")
+            return self.trusted_choreography.resources_for(request)
         if request.operation not in {
             "go_pose", "jog_joint", "jog_cartesian", "sleep", "sleep_up",
             "move_gripper", "replay_recording", "replay_sequence",
@@ -344,6 +385,10 @@ class SOARM101Provider:
         return ("arm.motion",)
 
     async def execute(self, request: ActionRequest) -> Completion:
+        if request.operation in {"play_choreography", "wake_to_neutral", "play_joint_target"}:
+            if self.trusted_choreography is None:
+                raise PermissionError("trusted choreography transport is not configured")
+            return await self.trusted_choreography.execute(request)
         await self.validate(request)
         if request.operation in {"replay_recording", "replay_sequence"}:
             if not await self.permitted("robot_state"):

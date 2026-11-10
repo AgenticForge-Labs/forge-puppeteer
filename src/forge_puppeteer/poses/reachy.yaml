@@ -1,0 +1,35 @@
+# Reachy Mini standard poses. Channels are SDK joints in degrees
+# (get_current_joint_positions: body_rotation, stewart_1..6, right/left antenna).
+kind: reachy
+feedback: measured
+default_tolerance_deg: 5
+tolerance_deg:
+  right_antenna: 10
+  left_antenna: 10
+poses:
+  sleep:
+    note: SDK SLEEP_HEAD_JOINT_POSITIONS / SLEEP_ANTENNAS_JOINT_POSITIONS; tolerances to verify on hardware
+    channels_deg:
+      body_rotation: 0.0
+      stewart_1: -56.43
+      stewart_2: 72.33
+      stewart_3: -13.97
+      stewart_4: 11.78
+      stewart_5: -70.84
+      stewart_6: 57.48
+      right_antenna: -174.75
+      left_antenna: 174.75
+  neutral:
+    note: >-
+      end of the daemon's wake-up (INIT_HEAD_POSE, INIT_ANTENNAS_JOINT_POSITIONS),
+      before idle starts; joints from the SDK's init_positions in goto_sleep()
+    channels_deg:
+      body_rotation: 0.0
+      stewart_1: 30.09
+      stewart_2: -38.31
+      stewart_3: 34.76
+      stewart_4: -34.76
+      stewart_5: 38.31
+      stewart_6: -30.09
+      right_antenna: -10.0
+      left_antenna: 10.0

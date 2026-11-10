@@ -18,6 +18,7 @@ from ..conversation_native import stackchan_firmware_warp
 from ..execution import ExecutionRuntime
 from ..speech_expression import SpeechEnvelopeWindow
 from ..stackchan_speech import stackchan_native_mouth_cue
+from ..startup_gate import StartupGate
 
 if TYPE_CHECKING:
     from mcp.server import MCPServer
@@ -40,6 +41,7 @@ def create_ensemble_server(
     startup_settle_s: float = 0.0,
     native_gain_performers: tuple[str, ...] = (),
     native_motion_performers: tuple[str, ...] = (),
+    startup_gate: StartupGate | None = None,
 ) -> MCPServer:
     """An opt-in single-room stdio server with operator startup gate.
 
@@ -164,6 +166,10 @@ def create_ensemble_server(
                         raise RuntimeError("native speech SDK capability unavailable")
                 await stack.enter_async_context(runtime.run())
                 await stack.enter_async_context(ensemble.run())
+                if startup_gate is not None:
+                    # Read-only: compares each robot's pose with its sleep pose
+                    # and holds any that are not there still until the user decides.
+                    await startup_gate.check()
                 yield {}
         finally:
             runtime.close()
@@ -183,6 +189,106 @@ def create_ensemble_server(
                 "presentation_presets_configured": {
                     name: sorted(options) for name, options in presets.items()
                 }}
+
+    @server.tool()
+    async def ensemble_capabilities() -> dict[str, object]:
+        """Read the configured performers' actual semantic capabilities.
+
+        Discovery is read-only: it never acquires room ownership or starts
+        startup/idle behavior. A fresh caller session must explicitly send an
+        authorized idle presence event to enter the configured startup path.
+        """
+        snapshot = ensemble.snapshot()
+        # The config flag says the operator enabled this software path. It is
+        # not evidence that the connected SDK/session is currently authorized,
+        # ready, calibrated, leased, or safe to move.
+        performers = {
+            performer_id: {**details, "live_readiness": "unknown"}
+            for performer_id, details in snapshot["performers"].items()
+        }
+        return {
+            "outcome": "observed", **snapshot,
+            "performers": performers,
+            "motion_configured_enabled": bool(motion_enabled),
+            "live_motion_authority": "unknown",
+            "session_ready_event": "ensemble_presence(state='idle')",
+        }
+
+    @server.tool()
+    async def ensemble_startup_check() -> dict[str, object]:
+        """Read-only: is each robot at its sleep position? Reports per-joint deltas.
+
+        A robot that is not at sleep stays still until the user decides; relay each
+        performer's ``message`` to the user and act on their answer with
+        ``ensemble_prepare``. Never moves a robot.
+        """
+        if startup_gate is None:
+            return {"outcome": "unsupported", "reason": "startup_gate_not_configured"}
+        try:
+            return await startup_gate.check()
+        except Exception:  # noqa: BLE001
+            raise ToolError("startup_check_unavailable") from None
+
+    @server.tool()
+    async def ensemble_prepare(
+        performer_id: str, action: str, action_id: str = "",
+    ) -> dict[str, object]:
+        """The user's answer to a startup check.
+
+        ``move_to_sleep``: one sleep move then one re-check (needs ``action_id``).
+        ``confirm_at_sleep``: the user attests a commanded-only robot is parked.
+        """
+        if startup_gate is None:
+            return {"outcome": "unsupported", "reason": "startup_gate_not_configured"}
+        try:
+            if action == "confirm_at_sleep":
+                return await startup_gate.confirm_at_sleep(performer_id)
+            if action == "move_to_sleep":
+                if not motion_enabled:
+                    raise ToolError("ensemble_motion_not_operator_authorized")
+                if not action_id:
+                    return {"outcome": "denied", "reason": "action_id_required"}
+                return await startup_gate.move_to_sleep(performer_id, action_id)
+        except ToolError:
+            raise
+        except Exception:  # noqa: BLE001
+            raise ToolError("startup_prepare_unavailable") from None
+        return {"outcome": "denied", "reason": "unknown_action"}
+
+    @server.tool()
+    async def ensemble_recover(performer_id: str) -> dict[str, object]:
+        """Lift a performer's quarantine after fresh evidence; never retries a motion.
+
+        Evidence is a measured pose that is settled near sleep/neutral, or a
+        confirmed STOP. Refused while a conversation is active. Afterwards the
+        sleep check runs again.
+        """
+        if startup_gate is None:
+            return {"outcome": "unsupported", "reason": "startup_gate_not_configured"}
+        if not motion_enabled:
+            raise ToolError("ensemble_motion_not_operator_authorized")
+        try:
+            return await startup_gate.recover(performer_id)
+        except Exception:  # noqa: BLE001
+            raise ToolError("recover_unavailable") from None
+
+    @server.tool()
+    async def ensemble_park(action_id: str) -> dict[str, object]:
+        """End of session: move every robot to sleep and report the re-check.
+
+        Refused while a conversation session is active. Stops at the first fault
+        and reports it; never retries.
+        """
+        if startup_gate is None:
+            return {"outcome": "unsupported", "reason": "startup_gate_not_configured"}
+        if not motion_enabled:
+            raise ToolError("ensemble_motion_not_operator_authorized")
+        if not action_id:
+            return {"outcome": "denied", "reason": "action_id_required"}
+        try:
+            return await startup_gate.park(action_id)
+        except Exception:  # noqa: BLE001
+            raise ToolError("park_unavailable") from None
 
     @server.tool()
     async def ensemble_presence(
@@ -225,6 +331,22 @@ def create_ensemble_server(
             )
         except Exception:  # noqa: BLE001 - all provider failures map to a safe MCP error
             raise ToolError("invalid_or_unavailable_ensemble_expression") from None
+
+    @server.tool()
+    async def ensemble_intent(
+        intent: str, action_id: str,
+        performer_ids: list[str] | None = None,
+    ) -> dict[str, object]:
+        """Perform one authored semantic intent supported by each selected robot."""
+        if not motion_enabled:
+            raise ToolError("ensemble_motion_not_operator_authorized")
+        try:
+            return await ensemble.express(
+                intent, action_id=action_id,
+                performer_ids=tuple(performer_ids) if performer_ids is not None else None,
+            )
+        except Exception:  # noqa: BLE001 - provider failures map to safe MCP error
+            raise ToolError("invalid_or_unavailable_ensemble_intent") from None
 
 
     @server.tool()

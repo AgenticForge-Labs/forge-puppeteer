@@ -82,8 +82,13 @@ class SOARMEnsembleConfig(BaseModel):
     max_joint_acceleration_deg_s2: float = Field(default=25, gt=0, le=1000)
     max_duration_s: float = Field(default=30, gt=0, le=30)
     max_start_error_rad: float = Field(default=0.02, gt=0, le=0.05)
+    startup_behavior: Literal["none", "wake_to_neutral"] = "none"
+    idle_behavior: Literal["legacy", "breathe"] = "legacy"
+    startup_target_joints_rad: tuple[float, float, float, float, float] | None = None
+    startup_target_revision: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    startup_authority: str | None = None
     programs: list[ReviewedMotion] = Field(min_length=7, max_length=25)
-    approved_revisions: list[str] = Field(min_length=7, max_length=25)
+    approved_revisions: list[str] = Field(min_length=7, max_length=26)
     watchdog_timeout_s: float = Field(default=4, ge=0.5, le=10)
 
     @model_validator(mode="after")
@@ -104,10 +109,34 @@ class SOARMEnsembleConfig(BaseModel):
             raise ValueError("duplicate SO-ARM program names")
         if not EXPECTED <= {p.name for p in self.programs}:
             raise ValueError("missing required SO-ARM semantic programs")
+        if self.idle_behavior == "breathe" and "breathe" not in {p.name for p in self.programs}:
+            raise ValueError("breathe idle requires an exact pinned breathe program")
         if len(set(self.approved_revisions)) != len(self.approved_revisions):
             raise ValueError("duplicate approved revision pins")
-        if {p.revision for p in self.programs} != set(self.approved_revisions):
-            raise ValueError("every reviewed SO-ARM program revision must be pinned, with no extras")
+        program_revisions = {p.revision for p in self.programs}
+        has_target = self.startup_target_joints_rad is not None or self.startup_target_revision is not None
+        if self.startup_behavior == "wake_to_neutral":
+            if (self.startup_target_joints_rad is None or self.startup_target_revision is None
+                    or self.startup_target_revision not in self.approved_revisions):
+                raise ValueError("wake-to-neutral startup requires an exact pinned five-joint target")
+            if self.mode == "attended_physical_trial" and self.startup_authority != "I_AUTHORIZE_SOARM101_WAKE_TO_NEUTRAL_STARTUP":
+                raise ValueError("physical wake-to-neutral requires its separate explicit startup authorization")
+            if self.mode == "simulation" and self.startup_authority is not None:
+                raise ValueError("simulation startup must not declare physical startup authority")
+            from soarm101_motion.choreography import JointTarget
+            authored_target = JointTarget.author(
+                "wake_to_neutral", self.robot_id, self.calibration_id,
+                tuple(self.startup_target_joints_rad),
+            )
+            if authored_target.revision != self.startup_target_revision:
+                raise ValueError("wake-to-neutral target content differs from its exact revision pin")
+        elif has_target or self.startup_authority is not None:
+            raise ValueError("startup target and authorization require startup_behavior=wake_to_neutral")
+        expected_revisions = program_revisions | (
+            {self.startup_target_revision} if self.startup_behavior == "wake_to_neutral" else set()
+        )
+        if expected_revisions != set(self.approved_revisions):
+            raise ValueError("all configured program and startup target revisions must be pinned exactly once")
         return self
 
 
@@ -204,6 +233,19 @@ def _original_idle_pack(pack: PerformerBehaviors) -> PerformerBehaviors:
                                      startup=pack.startup)
 
 
+def _stackchan_startup_pack(
+    pack: PerformerBehaviors, behavior: str,
+) -> PerformerBehaviors:
+    """Bind only the configured authored neutral as a finite startup cue."""
+    if behavior == "none":
+        return pack
+    if behavior != "neutral" or "neutral" not in pack.behaviors:
+        raise ValueError("unsupported StackChan startup behavior")
+    return PerformerBehaviors.author(
+        pack.performer_id, pack.behaviors, startup=pack.behaviors["neutral"],
+    )
+
+
 def _check_original_idle_reference(config: EnsembleConfig | ReachyOnlyEnsembleConfig) -> None:
     """Require the reviewed reference to match the original app's fixed neutral."""
     selection = config.motion_profiles.get(config.reachy.instance_id)
@@ -227,6 +269,7 @@ class EnsembleConfig(BaseModel):
     reachy: ServerConfig
     stackchan: ServerConfig
     stackchan_display_presets_enabled: bool = False
+    stackchan_startup_behavior: Literal["none", "neutral"] = "none"
     reachy_neutral_head: str
     soarm101: SOARMEnsembleConfig | None = None
     action_journal: str
@@ -412,6 +455,13 @@ def soarm_native_binding(config: SOARMEnsembleConfig):
             item.revision,
         ) for item in config.programs
     }
+    startup_target = None
+    if config.startup_behavior == "wake_to_neutral":
+        from soarm101_motion.choreography import JointTarget
+        startup_target = JointTarget(
+            "wake_to_neutral", config.robot_id, config.calibration_id,
+            tuple(config.startup_target_joints_rad), config.startup_target_revision,
+        )
     policy = ChoreographyPolicy(
         config.robot_id, config.calibration_id,
         tuple(config.approved_revisions),
@@ -423,53 +473,83 @@ def soarm_native_binding(config: SOARMEnsembleConfig):
     )
     pack = soarm_conversation_pack(
         config.instance_id, programs, approved_revisions=policy.allowed_revisions,
+        startup_target=startup_target, idle_behavior=config.idle_behavior,
     )
     return programs, policy, pack
+
+
+def build_soarm_choreography_provider(config: SOARMEnsembleConfig, journal_path: str | Path):
+    """Build the shared native SDK executor, watchdog, provider, pack and lifecycle."""
+    from soarm101_motion.agent_control import AgentAuthorityStore
+    from soarm101_motion.broker import AgentMotionRates
+    from soarm101_motion.broker_sdk import SDKAgentExecutor
+    from soarm101_motion.broker_watchdog import BrokerWatchdog
+    from soarm101_motion.config import SOARM101Config
+    programs, policy, pack = soarm_native_binding(config)
+    startup_target = None
+    if config.startup_behavior == "wake_to_neutral":
+        from soarm101_motion.choreography import JointTarget
+        startup_target = JointTarget("wake_to_neutral", config.robot_id, config.calibration_id,
+                                     tuple(config.startup_target_joints_rad),
+                                     config.startup_target_revision)
+    physical = config.mode == "attended_physical_trial"
+    sdk_config = SOARM101Config(
+        robot_id=config.robot_id, port=config.port if physical else None,
+        auto_enable_torque=False, configure_motors_on_connect=False,
+        disable_torque_on_disconnect=False,
+    )
+    rates = AgentMotionRates(
+        joint_speed_deg_s=config.max_joint_speed_deg_s,
+        joint_acceleration_deg_s2=config.max_joint_acceleration_deg_s2,
+    ).validated(sdk_config)
+    executor = SDKAgentExecutor(
+        config=sdk_config, rates=rates, simulation=not physical,
+        simulation_actions=not physical, physical_actions=physical,
+        authority_store=AgentAuthorityStore(
+            Path(config.human_lease_path) if physical
+            else Path(journal_path).with_suffix(".simulation-lease.json")),
+    )
+    watchdog = BrokerWatchdog(
+        timeout_s=config.watchdog_timeout_s,
+        validate=executor.validate_supervision,
+        trip=lambda _reason: executor.execute("stop", {}),
+    )
+    executor.motion_guard = watchdog.check
+    from ..devices.soarm101_choreography import SOARMChoreographyProvider
+    provider = SOARMChoreographyProvider(executor, watchdog, policy, programs, startup_target)
+
+    @asynccontextmanager
+    async def connected():
+        try:
+            await anyio.to_thread.run_sync(executor.execute, "state", {})
+            watchdog.start()
+            watchdog.heartbeat()
+            async def heartbeat_loop():
+                while True:
+                    await anyio.sleep(config.watchdog_timeout_s / 4)
+                    await anyio.to_thread.run_sync(watchdog.heartbeat)
+            async with anyio.create_task_group() as workers:
+                workers.start_soon(heartbeat_loop)
+                try:
+                    yield
+                finally:
+                    workers.cancel_scope.cancel()
+        finally:
+            watchdog.close()
+            await anyio.to_thread.run_sync(executor.close)
+    return provider, pack, connected, policy
 
 
 def build_ensemble(config: EnsembleConfig):
     """The original three-performer assembly; unavailable for duo configs."""
     if config.soarm101 is None:
         raise ValueError("SO-ARM101 profile required for three-performer builder")
-    from soarm101_motion.agent_control import AgentAuthorityStore
-    from soarm101_motion.broker import AgentMotionRates
-    from soarm101_motion.broker_sdk import SDKAgentExecutor
-    from soarm101_motion.broker_watchdog import BrokerWatchdog
-    from soarm101_motion.config import SOARM101Config
-
     reachy = ReachySDKProvider(config.reachy)
     stackchan = StackChanSDKProvider(config.stackchan)
-    programs, policy, arm_pack = soarm_native_binding(config.soarm101)
     arm_options = config.soarm101
-    physical = arm_options.mode == "attended_physical_trial"
-    sdk_config = SOARM101Config(
-        robot_id=arm_options.robot_id,
-        port=arm_options.port if physical else None,
-        auto_enable_torque=False,
-        configure_motors_on_connect=False,
-        disable_torque_on_disconnect=False,
+    arm, arm_pack, arm_connected, policy = build_soarm_choreography_provider(
+        arm_options, config.action_journal,
     )
-    rates = AgentMotionRates(
-        joint_speed_deg_s=arm_options.max_joint_speed_deg_s,
-        joint_acceleration_deg_s2=arm_options.max_joint_acceleration_deg_s2,
-    ).validated(sdk_config)
-    executor = SDKAgentExecutor(
-        config=sdk_config, rates=rates,
-        simulation=not physical, simulation_actions=not physical,
-        physical_actions=physical,
-        authority_store=AgentAuthorityStore(
-            Path(arm_options.human_lease_path) if physical
-            else Path(config.action_journal).with_suffix(".simulation-lease.json")
-        ),
-    )
-    watchdog = BrokerWatchdog(
-        timeout_s=arm_options.watchdog_timeout_s,
-        validate=executor.validate_supervision,
-        trip=lambda _reason: executor.execute("stop", {}),
-    )
-    executor.motion_guard = watchdog.check
-    from ..devices.soarm101_choreography import SOARMChoreographyProvider
-    arm = SOARMChoreographyProvider(executor, watchdog, policy, programs)
 
     runtime = ExecutionRuntime(
         PerformanceStage(), journal_path=config.action_journal,
@@ -490,29 +570,10 @@ def build_ensemble(config: EnsembleConfig):
     @asynccontextmanager
     async def connected():
         async with AsyncExitStack() as stack:
-            try:
-                # The host-owned SDK connection is created once, and must not
-                # auto-enable physical torque or bypass human lease.
-                await anyio.to_thread.run_sync(executor.execute, "state", {})
-                watchdog.start()
-                watchdog.heartbeat()
-                await stack.enter_async_context(reachy.connected())
-                await stack.enter_async_context(stackchan.connected())
-
-                async def heartbeat_loop():
-                    while True:
-                        await anyio.sleep(arm_options.watchdog_timeout_s / 4)
-                        await anyio.to_thread.run_sync(watchdog.heartbeat)
-
-                async with anyio.create_task_group() as workers:
-                    workers.start_soon(heartbeat_loop)
-                    try:
-                        yield
-                    finally:
-                        workers.cancel_scope.cancel()
-            finally:
-                watchdog.close()
-                await anyio.to_thread.run_sync(executor.close)
+            await stack.enter_async_context(arm_connected())
+            await stack.enter_async_context(reachy.connected())
+            await stack.enter_async_context(stackchan.connected())
+            yield
 
     # reachy native pack is resolved from the pinned manifest/catalog; these
     # read-only bytes are checked before any hardware connection in serve().
@@ -549,11 +610,56 @@ def build_reachy_stackchan_ensemble(config: EnsembleConfig):
     return reachy, stackchan, runtime, connected
 
 
-def load_config(path: str | Path) -> EnsembleConfig | ReachyOnlyEnsembleConfig:
+def load_config(path: str | Path):
     data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(data, dict) and type(data.get("schema_version")) is int and data["schema_version"] == 4:
+        from .ensemble_v4 import load_v4
+        return load_v4(path)
     if isinstance(data, dict) and type(data.get("schema_version")) is int and data["schema_version"] == 2:
         return ReachyOnlyEnsembleConfig.model_validate(data)
     return EnsembleConfig.model_validate(data)
+
+
+def config_readiness(path: str | Path) -> dict[str, object]:
+    """Validate the operator config without importing device SDKs or connecting.
+
+    This is deliberately a file/configuration check only. In particular, it
+    does not infer that a configured port, lease, SDK daemon, or robot is live.
+    """
+    config = load_config(path)
+    if isinstance(config, tuple):
+        room, _robots = config
+        return {
+            "configuration": "valid", "schema_version": 4,
+            "performers": [robot.id for robot in room.robots],
+            "robot_kinds": [robot.kind for robot in room.robots],
+            "robot_files_resolved": True,
+            "device_connections_attempted": False,
+            "motion_authority_checked": False,
+        }
+    _check_original_idle_reference(config)
+    if isinstance(config, ReachyOnlyEnsembleConfig):
+        performers = [config.reachy.instance_id]
+        schema_version = 2
+        soarm_mode = None
+    elif config.schema_version == 3:
+        performers = [config.reachy.instance_id, config.stackchan.instance_id]
+        schema_version = 3
+        soarm_mode = None
+    else:
+        assert config.soarm101 is not None
+        performers = [config.reachy.instance_id, config.stackchan.instance_id,
+                      config.soarm101.instance_id]
+        schema_version = config.schema_version
+        soarm_mode = config.soarm101.mode
+    return {
+        "configuration": "valid",
+        "schema_version": schema_version,
+        "performers": performers,
+        "soarm101_mode": soarm_mode,
+        "device_connections_attempted": False,
+        "motion_authority_checked": False,
+    }
 
 
 def stackchan_display_presets(config: EnsembleConfig) -> dict[str, dict[str, BehaviorCue]]:
@@ -570,6 +676,35 @@ def stackchan_display_presets(config: EnsembleConfig) -> dict[str, dict[str, Beh
 
 def serve(config_path: str | Path) -> None:
     config = load_config(config_path)
+    if isinstance(config, tuple):
+        from .ensemble_v4 import (
+            build_startup_gate,
+            build_v4,
+            start_owned_physical,
+            start_owned_simulation,
+        )
+        room, robots = config
+        owned_cleanup = None
+        private_tokens = {}
+        try:
+            for ref in room.robots:
+                broker = robots.get(ref.kind)
+                if ref.kind == "soarm101" and broker.mode == "sdk_simulation_daemon":
+                    (token, trusted_token), owned_cleanup = start_owned_simulation(broker)
+                    private_tokens[broker.instance_id] = (token, trusted_token)
+                elif ref.kind == "soarm101" and broker.mode == "sdk_physical_daemon":
+                    (token, trusted_token), owned_cleanup = start_owned_physical(broker)
+                    private_tokens[broker.instance_id] = (token, trusted_token)
+            runtime, packs, connected = build_v4(room, robots, private_tokens)
+            ensemble = ConversationEnsemble(runtime, packs, presence_ttl_s=room.presence_ttl_s,
+                                            stop_timeout_s=room.stop_timeout_s)
+            create_ensemble_server(runtime, ensemble, connected=connected, motion_enabled=True,
+                                   startup_gate=build_startup_gate(room, robots, runtime, ensemble),
+                                   stackchan_performer_id=next((r.id for r in room.robots if r.kind == "stackchan"), None)).run(transport="stdio")
+        finally:
+            if owned_cleanup is not None:
+                owned_cleanup()
+        return
     _check_original_idle_reference(config)
     if isinstance(config, ReachyOnlyEnsembleConfig):
         reachy = ReachySDKProvider(config.reachy)
@@ -703,6 +838,7 @@ def serve(config_path: str | Path) -> None:
         speaking_mode=config.stackchan_speaking_mode,
         recorded_assets=recorded,
     )
+    stack_pack = _stackchan_startup_pack(stack_pack, config.stackchan_startup_behavior)
     stack_profile = config.motion_profiles.get(config.stackchan.instance_id)
     if stack_profile and (
         stack_profile.idle != "legacy" or stack_profile.speaking != "legacy"
@@ -757,8 +893,15 @@ def serve(config_path: str | Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="forge-puppeteer-ensemble")
     parser.add_argument("--config", required=True, help="trusted operator one-, two- or three-performer JSON config")
+    parser.add_argument(
+        "--check-config", action="store_true",
+        help="validate config and print a readiness summary without connecting devices",
+    )
     args = parser.parse_args(argv)
     try:
+        if args.check_config:
+            print(json.dumps(config_readiness(args.config), indent=2))
+            return 0
         serve(args.config)
     except (OSError, RuntimeError, ValueError, PermissionError) as exc:
         parser.error(str(exc))

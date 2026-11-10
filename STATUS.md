@@ -1,6 +1,6 @@
 # Project status
 
-This page records the state described by the README as of November 4, 2026. Device operation remains subject to operator authorization and hardware-specific acceptance. Consult the linked subsystem documents and current code for details.
+> **Historical log, as of November 4, 2026.** Current status and the roadmap live in GitHub issues (epic #54). Wording below about attended acceptance, qualification and operator authorization predates the lightweight safety model in [AGENTS.md](AGENTS.md); read it as history, not as requirements. This file will be removed once its open items are in issues (#52).
 
 ## Current capabilities and limits
 

@@ -4,6 +4,7 @@ import os
 import socket
 import sys
 import time
+import subprocess
 import urllib.request
 from pathlib import Path
 
@@ -56,6 +57,22 @@ def test_simulation_provider_requires_state_and_rejects_physical_authority():
     config.physical_authority = "I_AUTHORIZE_BROKER_CONTROL"
     with pytest.raises(ValueError, match="cannot declare physical_authority"):
         BrokerProvider(config)
+
+
+def test_direct_check_config_rejects_ungranted_control_without_connecting(tmp_path):
+    path = tmp_path / "broker.json"
+    config = {"backend": "soarm101_broker", "device": "soarm101", "instance_id": "arm",
+              "broker_url": "http://127.0.0.1:1", "allowed_tools": ["robot_state", "jog_joint"]}
+    path.write_text(json.dumps(config))
+    command = [sys.executable, "-m", "forge_puppeteer.mcp.launcher", "--config", str(path), "--check-config"]
+    denied = subprocess.run(command, text=True, capture_output=True)
+    assert denied.returncode != 0 and "physical_authority" in denied.stderr
+    config["simulation_only"] = True
+    path.write_text(json.dumps(config))
+    valid = subprocess.run(command, text=True, capture_output=True, check=True)
+    result = json.loads(valid.stdout)
+    assert result["outcome"] == "static_config_valid"
+    assert result["connections_opened"] is False and result["live_authority_verified"] is False
 
 
 @pytest.mark.anyio
@@ -229,6 +246,267 @@ async def test_packaged_launcher_to_real_sdk_broker_in_simulation(tmp_path):
             # The real SDK simulation broker reports completion plus HOLD;
             # the Forge provider must preserve that confirmation contract.
             assert stop_result["evidence"] == "broker_stop_completed_and_holding"
+    finally:
+        if broker.returncode is None:
+            broker.terminate()
+        try:
+            with anyio.fail_after(5):
+                await broker.wait()
+        except TimeoutError:
+            broker.kill()
+            with anyio.fail_after(5):
+                await broker.wait()
+        broker_log.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("end_mode", ["stale", "interrupt", "unknown_stop", "busy", "operator_only"])
+async def test_soarm_only_v4_stdio_runs_pinned_programs_through_real_sdk_broker(tmp_path, end_mode):
+    """Real Puppeteer stdio -> trusted SDK simulation choreography, no hardware."""
+    forge_root = Path(__file__).resolve().parents[2]
+    sdk_root = forge_root.parent / "soarm101-motion-sdk"
+    if not (sdk_root / "src/soarm101_motion/broker.py").is_file():
+        pytest.skip("sibling soarm101-motion-sdk checkout is unavailable")
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+    token, trusted_token = "e2e-agent-token", "e2e-trusted-host-token"
+    telemetry = tmp_path / "sdk-trusted-requests.jsonl"
+    child_env = os.environ.copy()
+    child_env.update({
+        "SOARM101_BROKER_TOKEN": token,
+        "SOARM101_TRUSTED_HOST_TOKEN": trusted_token,
+    })
+    if os.environ.get("SOARM_TEST_INSTALLED_WHEELS") == "1":
+        child_env.pop("PYTHONPATH", None)
+        child_env["PYTHONNOUSERSITE"] = "1"
+    else:
+        child_env["PYTHONPATH"] = os.pathsep.join((str(forge_root / "src"), str(sdk_root / "src")))
+    if end_mode in {"stale", "unknown_stop"}:
+        child_env["SOARM_TEST_SPEAKING_DELAY"] = "3.5"
+    if end_mode == "unknown_stop":
+        child_env["SOARM_TEST_LOSE_STOP_ACK"] = "1"
+    if end_mode == "operator_only":
+        child_env["SOARM_TEST_OPERATOR_ONLY"] = "1"
+    broker_log_path = tmp_path / "sdk-trusted-broker.log"
+    broker_log = broker_log_path.open("w+")
+    broker = await anyio.open_process(
+        [sys.executable, str(Path(__file__).with_name("soarm_trusted_sim_broker.py")),
+         str(port), str(telemetry)],
+        cwd=sdk_root, env=child_env, stdout=broker_log, stderr=broker_log,
+    )
+    try:
+        health = urllib.request.Request(
+            f"http://127.0.0.1:{port}/v1/health",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        deadline = time.monotonic() + 15
+        while not await anyio.to_thread.run_sync(_broker_health_status, health):
+            if broker.returncode is not None:
+                broker_log.flush()
+                pytest.fail(f"SDK simulation broker exited early:\n{broker_log_path.read_text()}")
+            if time.monotonic() >= deadline:
+                pytest.fail(f"SDK simulation broker did not start:\n{broker_log_path.read_text()}")
+            await anyio.sleep(0.05)
+
+        # The helper publishes the exact generated hashes through its private
+        # catalog. Discover only that trusted catalog to bind the room pins.
+        catalog_request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/v1/trusted/catalog",
+            headers={"Authorization": f"Bearer {trusted_token}"},
+        )
+        with urllib.request.urlopen(catalog_request, timeout=3) as response:
+            catalog = json.loads(response.read())["result"]["programs"]
+        revisions = {item["name"]: item["revision"] for item in catalog}
+        durations = {item["name"]: item["duration_s"] for item in catalog}
+        if end_mode == "operator_only":
+            direct = tmp_path / "direct.json"
+            direct.write_text(json.dumps({
+                "backend": "soarm101_broker", "device": "soarm101", "instance_id": "arm",
+                "simulation_only": True, "broker_url": f"http://127.0.0.1:{port}",
+                "broker_token_env": "SOARM101_BROKER_TOKEN",
+                "allowed_tools": ["robot_health", "robot_capabilities", "robot_state", "jog_joint", "stop"],
+            }))
+            direct_params = StdioServerParameters(command=sys.executable,
+                args=["-m", "forge_puppeteer.mcp.launcher", "--config", str(direct)], env=child_env)
+            async with stdio_client(direct_params) as (r, w), ClientSession(r, w) as direct_session:
+                await direct_session.initialize()
+                response = await direct_session.call_tool("jog_joint", {
+                    "action_id": "denied-jog", "caller_id": "test", "session_id": "test",
+                    "parameters": {"joint": "shoulder_pan", "delta_deg": 0.5},
+                })
+                if not response.is_error:
+                    with anyio.fail_after(5):
+                        while True:
+                            result = (await direct_session.call_tool("action_lookup", {"action_id": "denied-jog"})).structured_content
+                            if result["state"] in {"failed", "completed", "unknown"}:
+                                break
+                            await anyio.sleep(.02)
+                    # A broker HTTP error is conservatively represented as an
+                    # unknown dispatched outcome by the Forge HTTP transport.
+                    assert result["state"] in {"failed", "unknown"}, result
+                    events = (telemetry.with_suffix(".events.jsonl")).read_text()
+                    assert "operator choreography mode denies" in events, events
+                else:
+                    assert "operator choreography mode denies" in str(response), response
+            return
+        robot_path = tmp_path / "soarm.json"
+        robot_path.write_text(json.dumps({
+            "kind": "soarm101", "id": "arm",
+            "provider": {
+                "instance_id": "arm", "mode": "existing_broker", "broker_url": f"http://127.0.0.1:{port}",
+                "sleep_check": False,  # simulated broker: no physical sleep pose
+                "token_env": "SOARM101_BROKER_TOKEN",
+                "trusted_host_token_env": "SOARM101_TRUSTED_HOST_TOKEN",
+                "choreography_revisions": revisions,
+                "choreography_durations_s": durations,
+                "allowed_tools": ["robot_health", "robot_capabilities", "robot_state", "stop"],
+            },
+        }))
+        room_path = tmp_path / "room.json"
+        room_path.write_text(json.dumps({
+            "schema_version": 4,
+            "physical": True,
+            "robots": [{"kind": "soarm101", "id": "arm", "file": str(robot_path)}],
+            "action_journal": str(tmp_path / "actions.sqlite"),
+            "ownership_db": str(tmp_path / "ownership.sqlite"),
+            "presence_ttl_s": 2,
+        }))
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "forge_puppeteer.mcp.ensemble_launcher", "--config", str(room_path)],
+            env=child_env,
+        )
+        async with stdio_client(params) as (reader, writer), ClientSession(reader, writer) as session:
+            await session.initialize()
+            capabilities = (await session.call_tool("ensemble_capabilities", {})).structured_content
+            assert set(capabilities["performers"]) == {"arm"}
+            assert "yes" in capabilities["performers"]["arm"]["semantic_intents"]
+            if end_mode == "busy":
+                # A second installed room shares the ownership database while
+                # this room owns the performer. Its denied admission must not
+                # send STOP to the first room's controller.
+                first = await session.call_tool("ensemble_presence", {
+                    "session_id": "owner", "event_id": "owner-0", "sequence": 0,
+                    "state": "idle", "source": "manual", "interrupted": False,
+                })
+                assert not first.is_error
+                with anyio.fail_after(5):
+                    while not telemetry.exists():
+                        await anyio.sleep(.02)
+                before = [json.loads(line) for line in telemetry.read_text().splitlines()]
+                async with stdio_client(params) as (r2, w2), ClientSession(r2, w2) as other:
+                    await other.initialize()
+                    denied = (await other.call_tool("ensemble_presence", {
+                        "session_id": "contender", "event_id": "contender-0", "sequence": 0,
+                        "state": "idle", "source": "manual", "interrupted": False,
+                    })).structured_content
+                    assert denied["performers"]["arm"]["status"] == "unavailable", denied
+                    assert denied["performers"]["arm"]["evidence"] == "runtime_owner_or_resources_busy", denied
+                after = [json.loads(line) for line in telemetry.read_text().splitlines()]
+                assert not any(row["path"].endswith("/stop") for row in after[len(before):])
+                return
+            states = ("idle", "speaking") if end_mode == "stale" else ("idle", "speaking", "disconnected")
+            for sequence, state in enumerate(states):
+                result = await session.call_tool("ensemble_presence", {
+                    "session_id": "trusted-simulation-room", "event_id": f"event-{sequence}",
+                    "sequence": sequence, "state": state, "source": "manual",
+                    "interrupted": state == "disconnected",
+                })
+                assert not result.is_error, result
+                assert result.structured_content["state"] == state
+                if state != "disconnected":
+                    wanted_phase = "received" if state == "speaking" else "completed"
+                    with anyio.fail_after(5):
+                        while True:
+                            records = ([json.loads(line) for line in telemetry.read_text().splitlines()]
+                                       if telemetry.exists() else [])
+                            matching = [
+                                row for row in records
+                                if row["path"].endswith("/choreography")
+                                and row["request"].get("name") == state
+                                and row["phase"] == wanted_phase
+                            ]
+                            if len(matching) >= (2 if state == "idle" and sequence == 2 else 1):
+                                break
+                            await anyio.sleep(0.02)
+
+                    if state == "idle":
+                        assert any(
+                            row["path"].endswith("/choreography")
+                            and row["phase"] == "completed"
+                            and row["request"].get("name") == state
+                            and row["status"] == 200
+                            and row["body"]["result"]["revision"] == revisions[state]
+                            and row["body"]["result"]["session_id"] == row["executor_session_id"]
+                            and row["sdk_connect_count"] == 1
+                            and row["body"]["result"]["preflight"]["gripper"] == "held_at_measured_start"
+                            for row in records
+                        ), records
+
+                if state == "speaking" and end_mode not in {"stale", "unknown_stop"}:
+                    yes = await session.call_tool("ensemble_intent", {
+                        "intent": "yes", "action_id": "trusted-yes-0", "performer_ids": ["arm"],
+                    })
+                    assert not yes.is_error, yes
+                    assert yes.structured_content["outcome"] == "accepted"
+                    with anyio.fail_after(5):
+                        while not any(
+                            row["path"].endswith("/choreography")
+                            and row["request"].get("name") == "yes"
+                            and row["phase"] == "completed"
+                            for row in ([json.loads(line) for line in telemetry.read_text().splitlines()]
+                                        if telemetry.exists() else [])
+                        ):
+                            await anyio.sleep(0.02)
+
+            # Let the real room heartbeat expire while its SDK-backed presence
+            # loop is active; it must enter the stale state. STOP is required
+            # only when work is potentially dispatched at expiration.
+            if end_mode == "stale":
+                with anyio.fail_after(6):
+                    while not (await session.call_tool("ensemble_state", {})).structured_content["stale"]:
+                        await anyio.sleep(0.05)
+            if end_mode == "unknown_stop":
+                state = (await session.call_tool("ensemble_state", {})).structured_content
+                assert state["performers"]["arm"]["status"] == "blocked", state
+                prior = [json.loads(line) for line in telemetry.read_text().splitlines()]
+                assert any(row["path"].endswith("/stop") and row.get("status") == 503
+                           for row in prior), prior
+                retry = (await session.call_tool("ensemble_presence", {
+                    "session_id": "new-room", "event_id": "retry", "sequence": 0,
+                    "state": "idle", "source": "manual", "interrupted": False,
+                })).structured_content
+                assert retry["performers"]["arm"]["status"] == "blocked", retry
+                intent = (await session.call_tool("ensemble_intent", {
+                    "intent": "yes", "action_id": "no-rearm", "performer_ids": ["arm"],
+                })).structured_content
+                assert intent["outcome"] == "denied", intent
+                await anyio.sleep(.2)
+                later = [json.loads(line) for line in telemetry.read_text().splitlines()]
+                assert sum(row["phase"] == "received" and row["path"].endswith("/choreography")
+                           for row in later) == sum(
+                               row["phase"] == "received" and row["path"].endswith("/choreography")
+                               for row in prior)
+
+        records = [json.loads(line) for line in telemetry.read_text().splitlines()]
+        completed = [row for row in records if row["path"].endswith("/choreography")
+                     and row["phase"] == "completed" and row["status"] == 200]
+        if end_mode == "interrupt":
+            assert {row["request"]["name"] for row in completed} >= {"idle", "speaking", "yes"}
+        assert all(row["body"]["result"]["revision"] == revisions[row["request"]["name"]]
+                   for row in completed)
+        assert len({row["executor_session_id"] for row in records}) == 1
+        assert {row["sdk_connect_count"] for row in records} == {1}
+        assert {row["gripper_write_count"] for row in records} == {0}
+        if end_mode in {"interrupt", "stale"}:
+            assert any(row["path"].endswith("/stop") and row.get("status") == 200
+                       and row["phase"] == "completed" for row in records)
+        # The SDK trajectory path is explicitly joint-only; the private
+        # choreography request has no gripper field and reports it held.
+        assert all("gripper" not in row["request"] for row in completed)
+        assert all(row["body"]["result"]["preflight"]["gripper"] == "held_at_measured_start"
+                   for row in completed)
     finally:
         if broker.returncode is None:
             broker.terminate()

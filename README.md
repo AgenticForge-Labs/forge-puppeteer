@@ -55,7 +55,7 @@ The server communicates over **stdio**; it must be launched by an MCP client rat
 
 ## Working with real devices
 
-Real hardware requires operator-reviewed configuration, device-specific permissions and appropriate safety checks. Software tests and simulations do not qualify physical motion or establish that a device has safely stopped. Start with the [robot deployment and safety guide](docs/ROBOT_DEPLOYMENT.md) and the relevant [ensemble guide](docs/THREE_ROBOT_ENSEMBLE.md).
+These are small hobby robots, so the safety model is light. Set `physical: true` on a room to let it drive real hardware. At startup the room reads each robot's pose and compares it with its standard `sleep` pose (within about 5°). A robot that is not there stays still until you decide to move it to sleep. A session ends with `ensemble_park`. A fault stops the run and is reported, with no retry loops. See [AGENTS.md](AGENTS.md) for the working rules, and the [robot deployment guide](docs/ROBOT_DEPLOYMENT.md) and [ensemble guide](docs/THREE_ROBOT_ENSEMBLE.md) for setup.
 
 ## Robot SDKs
 
@@ -84,6 +84,6 @@ Thanks to the projects and communities making these robots and tools possible:
 
 ## Project status and license
 
-Forge Puppeteer is in active development. Hardware qualification and integration work are ongoing; see [STATUS.md](STATUS.md) for details.
+Forge Puppeteer is in active development. The roadmap lives in [GitHub issues](https://github.com/AgenticForge-Labs/forge-puppeteer/issues/54) and the project board, not in this repository.
 
 AgenticForge Labs-authored code is licensed under the [Apache License 2.0](LICENSE). Third-party dependencies, datasets, recordings, and other externally sourced materials retain their respective licenses and attribution requirements.

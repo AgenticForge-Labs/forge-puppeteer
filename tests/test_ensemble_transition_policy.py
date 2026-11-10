@@ -57,6 +57,34 @@ def event(n, state, interrupted=False):
     )
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("confirmed", [True, False])
+async def test_disconnect_releases_only_confirmed_stopped_owner_without_rearming(confirmed):
+    class FailedNative(SlowNative):
+        async def execute(self, request):
+            self.commands.append(request.operation)
+            raise RuntimeError("injected lost action receipt")
+        async def stop(self):
+            self.stops += 1
+            return StopResult(confirmed, "confirmed HOLD" if confirmed else "HOLD unknown")
+    provider = FailedNative()
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("arm", provider)
+    ensemble = ConversationEnsemble(runtime, [pack()])
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(event(0, "idle"))
+        with anyio.fail_after(2):
+            while "arm" not in ensemble._blocked:
+                await anyio.sleep(.01)
+        await ensemble.observe(event(1, "disconnected", interrupted=True))
+        assert ("arm" in runtime._owners) is not confirmed
+        count = len(provider.commands)
+        await ensemble.observe(event(2, "idle"))
+        await anyio.sleep(.05)
+        assert len(provider.commands) == count
+        assert "arm" in ensemble._blocked
+
+
 def test_rebinding_without_fallback_clears_previous_opt_in():
     runtime = ExecutionRuntime(PerformanceStage())
     runtime.register("arm", SlowNative())
@@ -323,45 +351,48 @@ async def test_explicit_interruption_never_waits_for_provider_grace():
         assert result["outcome"] == "accepted"
         assert native.stops >= 1
 
-
 @pytest.mark.anyio
-async def test_accepted_interrupt_invalidates_observations_before_waiting_for_stop():
-    class BlockingStop(SlowNative):
+async def test_deferred_transition_coalesces_and_interrupts_promptly():
+    class Deferred(SlowNative):
+        defer_normal_transition = True
+
         def __init__(self):
             super().__init__()
-            self.stop_entered = anyio.Event()
-            self.release_stop = anyio.Event()
+            self.started = anyio.Event()
+            self.finish = anyio.Event()
 
         async def execute(self, request):
             self.commands.append(request.operation)
-            await anyio.sleep_forever()
+            self.started.set()
+            await self.finish.wait()
+            return Completion("completed")
 
-        async def stop(self):
-            self.stop_entered.set()
-            await self.release_stop.wait()
-            return StopResult(True, "fake SDK stop confirmed")
-
-    native = BlockingStop()
+    provider = Deferred()
     runtime = ExecutionRuntime(PerformanceStage())
-    runtime.register("arm", native)
+    runtime.register("arm", provider)
     ensemble = ConversationEnsemble(runtime, [pack()])
-    observed = []
-    ensemble.add_presence_observer(lambda event: observed.append(event.state))
-    async with runtime.run(), ensemble.run(), anyio.create_task_group() as tasks:
-        await ensemble.observe(event(0, "speaking"))
-        await anyio.sleep(0.03)
-        # A stale/conflicting event must not alter accepted observation state.
-        conflicting = event(0, "idle", interrupted=True).model_copy(update={"event_id": "conflict"})
-        rejected = await ensemble.observe(conflicting)
-        assert rejected["outcome"] == "denied"
-        assert observed == ["speaking"]
-        tasks.start_soon(ensemble.observe, event(1, "listening", interrupted=True))
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(event(0, "idle"))
+        await provider.started.wait()
+        with anyio.fail_after(.2):
+            await ensemble.observe(event(1, "speaking"))
+            await ensemble.observe(event(2, "idle"))
+            await ensemble.observe(event(3, "speaking"))
+        assert provider.commands == ["idle"]
+        provider.finish.set()
         with anyio.fail_after(1):
-            await native.stop_entered.wait()
-        assert observed == ["speaking", "listening"]
-        native.release_stop.set()
-
-
-@pytest.fixture
-def anyio_backend():
-    return "asyncio"
+            while len(provider.commands) < 2:
+                await anyio.sleep(.01)
+        assert provider.commands[:2] == ["idle", "speaking"]
+        # Start a fresh blocked segment and ensure interruption does not wait
+        # for its completion or restart from the interrupted event.
+        provider.finish = anyio.Event()
+        with anyio.fail_after(1):
+            while len(provider.commands) < 3:
+                await anyio.sleep(.01)
+        with anyio.fail_after(1):
+            await ensemble.observe(event(4, "idle", interrupted=True))
+        assert provider.stops == 1
+        count = len(provider.commands)
+        await anyio.sleep(.05)
+        assert len(provider.commands) == count

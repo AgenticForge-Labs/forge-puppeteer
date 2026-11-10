@@ -1,0 +1,9 @@
+{
+  "schema_version": 4,
+  "physical": false,
+  "robots": [
+    {"kind": "soarm101", "id": "soarm-simulation", "file": "v4-sdk-simulation.json"}
+  ],
+  "action_journal": "/tmp/puppeteer-soarm-actions.db",
+  "ownership_db": "/tmp/puppeteer-soarm-owners.db"
+}
