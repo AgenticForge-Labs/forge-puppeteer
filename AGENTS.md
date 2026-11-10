@@ -22,12 +22,19 @@ work. Simulation is a quick sanity check, not a qualification process.
    sleep pose below.
    - Every joint within tolerance (default **±5°**): proceed without asking.
    - Otherwise: report the per-joint deltas and ask the user.
+   - The ensemble room does this itself on startup (`startup_gate.py`). A robot
+     not at sleep stays still. Relay its `message`; on "yes" call
+     `ensemble_prepare(performer_id, "move_to_sleep", action_id)`. Robots that
+     report only commanded positions (StackChan) use `"confirm_at_sleep"`.
+     `ensemble_startup_check` re-reads without moving. A SO-ARM sleep move needs
+     `sleep_target` (a `pose_targets` name) in its robot config.
 3. **Do the physical work.** If the user asked for physical work in this
    session, that is the authorization. Don't re-ask for each step, action or
    restart, and don't ask for "physical qualification" first. Running it on
    the hardware *is* the test.
-4. **End the session at sleep.** Move back to the sleep pose and confirm the
-   position the same way before disconnecting.
+4. **End the session at sleep.** Call `ensemble_park(action_id)` (refused while a
+   conversation is active): sleep move, re-check, report. It stops at the first
+   fault and never retries.
 
 ### Standard poses (every robot)
 

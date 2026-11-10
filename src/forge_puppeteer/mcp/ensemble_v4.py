@@ -68,6 +68,11 @@ class SOARMBrokerConfig(BaseModel):
     operator_established_neutral: StrictBool = False
     startup_target_revision: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
     startup_authority: str | None = None
+    # Name of a ``pose_targets`` entry used as the sleep move (e.g. "sleep2").
+    sleep_target: str | None = None
+    # Compare the pose with the standard sleep pose when the room starts.
+    # Turn off only for a simulated broker, which has no physical sleep position.
+    sleep_check: bool = True
 
     @field_validator("choreography_durations_s", mode="before")
     @classmethod
@@ -130,6 +135,8 @@ class SOARMBrokerConfig(BaseModel):
                  or any(not re.fullmatch(r"sha256:[0-9a-f]{64}", v)
                         for v in self.choreography_revisions.values()))):
             raise ValueError("trusted choreography requires exact revision pins, finite durations, and a separate token env")
+        if self.sleep_target is not None and self.sleep_target not in self.pose_targets:
+            raise ValueError("sleep_target must name one of the configured pose_targets")
         if self.startup_target_revision:
             if not self.choreography_revisions:
                 raise ValueError("startup target requires trusted choreography")
@@ -540,6 +547,31 @@ def _soarm_broker_pack(config: SOARMBrokerConfig) -> PerformerBehaviors:
             asset_id="soarm101/target/wake_to_neutral",
             asset_revision=config.startup_target_revision),), max_duration_s=30)
     return PerformerBehaviors.author(config.instance_id, patterns, startup=startup)
+
+
+def build_startup_gate(room: RoomConfigV4, robots: dict[str, object], runtime, ensemble):
+    """Sleep-pose gate over the selected real robots (read-only until the user says move).
+
+    SDK-simulated arms are skipped: a simulation has no physical sleep position.
+    Returns None when nothing needs gating.
+    """
+    from ..behavior_contract import BehaviorCue
+    from ..startup_gate import StartupGate
+    from ..standard_poses import load_standard_poses
+
+    readers, poses, cues = {}, {}, {}
+    for ref in room.robots:
+        config = robots[ref.kind]
+        if getattr(config, "mode", None) == "sdk_simulation_daemon" or not getattr(config, "sleep_check", True):
+            continue
+        readers[ref.id] = runtime._provider(ref.id)
+        poses[ref.id] = load_standard_poses(ref.kind)
+        target = getattr(config, "sleep_target", None)
+        if ref.kind == "soarm101" and target:
+            cues[ref.id] = BehaviorCue(
+                at_s=0, operation="play_joint_target", parameters={},
+                asset_id=f"soarm101/target/{target}", asset_revision=config.pose_targets[target])
+    return StartupGate(runtime, ensemble, readers, poses, cues) if readers else None
 
 
 def _soarm_broker_connected(provider):

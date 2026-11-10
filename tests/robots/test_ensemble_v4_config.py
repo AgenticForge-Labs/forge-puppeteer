@@ -557,3 +557,45 @@ def test_stale_daemon_state_is_cleared_but_running_daemon_blocks(tmp_path, monke
     with _pytest.raises(RuntimeError, match="already running"):
         ensemble_v4.clear_stale_daemon_state(tmp_path, "SDK physical")
     assert (tmp_path / "daemon.json").exists()
+
+
+def test_sleep_target_must_name_a_configured_pose_target():
+    from forge_puppeteer.mcp.ensemble_v4 import SOARMBrokerConfig
+
+    base = provider("soarm101", "arm", None)
+    revision = "sha256:" + "a" * 64
+    with pytest.raises(ValueError, match="sleep_target"):
+        SOARMBrokerConfig(**base, sleep_target="sleep2")
+    config = SOARMBrokerConfig(**base, pose_targets={"sleep2": revision},
+                               trusted_host_token_env="SOARM_TRUSTED",
+                               sleep_target="sleep2")
+    assert config.sleep_target == "sleep2"
+
+
+def test_startup_gate_covers_real_robots_and_skips_simulation_or_opt_out(tmp_path):
+    from types import SimpleNamespace
+
+    from forge_puppeteer.mcp.ensemble_v4 import build_startup_gate
+
+    class Reader:
+        async def read_pose(self):  # pragma: no cover - never called here
+            raise AssertionError
+
+    class Runtime:
+        def _provider(self, ref_id):
+            return Reader()
+
+    class Ensemble:
+        packs = {"arm": object(), "sim": object(), "off": object()}
+
+    def room_of(*ids):
+        return SimpleNamespace(robots=[SimpleNamespace(id=i, kind="soarm101") for i in ids])
+
+    configs = {"soarm101": SimpleNamespace(mode="existing_broker", sleep_check=True,
+                                           sleep_target=None, pose_targets={})}
+    gate = build_startup_gate(room_of("arm"), configs, Runtime(), Ensemble())
+    assert set(gate.readers) == {"arm"}
+    for mode, check in (("sdk_simulation_daemon", True), ("existing_broker", False)):
+        skipped = {"soarm101": SimpleNamespace(mode=mode, sleep_check=check,
+                                               sleep_target=None, pose_targets={})}
+        assert build_startup_gate(room_of("arm"), skipped, Runtime(), Ensemble()) is None

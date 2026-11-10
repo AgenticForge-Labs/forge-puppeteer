@@ -677,7 +677,7 @@ def stackchan_display_presets(config: EnsembleConfig) -> dict[str, dict[str, Beh
 def serve(config_path: str | Path) -> None:
     config = load_config(config_path)
     if isinstance(config, tuple):
-        from .ensemble_v4 import build_v4, start_owned_simulation, start_owned_physical
+        from .ensemble_v4 import build_startup_gate, build_v4, start_owned_simulation, start_owned_physical
         room, robots = config
         owned_cleanup = None
         private_tokens = {}
@@ -694,6 +694,7 @@ def serve(config_path: str | Path) -> None:
             ensemble = ConversationEnsemble(runtime, packs, presence_ttl_s=room.presence_ttl_s,
                                             stop_timeout_s=room.stop_timeout_s)
             create_ensemble_server(runtime, ensemble, connected=connected, motion_enabled=True,
+                                   startup_gate=build_startup_gate(room, robots, runtime, ensemble),
                                    stackchan_performer_id=next((r.id for r in room.robots if r.kind == "stackchan"), None)).run(transport="stdio")
         finally:
             if owned_cleanup is not None:

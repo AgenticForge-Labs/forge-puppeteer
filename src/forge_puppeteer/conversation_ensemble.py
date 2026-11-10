@@ -134,6 +134,8 @@ class ConversationEnsemble:
         # never receive a burst of catch-up commands.
         self._speech_interval_s: float = 0.25
         self._blocked: set[str] = set()
+        # Performers held still by the startup gate (not provably at sleep).
+        self._gate: dict[str, str] = {}
         self._owned: set[str] = set()
         self._unavailable: dict[str, str] = {}
         self._session: str | None = None
@@ -539,7 +541,25 @@ class ConversationEnsemble:
     def _mark_startup_pending(self) -> None:
         self._startup_deadline = anyio.current_time() + self._startup_settle_s
 
+    def set_gate(self, name: str, reason: str | None) -> None:
+        """Hold a performer still (reason) or release it (None) for the next presence event.
+
+        Used by the startup gate: a robot that is not provably at its sleep pose
+        gets no startup or presence motion until the user resolves it.
+        """
+        if name not in self.packs:
+            raise ValueError("unknown performer")
+        if reason is None:
+            if self._gate.pop(name, None) is not None:
+                self._unavailable.pop(name, None)
+        else:
+            self._gate[name] = reason
+            self._unavailable[name] = f"startup_gate:{reason}"
+
     def _acquire_owner(self, name: str) -> bool:
+        if name in self._gate:
+            self._unavailable[name] = f"startup_gate:{self._gate[name]}"
+            return False
         if name in self._owned or name in self._blocked or self._session is None:
             return False
         try:

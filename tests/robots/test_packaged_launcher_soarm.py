@@ -355,6 +355,7 @@ async def test_soarm_only_v4_stdio_runs_pinned_programs_through_real_sdk_broker(
             "kind": "soarm101", "id": "arm",
             "provider": {
                 "instance_id": "arm", "mode": "existing_broker", "broker_url": f"http://127.0.0.1:{port}",
+                "sleep_check": False,  # simulated broker: no physical sleep pose
                 "token_env": "SOARM101_BROKER_TOKEN",
                 "trusted_host_token_env": "SOARM101_TRUSTED_HOST_TOKEN",
                 "choreography_revisions": revisions,

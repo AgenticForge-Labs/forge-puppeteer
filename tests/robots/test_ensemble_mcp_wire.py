@@ -323,3 +323,38 @@ async def test_native_gain_cannot_replay_after_presence_expiry():
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_startup_gate_reports_asks_moves_to_sleep_and_parks_over_real_stdio(tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    log = tmp_path / "gate.txt"
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(root / "tests/robots/mcp_startup_gate_fake_server.py"), str(log), "15"],
+        env={**os.environ, "PYTHONPATH": str(root / "src")},
+    )
+    async with stdio_client(params) as (reader, writer), ClientSession(reader, writer) as session:
+        await session.initialize()
+        # The room checked the pose on startup: held still, with deltas reported.
+        check = (await session.call_tool("ensemble_startup_check", {})).structured_content
+        entry = check["performers"]["arm"]
+        assert not check["ready"] and entry["status"] == "not_at_sleep"
+        assert "Move arm to its sleep position first?" in entry["message"]
+        presence = await session.call_tool("ensemble_presence", {
+            "session_id": "s", "event_id": "e0", "sequence": 0, "state": "idle", "source": "manual"})
+        assert presence.structured_content["performers"]["arm"]["status"] == "unavailable"
+        assert not log.exists()
+        await session.call_tool("ensemble_presence", {
+            "session_id": "s", "event_id": "e1", "sequence": 1,
+            "state": "disconnected", "source": "manual"})
+        # The user said yes.
+        moved = (await session.call_tool("ensemble_prepare", {
+            "performer_id": "arm", "action": "move_to_sleep", "action_id": "sleep-1"})).structured_content
+        assert moved["outcome"] == "at_sleep" and moved["ready"]
+        assert log.read_text().splitlines() == ["go_sleep"]
+        # Parking an already-parked robot makes no move.
+        parked = (await session.call_tool("ensemble_park", {"action_id": "end-1"})).structured_content
+        assert parked["outcome"] == "parked"
+        assert parked["results"]["arm"]["outcome"] == "already_at_sleep"
+        assert log.read_text().splitlines() == ["go_sleep"]
