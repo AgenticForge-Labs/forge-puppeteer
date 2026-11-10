@@ -17,6 +17,9 @@ from forge_puppeteer.mcp.ensemble_launcher import (
     EnsembleConfig,
     ReachyOnlyEnsembleConfig,
     SOARMEnsembleConfig,
+    _check_original_idle_reference,
+    _original_idle_pack,
+    _profile_overrides,
     build_ensemble,
     soarm_native_binding,
     stackchan_display_presets,
@@ -98,6 +101,81 @@ def test_reachy_only_configuration_needs_explicit_identity_and_authority(tmp_pat
                    {"action_journal": data["ownership_db"]}):
         with pytest.raises(ValueError):
             ReachyOnlyEnsembleConfig.model_validate(data | change)
+
+
+def test_original_idle_requires_exact_grant_and_reviewed_reference(tmp_path):
+    data = config_data(tmp_path)
+    data.pop("stackchan")
+    data.pop("soarm101")
+    data["schema_version"] = 2
+    data["motion_profiles"] = {"reachy": {"idle": "original_v1"}}
+    with pytest.raises(ValueError, match="original_idle grant"):
+        ReachyOnlyEnsembleConfig.model_validate(data)
+    data["reachy"]["allowed_tools"].append("original_idle")
+    data["reachy_original_idle_authority"] = "I_AUTHORIZE_REACHY_ORIGINAL_IDLE"
+    cfg = ReachyOnlyEnsembleConfig.model_validate(data)
+    neutral = tmp_path / "reachy-neutral.json"
+    neutral.write_text(json.dumps([[1, 0, 0, 0], [0, 1, 0, 0],
+                                   [0, 0, 1, 0], [0, 0, 0, 1]]))
+    _check_original_idle_reference(cfg)
+    neutral.write_text(json.dumps([[1, 0, 0, 0.01], [0, 1, 0, 0],
+                                   [0, 0, 1, 0], [0, 0, 0, 1]]))
+    with pytest.raises(ValueError, match="identity neutral"):
+        _check_original_idle_reference(cfg)
+
+
+@pytest.mark.parametrize("schema", [1, 3])
+def test_original_idle_is_reachy_only_in_multi_performer_configs(tmp_path, schema):
+    data = config_data(tmp_path)
+    data["schema_version"] = schema
+    if schema == 3:
+        data.pop("soarm101")
+    data["reachy"]["allowed_tools"].append("original_idle")
+    data["reachy_original_idle_authority"] = "I_AUTHORIZE_REACHY_ORIGINAL_IDLE"
+    data["motion_profiles"] = {"reachy": {"idle": "original_v1"}}
+    assert EnsembleConfig.model_validate(data).motion_profiles["reachy"].idle == "original_v1"
+    data["motion_profiles"] = {"stackchan": {"idle": "original_v1"}}
+    with pytest.raises(ValueError, match="only for Reachy"):
+        EnsembleConfig.model_validate(data)
+
+
+def test_original_idle_pack_keeps_one_continuous_action():
+    from forge_puppeteer.conversation_native import reachy_conversation_pack
+
+    pack = reachy_conversation_pack("reachy", neutral_head=[
+        [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1],
+    ], recording_revision="sha256:" + "a" * 64, available_recordings=("yes1",))
+    original = _original_idle_pack(pack)
+    selection = {"reachy": {"idle": "original_v1", "speaking": "original_v1"}}
+    from forge_puppeteer.mcp.ensemble_launcher import PerformerMotionSelection
+    overrides = _profile_overrides(
+        {"reachy": PerformerMotionSelection.model_validate(selection["reachy"])}, {}, {},
+        {"reachy": original},
+    )
+    idle = overrides["reachy"]["idle"].behaviors["idle"]
+    assert len(idle.cues) == 1
+    assert idle.cues[0].operation == "original_idle"
+    assert idle.cues[0].parameters["duration_s"] == 3600
+    assert overrides["reachy"]["speaking"].behaviors["speaking"] == idle
+
+
+def test_original_speech_requires_matching_idle_and_separate_grant(tmp_path):
+    data = config_data(tmp_path)
+    data.pop("stackchan")
+    data.pop("soarm101")
+    data["schema_version"] = 2
+    data["reachy"]["allowed_tools"].append("original_idle")
+    data["reachy_original_idle_authority"] = "I_AUTHORIZE_REACHY_ORIGINAL_IDLE"
+    data["motion_profiles"] = {"reachy": {"idle": "original_v1", "speaking": "original_v1"}}
+    with pytest.raises(ValueError, match="original_speech grant"):
+        ReachyOnlyEnsembleConfig.model_validate(data)
+    data["reachy"]["allowed_tools"].append("original_speech")
+    data["reachy_original_speech_authority"] = "I_AUTHORIZE_REACHY_ORIGINAL_SPEECH"
+    config = ReachyOnlyEnsembleConfig.model_validate(data)
+    assert config.motion_profiles["reachy"].speaking == "original_v1"
+    data["motion_profiles"]["reachy"]["idle"] = "legacy"
+    with pytest.raises(ValueError, match="requires original_v1 Reachy idle"):
+        ReachyOnlyEnsembleConfig.model_validate(data)
 
 
 
@@ -188,6 +266,63 @@ def test_reachy_only_launcher_starts_without_other_device_providers(tmp_path, mo
     assert resolved_kwargs[1]["expression_style"] == "expressive"
     assert resolved_kwargs[1]["neutral_antennas_rad"] == (-0.17, 0.17)
     assert resolved_kwargs[1]["wobble_amplitude_rad"] == 0.09
+
+
+def test_launcher_selects_one_continuous_original_idle_and_speech_action(tmp_path, monkeypatch):
+    import forge_puppeteer.mcp.ensemble_launcher as launcher
+    from forge_puppeteer.behavior_contract import (
+        BehaviorCue,
+        BehaviorPattern,
+        PerformerBehaviors,
+    )
+
+    data = config_data(tmp_path)
+    data.pop("stackchan")
+    data.pop("soarm101")
+    data["schema_version"] = 2
+    data["reachy"]["allowed_tools"] += ["original_idle", "original_speech"]
+    data["reachy_original_idle_authority"] = "I_AUTHORIZE_REACHY_ORIGINAL_IDLE"
+    data["reachy_original_speech_authority"] = "I_AUTHORIZE_REACHY_ORIGINAL_SPEECH"
+    data["motion_profiles"] = {"reachy": {"idle": "original_v1", "speaking": "original_v1"}}
+    (tmp_path / "reachy-neutral.json").write_text(json.dumps([
+        [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1],
+    ]))
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(data))
+    legacy = BehaviorPattern(source="procedural", mode="loop", period_s=1,
+                             cues=(BehaviorCue(at_s=0, operation="head_pose"),))
+    pack = PerformerBehaviors.author("reachy", {
+        "idle": legacy, "speaking": legacy, "listening": legacy,
+    })
+    class FakeReachy:
+        def __init__(self, config):
+            self.catalog = object()
+
+        async def connected(self):
+            raise AssertionError("test must not connect hardware")
+
+    async def fake_pack(*args, **kwargs):
+        return pack
+
+    seen = {}
+    class FakeServer:
+        def run(self, *, transport):
+            assert transport == "stdio"
+
+    def fake_server(runtime, ensemble, **kwargs):
+        seen.update(kwargs)
+        seen["ensemble"] = ensemble
+        return FakeServer()
+
+    monkeypatch.setattr(launcher, "ReachySDKProvider", FakeReachy)
+    monkeypatch.setattr(launcher, "reachy_pack_from_catalog", fake_pack)
+    monkeypatch.setattr(launcher, "create_ensemble_server", fake_server)
+    launcher.serve(config_path)
+    selected = seen["ensemble"].packs["reachy"].behaviors
+    assert selected["idle"] == selected["speaking"]
+    assert selected["idle"].cues[0].operation == "original_idle"
+    assert seen["native_gain_performers"] == ("reachy",)
+    assert seen["native_motion_performers"] == ("reachy",)
 
 
 @pytest.mark.parametrize("bad", [
@@ -342,6 +477,13 @@ def test_operator_motion_profile_validation_covers_all_performers(tmp_path):
         EnsembleConfig.model_validate(data)
     data["speech_driven_performers"] = ["reachy"]
     assert EnsembleConfig.model_validate(data).motion_profiles["reachy"].speaking == "smooth_v2"
+    data["reachy_legacy_speech_fallback"] = True
+    assert EnsembleConfig.model_validate(data).reachy_legacy_speech_fallback is True
+    with pytest.raises(ValueError):
+        EnsembleConfig.model_validate({**data, "reachy_legacy_speech_fallback": "true"})
+    with pytest.raises(ValueError, match="classic style"):
+        EnsembleConfig.model_validate({**data, "reachy_expression_style": "expressive"})
+    data.pop("reachy_legacy_speech_fallback")
     data["speech_driven_performers"] = ["reachy", "reachy"]
     with pytest.raises(ValueError, match="unique"):
         EnsembleConfig.model_validate(data)

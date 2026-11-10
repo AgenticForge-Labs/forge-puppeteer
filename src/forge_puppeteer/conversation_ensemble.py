@@ -73,6 +73,7 @@ class ConversationEnsemble:
         stop_timeout_s: float = 5,
         startup_settle_s: float = 0.0,
         motion_patterns: Mapping[str, Mapping[str, PerformerBehaviors]] | None = None,
+        continuous_presence_performers: Iterable[str] = (),
     ):
         if not caller_id or not 1 <= presence_ttl_s <= 3600 or not 0.1 <= stop_timeout_s <= 60:
             raise ValueError("invalid conversation coordinator settings")
@@ -97,6 +98,17 @@ class ConversationEnsemble:
                 idle=choices.get("idle"),
                 speaking=choices.get("speaking"),
             )
+        continuous = tuple(continuous_presence_performers)
+        if len(set(continuous)) != len(continuous) or set(continuous) - set(selected):
+            raise ValueError("continuous presence requires unique configured performers")
+        for name in continuous:
+            idle = selected[name].behaviors.get("idle")
+            speaking = selected[name].behaviors.get("speaking")
+            if (idle is None or speaking != idle or len(idle.cues) != 1
+                    or idle.cues[0].operation != "original_idle"):
+                raise ValueError("continuous presence requires the same reviewed original idle action")
+        self._continuous_presence = frozenset(continuous)
+        self._presence_observers: list[Callable[[EnsemblePresence], None]] = []
         self.runtime = runtime
         self.packs = selected
         self.caller_id = caller_id
@@ -110,6 +122,7 @@ class ConversationEnsemble:
         ] = {}
         self._speech_intervals: dict[str, float] = {}
         self._speech_release_on_silence: dict[str, bool] = {}
+        self._speech_fallbacks: dict[str, BehaviorPattern] = {}
         # One device connection per performer, but the execution runtime is
         # shared. Targets that would run while another performer's target is
         # still executing contend for it, so dispatch is serialized.
@@ -158,6 +171,12 @@ class ConversationEnsemble:
                         self._release_owners()
                 self._tasks = None
                 tasks.cancel_scope.cancel()
+
+    def add_presence_observer(self, observer: Callable[[EnsemblePresence], None]) -> None:
+        """Register a synchronous state invalidator before the room starts."""
+        if self._tasks is not None or not callable(observer):
+            raise ValueError("presence observers must be registered before room startup")
+        self._presence_observers.append(observer)
 
     def snapshot(self) -> dict[str, object]:
         return {
@@ -226,6 +245,10 @@ class ConversationEnsemble:
                     return {"outcome": "denied", "reason": "conflicting_sequence", **self.snapshot()}
             elif event.state == "disconnected":
                 return {"outcome": "no_session", **self.snapshot()}
+            # Observers invalidate old optional data only after identity and
+            # sequence admission, before waiting for any performer's STOP.
+            for observer in self._presence_observers:
+                observer(event)
             previous = self._state
             if self._session is None:
                 self._session = event.session_id
@@ -240,9 +263,15 @@ class ConversationEnsemble:
                 # acknowledging a requested gesture) must not preempt that
                 # finite gesture. Real interruption/disconnect remains urgent.
                 preserve_expressions = event.state != "disconnected" and not event.interrupted
+                preserve_continuous = (
+                    not event.interrupted and previous in {"idle", "speaking"}
+                    and event.state in {"idle", "speaking"}
+                )
                 await self._stop_slots(
                     tuple(name for name, slot in self._slots.items()
-                          if not (preserve_expressions and slot.expression_active)),
+                          if not (preserve_expressions and slot.expression_active)
+                          and not (preserve_continuous and name in self._continuous_presence
+                                   and slot.behavior in {"idle", "speaking"})),
                     graceful=event.state != "disconnected" and not event.interrupted,
                 )
             if event.state == "disconnected":
@@ -415,7 +444,7 @@ class ConversationEnsemble:
             if pattern is None:
                 slot.done.set()
                 return
-            if name in self._speech_channels:
+            if name in self._speech_channels and name not in self._continuous_presence:
                 await self._play_speech_driven(name, pattern, slot, action_id)
             else:
                 await self._play(
@@ -474,7 +503,8 @@ class ConversationEnsemble:
         )
         if pattern is None:
             return  # Missing device behavior is unsupported, never substituted.
-        if behavior == "speaking" and name in self._speech_channels:
+        if (behavior == "speaking" and name in self._speech_channels
+                and name not in self._continuous_presence):
             if not self.startup_complete():
                 # Startup motion owns the robot; defer rather than talk over it.
                 self._spawn_deferred_speaking(name, action_id, resume=resume)
@@ -497,6 +527,7 @@ class ConversationEnsemble:
         warp: Callable[[dict[str, float], float], BehaviorCue] | None = None,
         interval_s: float = 0.25,
         release_on_silence: bool = False,
+        fallback: BehaviorPattern | None = None,
     ) -> None:
         """Attach an optional audio-driven channel for one verbal performer.
 
@@ -517,6 +548,11 @@ class ConversationEnsemble:
             raise ValueError("Reachy speech requires a neutral pose or explicit warp")
         if type(release_on_silence) is not bool or (release_on_silence and warp is None):
             raise ValueError("silent release requires a reviewed native warp")
+        if fallback is not None:
+            fallback = BehaviorPattern.model_validate_json(fallback.model_dump_json())
+            if (fallback.mode != "loop" or not fallback.cues or not fallback.period_s
+                    or any(cue.operation != "head_pose" for cue in fallback.cues)):
+                raise ValueError("speech fallback requires a reviewed head-only loop")
         if neutral_head is not None and (
             len(neutral_head) != 4 or any(len(row) != 4 for row in neutral_head)
         ):
@@ -528,9 +564,17 @@ class ConversationEnsemble:
         )
         self._speech_intervals[performer_id] = float(interval_s)
         self._speech_release_on_silence[performer_id] = release_on_silence
+        if fallback is None:
+            self._speech_fallbacks.pop(performer_id, None)
+        else:
+            self._speech_fallbacks[performer_id] = fallback
 
     async def _stop_slots(self, names: tuple[str, ...], *, graceful: bool = False):
         active = [(n, self._slots.pop(n)) for n in names if n in self._slots]
+        # Prevent the speaking loop from admitting another cue while a
+        # bounded in-flight action is being allowed to finish.
+        for _, slot in active:
+            slot.cancel_requested = True
         # On ordinary semantic transitions, an opt-in SDK can complete its
         # already-admitted finite native segment before we cancel the *loop*.
         # This must be time-bounded: a stuck SDK action still takes the
@@ -560,7 +604,6 @@ class ConversationEnsemble:
                     with anyio.move_on_after(grace):
                         await slot.action_done.wait()
         for _, slot in active:
-            slot.cancel_requested = True
             slot.scope.cancel()
         for name, slot in active:
             with anyio.move_on_after(self.stop_timeout_s) as deadline:
@@ -599,13 +642,17 @@ class ConversationEnsemble:
                                 name, resume_id, resume=True,
                             )
                             return
-                        if self._state == "speaking" and name in self._speech_channels:
-                            # Resume speech through the same reactive channel
-                            # used for ordinary speaking transitions.
+                        if (self._state == "speaking" and name in self._speech_channels
+                                and name not in self._continuous_presence):
+                            # Resume speech through the same reactive channel used
+                            # for ordinary speaking transitions. Executing the
+                            # authored pattern here bypasses the feature channel
+                            # and can move unintended actuators.
                             resume_id = f"{action_id}-resume"
                             await self._retire_slot(name, slot)
                             self._spawn(name, "speaking", resume_id)
                             return
+                        slot.behavior = self._state
                         await self._execute_pattern(
                             name, self._state, background, slot, f"{action_id}-resume"
                         )
@@ -667,11 +714,15 @@ class ConversationEnsemble:
         """
         channel, amplitude, _neutral, warp = self._speech_channels[name]
         interval = self._speech_intervals.get(name, self._speech_interval_s)
+        fallback = self._speech_fallbacks.get(name)
         with slot.scope:
             index = 0
             last_dispatched: tuple[str, int] | None = None
             silence_released = False
             started = anyio.current_time()
+            missing_since: float | None = None
+            fallback_step: tuple[int, int] | None = None
+            fallback_generation = 0
             try:
                 while True:
                     # A transition cancels this scope while we are asleep
@@ -687,6 +738,31 @@ class ConversationEnsemble:
                     if values is None:
                         slot.status = "active"
                         slot.evidence = "awaiting_speech_envelope"
+                        now = anyio.current_time()
+                        if missing_since is None:
+                            missing_since = now
+                            fallback_generation += 1
+                        if fallback is not None and now - missing_since >= 0.1:
+                            elapsed = now - missing_since - 0.1
+                            cycle = int(elapsed // fallback.period_s)
+                            position = elapsed - cycle * fallback.period_s
+                            cue_index = max(
+                                (i for i, cue in enumerate(fallback.cues) if cue.at_s <= position),
+                                default=-1,
+                            )
+                            step = (cycle, cue_index)
+                            if cue_index >= 0 and step != fallback_step:
+                                cue = fallback.cues[cue_index].model_copy(update={"at_s": 0.0})
+                                one = BehaviorPattern(source="procedural", mode="once", cues=(cue,))
+                                await self._execute_pattern(
+                                    name, "speaking_fallback", one, slot,
+                                    f"{action_id}-fallback-{fallback_generation}-{cycle}-{cue_index}",
+                                )
+                                if slot.status in {"blocked", "unavailable"}:
+                                    return
+                                fallback_step = step
+                                slot.status = "active"
+                                slot.evidence = "legacy_speech_fallback"
                         if index == 0:
                             # Logged once per speaking slot: the channel exists
                             # but no fresh hop has arrived yet.
@@ -696,6 +772,8 @@ class ConversationEnsemble:
                             )
                         await anyio.sleep(interval)
                         continue
+                    missing_since = None
+                    fallback_step = None
                     # Later fresh PCM features replace unsent hops; neither
                     # replay a dispatched sequence nor animate VAD inactivity.
                     if values.get("active") is False and (
@@ -892,6 +970,12 @@ class ConversationEnsemble:
                     await self.runtime.submit(request)
                     slot.pending = True
                     slot.action_done = anyio.Event()
+                    if cue.operation != "original_idle":
+                        record = await self.runtime.wait(request.id)
+                if cue.operation == "original_idle":
+                    # A continuous action owns only its performer's runtime
+                    # resources; waiting under the shared admission gate would
+                    # starve every other performer for the action's lifetime.
                     record = await self.runtime.wait(request.id)
                 slot.pending = record.state == ActionState.UNKNOWN
                 slot.action_done.set()

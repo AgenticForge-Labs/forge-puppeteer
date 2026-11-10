@@ -1,5 +1,7 @@
 """Offline real-stdio MCP three-performer fixture, NO hardware authority."""
 
+import os
+
 from forge_puppeteer.behavior_contract import (
     BehaviorCue,
     BehaviorPattern,
@@ -52,9 +54,13 @@ def main():
     names = ("reachy", "stackchan", "soarm101")
     for name in names:
         runtime.register(name, Fake())
-    ensemble = ConversationEnsemble(runtime, (pack(n) for n in names))
+    ensemble = ConversationEnsemble(
+        runtime, (pack(n) for n in names),
+        presence_ttl_s=float(os.environ.get("FAKE_PRESENCE_TTL_S", "30")),
+    )
     create_ensemble_server(
         runtime, ensemble, name="Mock 3-Robot Room", motion_enabled=True,
+        native_gain_performers=("reachy",),
         presentation_presets={
             "stackchan": {
                 "normal": BehaviorCue(

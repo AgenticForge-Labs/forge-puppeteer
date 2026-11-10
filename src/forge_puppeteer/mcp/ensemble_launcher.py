@@ -21,7 +21,7 @@ from typing import Literal
 import anyio
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..behavior_contract import BehaviorCue, PerformerBehaviors
+from ..behavior_contract import BehaviorCue, BehaviorPattern, PerformerBehaviors
 from ..conversation_ensemble import ConversationEnsemble
 from ..conversation_native import (
     reachy_pack_from_catalog,
@@ -115,8 +115,8 @@ class PerformerMotionSelection(BaseModel):
     """Explicit independent idle/speaking choices; no implicit SDK permission."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    idle: Literal["legacy", "native_v1", "smooth_v2"] = "legacy"
-    speaking: Literal["legacy", "native_v1", "smooth_v2"] = "legacy"
+    idle: Literal["legacy", "native_v1", "smooth_v2", "original_v1"] = "legacy"
+    speaking: Literal["legacy", "native_v1", "smooth_v2", "original_v1"] = "legacy"
 
 
 def _validate_motion_selection(
@@ -129,6 +129,8 @@ def _validate_motion_selection(
     tools: list[str],
     neutral_antennas: tuple[float, float] | None,
     antenna_sway_rad: float,
+    original_idle_authority: str | None,
+    original_speech_authority: str | None,
 ) -> None:
     selected = set(performer_ids)
     if set(choices) - selected:
@@ -143,7 +145,20 @@ def _validate_motion_selection(
         nonlegacy = profile.idle != "legacy" or profile.speaking != "legacy"
         if nonlegacy and performer_id not in {reachy_id, stackchan_id}:
             raise ValueError("SO-ARM only supports legacy approved choreography")
-        if performer_id == reachy_id and nonlegacy:
+        if profile.idle == "original_v1":
+            if performer_id != reachy_id:
+                raise ValueError("original_v1 idle is available only for Reachy")
+            if "original_idle" not in tools or original_idle_authority != "I_AUTHORIZE_REACHY_ORIGINAL_IDLE":
+                raise ValueError("original_v1 idle requires original_idle grant and explicit authority")
+        if profile.speaking == "original_v1":
+            if performer_id != reachy_id or profile.idle != "original_v1":
+                raise ValueError("original_v1 speaking requires original_v1 Reachy idle")
+            if ("original_speech" not in tools
+                    or original_speech_authority != "I_AUTHORIZE_REACHY_ORIGINAL_SPEECH"):
+                raise ValueError("original_v1 speaking requires original_speech grant and explicit authority")
+        if performer_id == reachy_id and (
+            profile.idle in {"native_v1", "smooth_v2"} or profile.speaking in {"native_v1", "smooth_v2"}
+        ):
             _check_reachy_expression_authority(
                 "expressive", neutral_antennas, tools, antenna_sway_rad,
             )
@@ -155,6 +170,7 @@ def _profile_overrides(
     choices: dict[str, PerformerMotionSelection],
     native: dict[str, PerformerBehaviors],
     smooth_idle: dict[str, PerformerBehaviors] | None = None,
+    original_idle: dict[str, PerformerBehaviors] | None = None,
 ) -> dict[str, dict[str, PerformerBehaviors]]:
     """Select native or amplitude-reduced idle without new motor ownership."""
     result: dict[str, dict[str, PerformerBehaviors]] = {}
@@ -164,7 +180,9 @@ def _profile_overrides(
             name = getattr(selection, state)
             if name == "legacy":
                 continue
-            if state == "idle" and name == "smooth_v2":
+            if name == "original_v1":
+                alternatives[state] = (original_idle or {})[performer_id]
+            elif state == "idle" and name == "smooth_v2":
                 alternatives[state] = (smooth_idle or {}).get(
                     performer_id, native[performer_id],
                 )
@@ -173,6 +191,33 @@ def _profile_overrides(
         if alternatives:
             result[performer_id] = alternatives
     return result
+
+
+def _original_idle_pack(pack: PerformerBehaviors) -> PerformerBehaviors:
+    """Bind one bounded SDK action for the entire room-owned idle interval."""
+    idle = BehaviorPattern(
+        source="procedural", mode="loop", period_s=120,
+        max_duration_s=3600,
+        cues=(BehaviorCue(at_s=0, operation="original_idle", parameters={"duration_s": 3600}),),
+    )
+    return PerformerBehaviors.author(pack.performer_id, {**pack.behaviors, "idle": idle, "speaking": idle},
+                                     startup=pack.startup)
+
+
+def _check_original_idle_reference(config: EnsembleConfig | ReachyOnlyEnsembleConfig) -> None:
+    """Require the reviewed reference to match the original app's fixed neutral."""
+    selection = config.motion_profiles.get(config.reachy.instance_id)
+    if selection is None or selection.idle != "original_v1":
+        return
+    matrix = json.loads(Path(config.reachy_neutral_head).read_text(encoding="utf-8"))
+    if not isinstance(matrix, list) or len(matrix) != 4 or any(
+        not isinstance(row, list) or len(row) != 4
+        or any(type(value) not in (int, float) or not math.isfinite(value)
+               or abs(value - (1.0 if i == j else 0.0)) > 1e-9
+               for j, value in enumerate(row))
+        for i, row in enumerate(matrix)
+    ):
+        raise ValueError("original_v1 requires an operator-reviewed identity neutral reference")
 
 
 class EnsembleConfig(BaseModel):
@@ -192,6 +237,7 @@ class EnsembleConfig(BaseModel):
     # Operator opt-in: performers whose speaking slot follows the live
     # generated-PCM envelope instead of the authored pattern.
     speech_driven_performers: tuple[str, ...] = ()
+    reachy_legacy_speech_fallback: bool = Field(default=False, strict=True)
     speech_seed: int = 7
     motion_profiles: dict[str, PerformerMotionSelection] = Field(default_factory=dict)
     # Hold the first spoken turn until startup motion (if any) has settled.
@@ -204,6 +250,8 @@ class EnsembleConfig(BaseModel):
     reachy_expressive_amplitude_rad: float = Field(default=0.09, ge=0, le=0.12)
     reachy_antenna_sway_rad: float = Field(default=0.18, ge=0, le=0.26)
     reachy_breath_amplitude_m: float = Field(default=0.0, ge=0, le=0.005)
+    reachy_original_idle_authority: Literal["I_AUTHORIZE_REACHY_ORIGINAL_IDLE"] | None = None
+    reachy_original_speech_authority: Literal["I_AUTHORIZE_REACHY_ORIGINAL_SPEECH"] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -230,6 +278,12 @@ class EnsembleConfig(BaseModel):
             ids.append(self.soarm101.instance_id)
         if len(set(ids)) != len(ids):
             raise ValueError("unique performer IDs required")
+        if self.reachy_legacy_speech_fallback and (
+            self.reachy.instance_id not in self.speech_driven_performers
+            or self.reachy_expression_style != "classic"
+            or self.motion_profiles.get(self.reachy.instance_id, PerformerMotionSelection()).speaking != "smooth_v2"
+        ):
+            raise ValueError("legacy speech fallback requires smooth_v2, speech-driven Reachy and classic style")
         _validate_motion_selection(
             self.motion_profiles, tuple(ids),
             reachy_id=self.reachy.instance_id,
@@ -238,6 +292,8 @@ class EnsembleConfig(BaseModel):
             tools=self.reachy.allowed_tools,
             neutral_antennas=self.reachy_neutral_antennas_rad,
             antenna_sway_rad=self.reachy_antenna_sway_rad,
+            original_idle_authority=self.reachy_original_idle_authority,
+            original_speech_authority=self.reachy_original_speech_authority,
         )
         for value in (self.action_journal, self.ownership_db, self.reachy_neutral_head):
             if not value or not Path(value).is_absolute():
@@ -291,6 +347,7 @@ class ReachyOnlyEnsembleConfig(BaseModel):
     listening_tilt_rad: float = Field(default=0.02, ge=0, le=0.07)
     listening_mode: Literal["tilt", "hold"] = "tilt"
     speech_driven_performers: tuple[str, ...] = ()
+    reachy_legacy_speech_fallback: bool = Field(default=False, strict=True)
     motion_profiles: dict[str, PerformerMotionSelection] = Field(default_factory=dict)
     reachy_expression_style: Literal["classic", "expressive"] = "classic"
     reachy_startup_behavior: Literal["none", "wake_up_if_sleeping"] = "none"
@@ -298,6 +355,8 @@ class ReachyOnlyEnsembleConfig(BaseModel):
     reachy_expressive_amplitude_rad: float = Field(default=0.09, ge=0, le=0.12)
     reachy_antenna_sway_rad: float = Field(default=0.18, ge=0, le=0.26)
     reachy_breath_amplitude_m: float = Field(default=0.0, ge=0, le=0.005)
+    reachy_original_idle_authority: Literal["I_AUTHORIZE_REACHY_ORIGINAL_IDLE"] | None = None
+    reachy_original_speech_authority: Literal["I_AUTHORIZE_REACHY_ORIGINAL_SPEECH"] | None = None
 
     @model_validator(mode="after")
     def validate_reachy(self):
@@ -305,6 +364,12 @@ class ReachyOnlyEnsembleConfig(BaseModel):
             raise ValueError("Reachy native SDK provider required")
         if self.reachy.restricted_actions:
             raise ValueError("head expression requires Reachy's normal native SDK mode")
+        if self.reachy_legacy_speech_fallback and (
+            self.reachy.instance_id not in self.speech_driven_performers
+            or self.reachy_expression_style != "classic"
+            or self.motion_profiles.get(self.reachy.instance_id, PerformerMotionSelection()).speaking != "smooth_v2"
+        ):
+            raise ValueError("legacy speech fallback requires smooth_v2, speech-driven Reachy and classic style")
         _check_reachy_expression_authority(
             self.reachy_expression_style, self.reachy_neutral_antennas_rad,
             self.reachy.allowed_tools, self.reachy_antenna_sway_rad,
@@ -316,6 +381,8 @@ class ReachyOnlyEnsembleConfig(BaseModel):
             tools=self.reachy.allowed_tools,
             neutral_antennas=self.reachy_neutral_antennas_rad,
             antenna_sway_rad=self.reachy_antenna_sway_rad,
+            original_idle_authority=self.reachy_original_idle_authority,
+            original_speech_authority=self.reachy_original_speech_authority,
         )
         if not {"head_pose", "play_move", "device_stop"} <= set(self.reachy.allowed_tools):
             raise ValueError("native Reachy expression requires head, playback and stop grants")
@@ -503,6 +570,7 @@ def stackchan_display_presets(config: EnsembleConfig) -> dict[str, dict[str, Beh
 
 def serve(config_path: str | Path) -> None:
     config = load_config(config_path)
+    _check_original_idle_reference(config)
     if isinstance(config, ReachyOnlyEnsembleConfig):
         reachy = ReachySDKProvider(config.reachy)
         async def resolve_reachy(native: bool = False, smooth_idle: bool = False):
@@ -529,7 +597,9 @@ def serve(config_path: str | Path) -> None:
         profile = config.motion_profiles.get(config.reachy.instance_id)
         alternate = {}
         smooth_idle = {}
-        if profile and (profile.idle != "legacy" or profile.speaking != "legacy"):
+        original_idle = {}
+        if profile and (profile.idle in {"native_v1", "smooth_v2"}
+                        or profile.speaking in {"native_v1", "smooth_v2"}):
             alternate[config.reachy.instance_id] = (
                 pack if config.reachy_expression_style == "expressive"
                 else anyio.run(resolve_reachy, True)
@@ -538,17 +608,21 @@ def serve(config_path: str | Path) -> None:
                 smooth_idle[config.reachy.instance_id] = anyio.run(
                     resolve_reachy, True, True,
                 )
+        if profile and profile.idle == "original_v1":
+            original_idle[config.reachy.instance_id] = _original_idle_pack(pack)
         runtime = ExecutionRuntime(
             PerformanceStage(), journal_path=config.action_journal,
             ownership_path=config.ownership_db, stop_timeout=config.stop_timeout_s,
         )
         runtime.register(config.reachy.instance_id, reachy)
+        original_speech = bool(profile and profile.speaking == "original_v1")
         ensemble = ConversationEnsemble(
             runtime, (pack,), presence_ttl_s=config.presence_ttl_s,
             stop_timeout_s=config.stop_timeout_s,
             motion_patterns=_profile_overrides(
-                config.motion_profiles, alternate, smooth_idle,
+                config.motion_profiles, alternate, smooth_idle, original_idle,
             ),
+            continuous_presence_performers=(config.reachy.instance_id,) if original_speech else (),
         )
         speech_driven = config.speech_driven_performers
         speech_dynamics = {
@@ -562,6 +636,10 @@ def serve(config_path: str | Path) -> None:
                 Path(config.reachy_neutral_head).read_text()
             )} if speech_driven else {},
             speech_dynamics=speech_dynamics,
+            speech_fallbacks={config.reachy.instance_id: pack.behaviors["speaking"]}
+            if config.reachy_legacy_speech_fallback else {},
+            native_gain_performers=(config.reachy.instance_id,) if original_speech else (),
+            native_motion_performers=(config.reachy.instance_id,) if original_speech else (),
             stackchan_performer_id=None,
         ).run(transport="stdio")
         return
@@ -593,8 +671,10 @@ def serve(config_path: str | Path) -> None:
     reachy_profile = config.motion_profiles.get(config.reachy.instance_id)
     alternate = {}
     smooth_idle = {}
+    original_idle = {}
     if reachy_profile and (
-        reachy_profile.idle != "legacy" or reachy_profile.speaking != "legacy"
+        reachy_profile.idle in {"native_v1", "smooth_v2"}
+        or reachy_profile.speaking in {"native_v1", "smooth_v2"}
     ):
         alternate[config.reachy.instance_id] = (
             reachy_pack if config.reachy_expression_style == "expressive"
@@ -602,6 +682,8 @@ def serve(config_path: str | Path) -> None:
         )
         if reachy_profile.idle == "smooth_v2":
             smooth_idle[config.reachy.instance_id] = anyio.run(resolve, True, True)
+    if reachy_profile and reachy_profile.idle == "original_v1":
+        original_idle[config.reachy.instance_id] = _original_idle_pack(reachy_pack)
     recorded = ()
     if config.stackchan.asset_root:
         # Operator-selected native asset pack; the SDK validates and pins it.
@@ -638,7 +720,7 @@ def serve(config_path: str | Path) -> None:
             speaking_mode="native_weight", yaw_amplitude=40,
             recorded_assets=recorded,
         )
-    motion_patterns = _profile_overrides(config.motion_profiles, alternate, smooth_idle)
+    motion_patterns = _profile_overrides(config.motion_profiles, alternate, smooth_idle, original_idle)
     speech_dynamics = {
         name: "smoothed_v1" for name, selection in config.motion_profiles.items()
         if selection.speaking == "smooth_v2"
@@ -646,12 +728,14 @@ def serve(config_path: str | Path) -> None:
     packs = (reachy_pack, stack_pack) if arm_pack is None else (
         reachy_pack, stack_pack, arm_pack,
     )
+    original_speech = bool(reachy_profile and reachy_profile.speaking == "original_v1")
     ensemble = ConversationEnsemble(
         runtime, packs,
         presence_ttl_s=config.presence_ttl_s,
         stop_timeout_s=config.stop_timeout_s,
         startup_settle_s=config.startup_settle_s,
         motion_patterns=motion_patterns,
+        continuous_presence_performers=(config.reachy.instance_id,) if original_speech else (),
     )
     create_ensemble_server(
         runtime, ensemble, connected=connected,
@@ -660,6 +744,10 @@ def serve(config_path: str | Path) -> None:
         speech_neutral_heads=speech_neutral,
         speech_seeds=speech_seeds,
         speech_dynamics=speech_dynamics,
+        speech_fallbacks={config.reachy.instance_id: reachy_pack.behaviors["speaking"]}
+        if config.reachy_legacy_speech_fallback else {},
+        native_gain_performers=(config.reachy.instance_id,) if original_speech else (),
+        native_motion_performers=(config.reachy.instance_id,) if original_speech else (),
         stackchan_performer_id=config.stackchan.instance_id,
         startup_settle_s=config.startup_settle_s,
         presentation_presets=stackchan_display_presets(config),

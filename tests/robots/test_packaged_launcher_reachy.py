@@ -301,6 +301,44 @@ async def test_reachy_lifecycle_uses_fixed_sdk_options_and_closes(monkeypatch, t
 
 
 @pytest.mark.anyio
+async def test_original_profiles_connect_with_explicit_grants(monkeypatch, tmp_path):
+    import importlib.metadata
+
+    from forge_puppeteer.devices.reachy import ReachyCatalog
+
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "1.10.0rc5")
+    root = tmp_path / "assets"
+    manifest = make_snapshot(root)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+
+    class Robot(FakeRobot):
+        def get_present_antenna_joint_positions(self):
+            return [0.0, 0.0]
+
+        def set_target(self, **kwargs):
+            pytest.fail("capability check must not issue motion")
+
+    robot = Robot()
+    provider = ReachySDKProvider(
+        config(asset_root=str(root), manifest=str(manifest_path),
+               allowed_tools=["device_info", "play_move", "device_stop",
+                              "original_idle", "original_speech"]),
+        robot_factory=lambda **kwargs: robot,
+        catalog_factory=lambda path, _manifest: ReachyCatalog(path, manifest, move_factory=Move),
+        daemon_factory=lambda *_args, **_kwargs: FakeDaemon(),
+    )
+    source = lambda: None
+    provider.bind_native_speech_source(source)
+    with pytest.raises(RuntimeError, match="cannot be rebound"):
+        provider.bind_native_speech_source(source)
+    async with provider.connected():
+        assert await provider.permitted("original_speech")
+        assert "original_speech" in (await provider.describe()).supported_operations
+    assert robot.closed and not robot.calls
+
+
+@pytest.mark.anyio
 async def test_restricted_reachy_adapter_allows_only_exact_pinned_moves(monkeypatch, tmp_path):
     import importlib.metadata
 
