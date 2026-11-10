@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--robot", default="robot.json")
     parser.add_argument("--breath-period", type=float, default=4.0)
     parser.add_argument("--talk-amplitude-deg", type=float, default=5.0)
-    parser.add_argument("--talk-period", type=float, default=2.4)
+    parser.add_argument("--talk-period", type=float, default=1.6)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 

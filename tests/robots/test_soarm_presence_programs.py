@@ -27,7 +27,7 @@ def test_programs_start_and_end_at_neutral_at_rest_so_loops_have_no_seam():
         assert first == pytest.approx(NEUTRAL) and last == pytest.approx(NEUTRAL)
         # The first and last steps are tiny: zero slope at both ends.
         step = max(abs(a - b) for a, b in zip(program.frames[1].joints_rad, first))
-        assert math.degrees(step) < 0.1
+        assert math.degrees(step) < 0.25
 
 
 def test_breathing_is_slow_and_continuous_with_no_fast_legs():

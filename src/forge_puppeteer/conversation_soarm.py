@@ -158,7 +158,7 @@ def _raised_cosine(t: float, period_s: float, cycles: int = 1) -> float:
 
 def author_presence_programs(
     robot_id, calibration_id, neutral, *, breath_delta_rad, breath_period_s=4.0,
-    talk_amplitude_deg=5.0, talk_period_s=2.4, sample_s=0.05,
+    talk_amplitude_deg=5.0, talk_period_s=1.6, sample_s=0.05,
 ):
     """Author the looping ``idle`` (breathing) and ``speaking`` (talking) programs.
 
