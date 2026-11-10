@@ -153,13 +153,14 @@ def test_stackchan_native_weight_speaking_is_a_distinct_authored_pack():
 # --- config files -> launcher wiring -------------------------------------------------
 
 def _write_room(tmp_path, reachy_options=None, stackchan_options=None, *, reachy_tools=None):
-    from tests.robots.test_ensemble_v4_config import (
-        provider,  # reuse the provider fixtures
-    )
-
-    reachy = provider("reachy", "reachy", tmp_path)
-    reachy["allowed_tools"] = reachy_tools or [*TOOLS, "wake_up", "original_idle", "pose_and_antennas"]
-    stackchan = provider("stackchan", "stackchan", tmp_path)
+    reachy = {"backend": "reachy_sdk", "device": "reachy", "instance_id": "reachy",
+              "allowed_tools": reachy_tools or [*TOOLS, "wake_up", "original_idle", "pose_and_antennas"],
+              "expected_daemon_hardware_id": "reviewed-hardware", "host": "127.0.0.1",
+              "connection_mode": "network", "sdk_version": "1.0",
+              "asset_root": str(tmp_path), "manifest": str(tmp_path / "manifest.json")}
+    stackchan = {"backend": "stackchan_sdk", "device": "stackchan", "instance_id": "stackchan",
+                 "allowed_tools": ["head_move", "face_update", "device_stop"],
+                 "port": "/dev/ttyACM0", "sdk_version": "0.3.0"}
     for kind, body, extra in (("reachy", reachy, reachy_options), ("stackchan", stackchan, stackchan_options)):
         data = {"kind": kind, "id": kind, "provider": body}
         if extra is not None:
