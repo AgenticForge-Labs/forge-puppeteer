@@ -338,3 +338,35 @@ def test_reachy_provider_quarantine_can_be_inspected_and_lifted():
     assert provider.is_quarantined()
     provider.clear_quarantine()
     assert not provider.is_quarantined()
+
+
+async def test_a_held_robot_can_be_moved_to_sleep_during_a_conversation_without_disturbing_the_others():
+    from forge_puppeteer.behavior_contract import EnsemblePresence
+
+    held, active = FakeArm(12.0), FakeArm(0.5)
+    async with room({"held": held, "active": active}) as (gate, ensemble):
+        await gate.check()  # "held" is not at sleep, "active" is
+        await ensemble.observe(_idle_event())  # the conversation starts without the held robot
+        assert ensemble.snapshot()["performers"]["held"]["status"] == "unavailable"
+        assert ensemble.is_idle_held("held") and not ensemble.is_idle_held("active")
+
+        result = await gate.move_to_sleep("held", "sleep-held")
+        assert result["outcome"] == "at_sleep" and result["ready"]
+        assert held.executed == ["go_sleep"] and active.executed == []
+
+        # It joins the conversation at the next presence transition.
+        await ensemble.observe(EnsemblePresence(
+            session_id="s1", event_id="e1", sequence=1, state="listening", source="agent_state"))
+        assert ensemble.snapshot()["performers"]["held"]["status"] != "unavailable"
+
+
+async def test_only_a_held_robot_may_move_during_a_conversation_and_park_stays_refused():
+    arm = FakeArm(20.0)
+    async with room({"arm": arm}) as (gate, ensemble):
+        await ensemble.observe(_idle_event())  # no startup check ran, so nothing is held
+        denied = await gate.move_to_sleep("arm", "sleep-1")
+        assert denied["outcome"] == "denied" and denied["reason"] == "conversation_session_active"
+        await gate.check()  # now held, but park never moves anything mid-conversation
+        parked = await gate.park("end")
+        assert parked["results"]["arm"]["reason"] == "conversation_session_active"
+        assert arm.executed == []

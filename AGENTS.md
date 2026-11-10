@@ -27,7 +27,9 @@ work. Simulation is a quick sanity check, not a qualification process.
      `ensemble_prepare(performer_id, "move_to_sleep", action_id)`. Robots that
      report only commanded positions (StackChan) use `"confirm_at_sleep"`.
      `ensemble_startup_check` re-reads without moving. A SO-ARM sleep move needs
-     `sleep_target` (a `pose_targets` name) in its robot config.
+     `sleep_target` (a `pose_targets` name) in its robot config. A held robot can
+     be answered mid-conversation (it joins at the next presence change);
+     `ensemble_park` only works after the conversation has ended.
 3. **Do the physical work.** If the user asked for physical work in this
    session, that is the authorization. Don't re-ask for each step, action or
    restart, and don't ask for "physical qualification" first. Running it on
