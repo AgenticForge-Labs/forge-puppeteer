@@ -111,6 +111,10 @@ def test_config_readiness_is_read_only_and_cli_does_not_start_room(tmp_path, mon
     assert json.loads(capsys.readouterr().out) == summary
 
 
+def _without_marker(provider):
+    return {k: v for k, v in provider.items() if k != "physical_authority"}
+
+
 @pytest.mark.parametrize("selected", [
     ("reachy",), ("stackchan",), ("soarm101",),
     ("reachy", "stackchan"), ("reachy", "soarm101"),
@@ -119,8 +123,8 @@ def test_config_readiness_is_read_only_and_cli_does_not_start_room(tmp_path, mon
 def test_v4_room_resolves_each_nonempty_robot_subset_and_checks_file_identity(tmp_path, selected):
     data = config_data(tmp_path)
     robot_files = {
-        "reachy": {"kind": "reachy", "id": "reachy", "provider": data["reachy"]},
-        "stackchan": {"kind": "stackchan", "id": "stackchan", "provider": data["stackchan"]},
+        "reachy": {"kind": "reachy", "id": "reachy", "provider": _without_marker(data["reachy"])},
+        "stackchan": {"kind": "stackchan", "id": "stackchan", "provider": _without_marker(data["stackchan"])},
         "soarm101": {"kind": "soarm101", "id": "soarm101", "provider": {
             "instance_id": "soarm101", "mode": "existing_broker",
             "broker_url": "http://127.0.0.1:8765", "token_env": "SOARM_TOKEN",
@@ -133,7 +137,7 @@ def test_v4_room_resolves_each_nonempty_robot_subset_and_checks_file_identity(tm
         refs.append({"kind": kind, "id": kind, "file": name})
     room = {
         "schema_version": 4,
-        "motion_authority": "I_AUTHORIZE_ENSEMBLE_ROBOT_MOTION",
+        "physical": True,
         "robots": refs,
         "action_journal": str(tmp_path / "actions.db"),
         "ownership_db": str(tmp_path / "owners.db"),

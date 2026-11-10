@@ -81,7 +81,7 @@ async def test_installed_soarm_boundaries(tmp_path, scenario):
         provider["pose_targets"] = {target.name: target.revision}
     (tmp_path / "robot.json").write_text(json.dumps({"kind": "soarm101", "id": "arm", "provider": provider}))
     room = {
-        "schema_version": 4, "motion_authority": "I_AUTHORIZE_ENSEMBLE_ROBOT_MOTION",
+        "schema_version": 4, "physical": False,
         "robots": [{"kind": "soarm101", "id": "arm", "file": "robot.json"}],
         "action_journal": str(tmp_path / "actions.db"),
         "ownership_db": str(tmp_path / "owners.db"),

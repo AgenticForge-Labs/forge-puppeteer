@@ -12,7 +12,7 @@ can reject mismatches before constructing a provider.
 ```json
 {
   "schema_version": 4,
-  "motion_authority": "I_AUTHORIZE_ENSEMBLE_ROBOT_MOTION",
+  "physical": true,
   "robots": [
     {"kind": "stackchan", "id": "stage-stackchan", "file": "robots/stackchan.json"}
   ],
@@ -62,9 +62,11 @@ choreography capability. `examples/robots/soarm101/v4-sdk-simulation.json` and
 The simulator and its host watchdog remain SDK-owned. This path does not
 qualify any physical operation.
 
-For owned physical choreography, `operator_established_neutral: true` records the
-operator's explicit prerequisite; it is not a sensor reading or a wake command.
-V4 does not support `wake_to_neutral`. Exact pinned programs may have an
+`physical: true` on the room is the single grant for driving real robots (Reachy,
+StackChan, an SDK physical daemon); `false` is for simulated SO-ARM rooms. There are
+no per-device `I_AUTHORIZE_*` markers. Sessions start at each robot's sleep pose (the
+room checks it and asks; see `AGENTS.md`), so owned physical choreography needs a
+pinned `startup_target_revision` that wakes the arm to neutral. Exact pinned programs may have an
 SDK-policy-bounded duration up to 30 seconds. Normal presence changes are
 admitted promptly and coalesced while the current trusted finite segment
 finishes. Interruptions, disconnect, heartbeat expiry and shutdown use the

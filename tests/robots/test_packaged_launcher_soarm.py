@@ -366,7 +366,7 @@ async def test_soarm_only_v4_stdio_runs_pinned_programs_through_real_sdk_broker(
         room_path = tmp_path / "room.json"
         room_path.write_text(json.dumps({
             "schema_version": 4,
-            "motion_authority": "I_AUTHORIZE_ENSEMBLE_ROBOT_MOTION",
+            "physical": True,
             "robots": [{"kind": "soarm101", "id": "arm", "file": str(robot_path)}],
             "action_journal": str(tmp_path / "actions.sqlite"),
             "ownership_db": str(tmp_path / "ownership.sqlite"),

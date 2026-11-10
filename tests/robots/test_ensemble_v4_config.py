@@ -24,14 +24,12 @@ def provider(kind, ident, tmp_path):
     if kind == "reachy":
         return {"backend": "reachy_sdk", "device": kind, "instance_id": ident,
                 "allowed_tools": ["head_pose", "play_move", "device_stop"],
-                "physical_authority": "I_AUTHORIZE_REACHY_CONTROL",
                 "expected_daemon_hardware_id": "reviewed-hardware",
                 "host": "127.0.0.1", "connection_mode": "network", "sdk_version": "1.0",
                 "asset_root": str(tmp_path), "manifest": str(tmp_path / "manifest.json")}
     if kind == "stackchan":
         return {"backend": "stackchan_sdk", "device": kind, "instance_id": ident,
                 "allowed_tools": ["head_move", "face_update", "device_stop"],
-                "physical_authority": "I_AUTHORIZE_STACKCHAN_CONTROL",
                 "port": "/dev/ttyACM0", "sdk_version": "0.3.0"}
     return {"instance_id": ident, "mode": "existing_broker", "broker_url": "http://127.0.0.1:8765",
             "token_env": "SOARM_TOKEN",
@@ -50,7 +48,7 @@ def test_v4_config_accepts_all_selected_combinations_with_relative_robot_paths(t
         (tmp_path / f"{kind}.json").write_text(json.dumps(
             {"kind": kind, "id": ident, "provider": provider(kind, ident, tmp_path)}))
         refs.append({"kind": kind, "id": ident, "file": f"{kind}.json"})
-    room = {"schema_version": 4, "motion_authority": "I_AUTHORIZE_ENSEMBLE_ROBOT_MOTION",
+    room = {"schema_version": 4, "physical": True,
             "robots": refs, "action_journal": str(tmp_path / "actions.db"),
             "ownership_db": str(tmp_path / "owners.db")}
     if "reachy" in selected:
@@ -65,7 +63,7 @@ def test_v4_rejects_duplicate_kind_id_and_reference_identity_mismatch(tmp_path):
     ref = {"kind": "stackchan", "id": "stage", "file": "robot.json"}
     (tmp_path / "robot.json").write_text(json.dumps(
         {"kind": "stackchan", "id": "stage", "provider": provider("stackchan", "stage", tmp_path)}))
-    room = {"schema_version": 4, "motion_authority": "I_AUTHORIZE_ENSEMBLE_ROBOT_MOTION",
+    room = {"schema_version": 4, "physical": True,
             "robots": [ref, ref], "action_journal": str(tmp_path / "a.db"),
             "ownership_db": str(tmp_path / "o.db")}
     path = tmp_path / "room.json"
@@ -85,7 +83,7 @@ def test_stackchan_only_assembly_uses_one_provider_and_never_imports_soarm(tmp_p
     config = ServerConfig.model_validate(provider("stackchan", "stage", tmp_path))
     room = ensemble_v4.RoomConfigV4.model_validate({
         "schema_version": 4,
-        "motion_authority": "I_AUTHORIZE_ENSEMBLE_ROBOT_MOTION",
+        "physical": True,
         "robots": [{"kind": "stackchan", "id": "stage", "file": "unused"}],
         "action_journal": str(tmp_path / "actions.db"),
         "ownership_db": str(tmp_path / "owners.db"),
@@ -118,7 +116,7 @@ def test_soarm_only_assembly_selects_broker_provider_without_sdk_executor(tmp_pa
 
     room = ensemble_v4.RoomConfigV4.model_validate({
         "schema_version": 4,
-        "motion_authority": "I_AUTHORIZE_ENSEMBLE_ROBOT_MOTION",
+        "physical": True,
         "robots": [{"kind": "soarm101", "id": "arm", "file": "unused"}],
         "action_journal": str(tmp_path / "actions.db"),
         "ownership_db": str(tmp_path / "owners.db"),
@@ -353,7 +351,7 @@ async def test_v4_real_stdio_mcp_simulation_idle_speaking_stop_and_cleanup(tmp_p
     }}))
     room = tmp_path / "room.json"
     room.write_text(json.dumps({"schema_version": 4,
-        "motion_authority": "I_AUTHORIZE_ENSEMBLE_ROBOT_MOTION",
+        "physical": True,
         "robots": [{"kind": "soarm101", "id": "sim-arm", "file": str(robot)}],
         "action_journal": str(tmp_path / "actions.db"),
         "ownership_db": str(tmp_path / "owners.db")}))
@@ -461,7 +459,7 @@ def test_physical_daemon_supervision_uses_private_tokens_and_only_child_sigterm(
         "broker_url": "http://127.0.0.1:9876", "token_env": "UNUSED",
         "trusted_host_token_env": "UNUSED_HOST", "trusted_choreography_catalog": str(catalog),
         "physical_daemon_config": str(daemon_path), "sdk_physical_executable": "/fake/physical-daemon",
-        "operator_established_neutral": True,
+        "startup_target_revision": revision,
         "choreography_revisions": {"idle": revision, "speaking": "sha256:" + "b" * 64},
         "choreography_durations_s": {"idle": 1, "speaking": 1},
         "allowed_tools": ["robot_capabilities", "robot_state", "stop"]})
@@ -499,7 +497,7 @@ def test_physical_daemon_supervision_uses_private_tokens_and_only_child_sigterm(
     assert children[0].signalled == __import__("signal").SIGTERM
 
 
-def test_v4_accepts_long_presence_and_requires_explicit_physical_neutral(tmp_path):
+def test_v4_accepts_long_presence_and_requires_a_wake_to_neutral_target_for_physical(tmp_path):
     from forge_puppeteer.mcp.ensemble_v4 import SOARMBrokerConfig
     base = {"instance_id": "arm", "mode": "sdk_physical_daemon",
         "broker_url": "http://127.0.0.1:9876", "token_env": "TOKEN",
@@ -508,14 +506,15 @@ def test_v4_accepts_long_presence_and_requires_explicit_physical_neutral(tmp_pat
         "choreography_revisions": {"idle": "sha256:" + "a" * 64, "speaking": "sha256:" + "b" * 64},
         "choreography_durations_s": {"idle": 1, "speaking": 1},
         "allowed_tools": ["robot_capabilities", "robot_state", "stop"]}
-    with pytest.raises(ValueError, match="operator_established_neutral"):
+    with pytest.raises(ValueError, match="startup_target_revision"):
         SOARMBrokerConfig.model_validate(base)
-    SOARMBrokerConfig.model_validate({**base, "operator_established_neutral": True,
+    target = {"startup_target_revision": "sha256:" + "c" * 64}
+    SOARMBrokerConfig.model_validate({**base, **target,
         "choreography_durations_s": {"idle": 19, "speaking": 1}})
-    SOARMBrokerConfig.model_validate({**base, "operator_established_neutral": True})
+    SOARMBrokerConfig.model_validate({**base, **target})
 
 
-def test_v4_startup_target_is_explicit_pinned_and_bound():
+def test_v4_startup_target_is_pinned_and_needs_choreography():
     from forge_puppeteer.mcp.ensemble_v4 import SOARMBrokerConfig, _soarm_broker_pack
     pin = 'sha256:' + 'a' * 64
     base = {'instance_id': 'arm', 'mode': 'existing_broker',
@@ -524,11 +523,12 @@ def test_v4_startup_target_is_explicit_pinned_and_bound():
         'choreography_revisions': {'idle': pin, 'speaking': pin},
         'choreography_durations_s': {'idle': 1, 'speaking': 1},
         'startup_target_revision': pin}
-    with pytest.raises(ValueError, match='authorization'):
-        SOARMBrokerConfig.model_validate(base)
-    cfg = SOARMBrokerConfig.model_validate({**base, 'startup_authority': 'I_AUTHORIZE_SOARM101_WAKE_TO_NEUTRAL_STARTUP'})
+    cfg = SOARMBrokerConfig.model_validate(base)
     cue = _soarm_broker_pack(cfg).startup.cues[0]
     assert cue.operation == 'wake_to_neutral' and cue.asset_revision == pin
+    no_programs = {k: v for k, v in base.items() if not k.startswith('choreography')}
+    with pytest.raises(ValueError, match='startup target requires trusted choreography'):
+        SOARMBrokerConfig.model_validate(no_programs)
 
 
 def test_stale_daemon_state_is_cleared_but_running_daemon_blocks(tmp_path, monkeypatch):
@@ -599,3 +599,56 @@ def test_startup_gate_covers_real_robots_and_skips_simulation_or_opt_out(tmp_pat
         skipped = {"soarm101": SimpleNamespace(mode=mode, sleep_check=check,
                                                sleep_target=None, pose_targets={})}
         assert build_startup_gate(room_of("arm"), skipped, Runtime(), Ensemble()) is None
+
+
+def _room_files(tmp_path, kinds, *, physical=True, provider_extra=None):
+    refs = []
+    for kind in kinds:
+        data = provider(kind, f"robot-{kind}", tmp_path)
+        data.update((provider_extra or {}).get(kind, {}))
+        (tmp_path / f"{kind}.json").write_text(json.dumps(
+            {"kind": kind, "id": f"robot-{kind}", "provider": data}))
+        refs.append({"kind": kind, "id": f"robot-{kind}", "file": f"{kind}.json"})
+    room = {"schema_version": 4, "robots": refs,
+            "action_journal": str(tmp_path / "actions.db"), "ownership_db": str(tmp_path / "owners.db")}
+    if physical is not None:
+        room["physical"] = physical
+    if "reachy" in kinds:
+        room["reachy_neutral_head"] = str(tmp_path / "neutral.json")
+    path = tmp_path / "room.json"
+    path.write_text(json.dumps(room))
+    return path
+
+
+@pytest.mark.parametrize("kind", ["reachy", "stackchan"])
+def test_real_robot_rooms_need_physical_true_and_reject_the_old_marker(tmp_path, kind):
+    assert config_readiness(_room_files(tmp_path, [kind]))["performers"] == [f"robot-{kind}"]
+    for physical in (False, None):
+        with pytest.raises(ValueError, match="physical: true"):
+            config_readiness(_room_files(tmp_path, [kind], physical=physical))
+    with pytest.raises(ValueError, match="physical_authority is no longer used"):
+        config_readiness(_room_files(tmp_path, [kind], provider_extra={
+            kind: {"physical_authority": "I_AUTHORIZE_REACHY_CONTROL"}}))
+
+
+def test_old_motion_authority_marker_is_rejected(tmp_path):
+    path = _room_files(tmp_path, ["soarm101"])
+    data = json.loads(path.read_text())
+    data["motion_authority"] = "I_AUTHORIZE_ENSEMBLE_ROBOT_MOTION"
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="motion_authority"):
+        config_readiness(path)
+
+
+def test_sdk_physical_daemon_needs_physical_true(tmp_path):
+    revision = "sha256:" + "a" * 64
+    extra = {"soarm101": {
+        "mode": "sdk_physical_daemon", "trusted_host_token_env": "HOST",
+        "trusted_choreography_catalog": str(tmp_path / "catalog.json"),
+        "physical_daemon_config": str(tmp_path / "daemon.json"),
+        "startup_target_revision": revision,
+        "choreography_revisions": {"idle": revision, "speaking": revision},
+        "choreography_durations_s": {"idle": 1, "speaking": 1}}}
+    with pytest.raises(ValueError, match="needs physical: true"):
+        config_readiness(_room_files(tmp_path, ["soarm101"], physical=False, provider_extra=extra))
+    assert config_readiness(_room_files(tmp_path, ["soarm101"], provider_extra=extra))["performers"]

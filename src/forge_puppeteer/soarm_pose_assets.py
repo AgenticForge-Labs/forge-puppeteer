@@ -297,5 +297,5 @@ def export_v4_candidates(programs: Mapping, *, catalog_template: Mapping,
     if ref.get("kind") != "soarm101" or ref.get("id") != robot["id"]:
         raise ValueError("v4 room and robot identities must match")
     ref["file"] = robot_file
-    room.pop("motion_authority", None)
+    room.pop("physical", None)  # exports never grant physical control
     return catalog, robot, room

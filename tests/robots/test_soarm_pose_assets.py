@@ -166,7 +166,7 @@ def test_v4_export_round_trips_sdk_catalog_without_physical_authority(tmp_path):
         catalog_template={"policy": {"robot_id": "arm", "calibration_id": "cal",
             "allowed_revisions": [], "max_duration_s": 30, "allow_physical_trial": True}, "programs": []},
         robot_template={"kind": "soarm101", "id": "arm", "provider": {"instance_id": "arm"}},
-        room_template={"schema_version": 4, "motion_authority": "old", "robots": [
+        room_template={"schema_version": 4, "physical": True, "robots": [
             {"kind": "soarm101", "id": "arm", "file": "old"}]},
         catalog_file="catalog.json", robot_file="robot.json")
     path = tmp_path / "catalog.json"
@@ -176,6 +176,6 @@ def test_v4_export_round_trips_sdk_catalog_without_physical_authority(tmp_path):
     assert set(loaded) == {"idle", "listening", "speaking", "yes"}
     assert robot["provider"]["choreography_revisions"] == {n: p.revision for n, p in loaded.items()}
     assert robot["provider"]["choreography_durations_s"] == {n: p.frames[-1].at_s for n, p in loaded.items()}
-    assert "motion_authority" not in room
+    assert "physical" not in room
     assert room["robots"][0]["file"] == "robot.json"
     assert programs["breathe"].name == "breathe"

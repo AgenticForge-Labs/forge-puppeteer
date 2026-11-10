@@ -65,9 +65,7 @@ class SOARMBrokerConfig(BaseModel):
     physical_daemon_config: str | None = None
     sdk_physical_executable: str = "soarm101-physical-daemon"
     physical_startup_timeout_s: float = Field(default=10, ge=1, le=60)
-    operator_established_neutral: StrictBool = False
     startup_target_revision: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
-    startup_authority: str | None = None
     # Name of a ``pose_targets`` entry used as the sleep move (e.g. "sleep2").
     sleep_target: str | None = None
     # Compare the pose with the standard sleep pose when the room starts.
@@ -137,17 +135,12 @@ class SOARMBrokerConfig(BaseModel):
             raise ValueError("trusted choreography requires exact revision pins, finite durations, and a separate token env")
         if self.sleep_target is not None and self.sleep_target not in self.pose_targets:
             raise ValueError("sleep_target must name one of the configured pose_targets")
-        if self.startup_target_revision:
-            if not self.choreography_revisions:
-                raise ValueError("startup target requires trusted choreography")
-            if self.mode != "sdk_simulation_daemon" and self.startup_authority != "I_AUTHORIZE_SOARM101_WAKE_TO_NEUTRAL_STARTUP":
-                raise ValueError("physical startup target requires explicit startup authorization")
-            if self.mode == "sdk_simulation_daemon" and self.startup_authority is not None:
-                raise ValueError("startup authority is only valid for physical startup")
-        elif self.startup_authority is not None:
-            raise ValueError("startup authority requires a target")
-        if self.mode == "sdk_physical_daemon" and self.choreography_revisions and not (self.operator_established_neutral or self.startup_target_revision):
-            raise ValueError("v4 physical choreography requires operator_established_neutral or pinned startup target")
+        if self.startup_target_revision and not self.choreography_revisions:
+            raise ValueError("startup target requires trusted choreography")
+        if self.mode == "sdk_physical_daemon" and self.choreography_revisions and not self.startup_target_revision:
+            # Sessions start at sleep (see startup_gate); the arm must wake to neutral
+            # before the idle program, which begins at neutral, can run.
+            raise ValueError("physical choreography requires a pinned startup_target_revision (wake to neutral)")
         if self.mode in {"sdk_simulation_daemon", "sdk_physical_daemon"} and (self.choreography_revisions or self.pose_targets) and (
                 not self.trusted_choreography_catalog or not Path(self.trusted_choreography_catalog).is_absolute()):
             raise ValueError("SDK simulation choreography requires an absolute trusted catalog path")
@@ -161,7 +154,9 @@ class SOARMBrokerConfig(BaseModel):
 class RoomConfigV4(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: Literal[4]
-    motion_authority: Literal["I_AUTHORIZE_ENSEMBLE_ROBOT_MOTION"]
+    # True lets this room drive real robots (Reachy, StackChan, SO-ARM physical daemon).
+    # False is for SDK-simulated SO-ARM rooms.
+    physical: StrictBool = False
     robots: list[RobotReference] = Field(min_length=1, max_length=3)
     action_journal: str
     ownership_db: str
@@ -180,6 +175,8 @@ class RoomConfigV4(BaseModel):
                 raise ValueError("v4 journal and ownership paths must be absolute")
         if Path(self.action_journal).resolve() == Path(self.ownership_db).resolve():
             raise ValueError("v4 journal and ownership paths must be distinct")
+        if not self.physical and any(r.kind in {"reachy", "stackchan"} for r in self.robots):
+            raise ValueError("Reachy and StackChan are real robots: set physical: true on the room")
         if any(r.kind == "reachy" for r in self.robots):
             if not self.reachy_neutral_head or not Path(self.reachy_neutral_head).is_absolute():
                 raise ValueError("v4 Reachy selection requires an absolute neutral pose file")
@@ -202,16 +199,20 @@ def load_v4(path: str | Path) -> tuple[RoomConfigV4, dict[str, object]]:
             config_data = data.get("provider")
             if not isinstance(config_data, dict):
                 raise ValueError("v4 SDK robot file requires provider object")
-            config = ServerConfig.model_validate(config_data)
+            if "physical_authority" in config_data:
+                raise ValueError("physical_authority is no longer used; set physical: true on the room")
+            authority = ("I_AUTHORIZE_REACHY_CONTROL" if ref.kind == "reachy"
+                         else "I_AUTHORIZE_STACKCHAN_CONTROL")
+            # The room's physical flag is the one grant; providers still take the
+            # legacy marker string internally until they move into devices/.
+            config = ServerConfig.model_validate({**config_data, "physical_authority": authority})
             expected = f"{ref.kind}_sdk"
             if config.device != ref.kind or config.backend != expected or config.instance_id != ref.id:
                 raise ValueError(f"v4 {ref.kind} provider identity mismatch")
             required = ({"head_pose", "play_move", "device_stop"} if ref.kind == "reachy"
                         else {"head_move", "face_update", "device_stop"})
-            authority = ("I_AUTHORIZE_REACHY_CONTROL" if ref.kind == "reachy"
-                         else "I_AUTHORIZE_STACKCHAN_CONTROL")
-            if not required <= set(config.allowed_tools) or config.physical_authority != authority:
-                raise ValueError(f"v4 {ref.kind} requires operator authority and core grants")
+            if not required <= set(config.allowed_tools):
+                raise ValueError(f"v4 {ref.kind} requires its core tool grants")
             robots[ref.kind] = config
         else:
             provider_data = dict(data.get("provider") or {})
@@ -226,6 +227,8 @@ def load_v4(path: str | Path) -> tuple[RoomConfigV4, dict[str, object]]:
             config = SOARMBrokerConfig.model_validate(provider_data)
             if config.instance_id != ref.id:
                 raise ValueError("v4 SO-ARM101 provider identity mismatch")
+            if config.mode == "sdk_physical_daemon" and not room.physical:
+                raise ValueError("an SDK physical daemon needs physical: true on the room")
             robots[ref.kind] = config
     return room, robots
 

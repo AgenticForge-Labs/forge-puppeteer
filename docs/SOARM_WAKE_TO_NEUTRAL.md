@@ -3,8 +3,8 @@
 The legacy in-process ensemble supports an opt-in, one-shot SO-ARM101 startup transition to an
 operator-pinned five-joint neutral target. The default is `startup_behavior:
 none`; no target is moved at startup unless the trusted ensemble config selects
-`wake_to_neutral` and pins its exact SHA-256 revision. Physical configuration
-also needs the separate `I_AUTHORIZE_SOARM101_WAKE_TO_NEUTRAL_STARTUP` marker.
+`wake_to_neutral` and pins its exact SHA-256 revision. (Legacy in-process note: the
+v4 room needs only `physical: true`; the old startup marker no longer exists there.)
 This does not enable torque or create a broker, MCP, CLI, or generic agent
 capability.
 

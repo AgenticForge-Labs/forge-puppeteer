@@ -42,12 +42,10 @@ physical daemon and use its authenticated trusted-host choreography route.
 Do not start a direct broker or another room against the same arm concurrently.
 A separately selected direct broker profile retains the SDK's agent permissions
 and lease rules; operator-only choreography mode denies agent state changes.
-V4 accepts either `operator_established_neutral: true` or an exact
-`startup_target_revision` bound to the catalog's `wake_to_neutral` target.
-Physical startup additionally requires
-`startup_authority: I_AUTHORIZE_SOARM101_WAKE_TO_NEUTRAL_STARTUP`.
-The SDK plans the pinned target from measured current positions through the
-same watchdog and STOP authority. Neither option proves physical settling.
+V4 physical choreography needs an exact `startup_target_revision` bound to the
+catalog's `wake_to_neutral` target, with `physical: true` on the room. The room first
+checks the arm is at its sleep pose. The SDK plans the pinned target from measured
+current positions through the same watchdog and STOP authority.
 
 The physical daemon also supports an explicit `operator_choreography_only: true`
 setting in its private physical-daemon config. This mode exposes only health,

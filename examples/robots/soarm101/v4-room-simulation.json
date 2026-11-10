@@ -1,6 +1,6 @@
 {
   "schema_version": 4,
-  "motion_authority": "I_AUTHORIZE_ENSEMBLE_ROBOT_MOTION",
+  "physical": false,
   "robots": [
     {"kind": "soarm101", "id": "soarm-simulation", "file": "v4-sdk-simulation.json"}
   ],
