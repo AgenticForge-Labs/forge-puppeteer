@@ -108,6 +108,9 @@ class ConversationEnsemble:
         self._lock = anyio.Lock()
         self._tasks = None
         self._slots: dict[str, _Slot] = {}
+        # Performers whose presence runs as a live stream (SO-ARM): the state is
+        # passed to the performer's LivePresence instead of switching programs.
+        self._live: dict[str, object] = {}
         self._speech_channels: dict[
             str, tuple[object, float, list | None, object | None]
         ] = {}
@@ -271,6 +274,13 @@ class ConversationEnsemble:
                 preserve_expressions = event.state != "disconnected" and not event.interrupted
                 candidates = tuple(name for name, slot in self._slots.items()
                     if not (preserve_expressions and slot.expression_active))
+                if event.state in {"idle", "listening", "speaking"}:
+                    # A live stream follows a change of presence (even an
+                    # interruption) by changing its motion; nothing is stopped.
+                    following = tuple(n for n in candidates if self._live_following(n))
+                    for n in following:
+                        self._live[n].set_behavior(event.state)
+                    candidates = tuple(n for n in candidates if n not in following)
                 normal = event.state != "disconnected" and not event.interrupted
                 immediate = []
                 for name in candidates:
@@ -487,7 +497,8 @@ class ConversationEnsemble:
         if self._tasks is None:
             return
         scope = anyio.CancelScope()
-        slot = _Slot(scope=scope, behavior="speaking", expression_active=resume)
+        slot = _Slot(scope=scope, behavior="live" if name in self._live else "speaking",
+                     expression_active=resume)
         self._slots[name] = slot
 
         async def wait_then_play() -> None:
@@ -503,6 +514,10 @@ class ConversationEnsemble:
                     await anyio.sleep(0.1)
             if scope.cancel_called:
                 slot.done.set()
+                return
+            if name in self._live:
+                now = self._state if self._state in {"idle", "listening", "speaking"} else "speaking"
+                await self._play_live(name, now, slot, action_id)
                 return
             pattern = self.packs[name].behaviors.get("speaking")
             if pattern is None:
@@ -625,6 +640,14 @@ class ConversationEnsemble:
     ):
         if name in self._blocked or name not in self._owned or self._session is None:
             return
+        if name in self._live and behavior in {"idle", "listening", "speaking"} and pattern_override is None:
+            if behavior == "speaking" and not self.startup_complete(name):
+                self._spawn_deferred_speaking(name, action_id, resume=resume)
+                return
+            slot = _Slot(scope=anyio.CancelScope(), behavior="live", expression_active=resume)
+            self._slots[name] = slot
+            self._tasks.start_soon(self._play_live, name, behavior, slot, action_id)
+            return
         pattern = pattern_override or (
             self.packs[name].startup if behavior == "startup"
             else self.packs[name].behaviors.get(behavior)
@@ -649,6 +672,105 @@ class ConversationEnsemble:
         slot = _Slot(scope=scope, behavior=behavior, expression_active=resume)
         self._slots[name] = slot
         self._tasks.start_soon(self._play, name, behavior, pattern, slot, action_id, resume)
+
+    def bind_live_presence(self, performer_id: str, presence) -> None:
+        """Run this performer's idle/listening/speaking as one live stream (SO-ARM).
+
+        ``presence`` supplies the motion (``set_behavior``, ``close``, ``asset_id``,
+        ``asset_revision``); gestures and the startup/sleep moves stay finite pinned
+        programs and run with the stream closed.
+        """
+        if performer_id not in self.packs:
+            raise ValueError("live presence requires a configured performer")
+        self._live[performer_id] = presence
+
+    def _live_following(self, name: str) -> bool:
+        """True when this performer's running slot is a live stream that can take a new state."""
+        slot = self._slots.get(name)
+        return (name in self._live and slot is not None and slot.behavior == "live"
+                and not slot.cancel_requested and not slot.done.is_set())
+
+    async def _play_live(
+        self, name: str, behavior: str, slot: _Slot, action_id: str,
+    ) -> None:
+        """Keep the performer's live stream open until the slot is asked to finish.
+
+        The stream is one long runtime action. Presence changes only change what
+        the generator outputs; a gesture, the session ending or a STOP sets
+        ``cancel_requested``/cancels, which closes the stream at its centre pose.
+        """
+        live = self._live[name]
+        with slot.scope:
+            try:
+                live.set_behavior(behavior)
+                count = 0
+                while not slot.cancel_requested:
+                    request = ActionRequest(
+                        id=f"{action_id}:{name}:live:{count}",
+                        performer_id=name, caller_id=self.caller_id,
+                        session_id=self._session, operation="live_presence",
+                        parameters={}, cue_id=f"live:{count}",
+                        asset_id=live.asset_id, asset_revision=live.asset_revision,
+                    )
+                    slot.last_action_id = request.id
+                    async with self._dispatch_gate:
+                        if slot.cancel_requested:
+                            break
+                        await self.runtime.submit(request)
+                        slot.pending = True
+                        slot.action_done = anyio.Event()
+                    slot.status = "active"
+                    slot.evidence = "live_presence_stream"
+
+                    async def watch_for_finish() -> None:
+                        # Keep asking: a stream that is still opening resets the flag.
+                        while True:
+                            if slot.cancel_requested:
+                                live.close()
+                            await anyio.sleep(0.05)
+
+                    async with anyio.create_task_group() as watcher:
+                        watcher.start_soon(watch_for_finish)
+                        record = await self.runtime.wait(request.id)
+                        watcher.cancel_scope.cancel()
+                    slot.pending = record.state == ActionState.UNKNOWN
+                    slot.action_done.set()
+                    if record.state != ActionState.COMPLETED:
+                        slot.status = "blocked" if record.state == ActionState.UNKNOWN else "unavailable"
+                        slot.evidence = f"action_{record.state.value}"
+                        return
+                    count += 1
+                slot.status = "completed"
+                slot.evidence = "live_presence_finished"
+            except anyio.get_cancelled_exc_class():
+                slot.status = "cancelling"
+                slot.evidence = "live_presence_cancelled"
+            except ExecutionError as exc:
+                slot.status = "blocked" if (
+                    slot.pending or exc.code == "stop_unconfirmed"
+                ) else "unavailable"
+                slot.evidence = exc.code
+            except Exception:  # noqa: BLE001 - uncertain SDK outcome
+                slot.status = "blocked"
+                slot.evidence = "live_presence_unknown"
+            finally:
+                if slot.pending:
+                    with anyio.CancelScope(shield=True):
+                        try:
+                            with anyio.fail_after(self.stop_timeout_s):
+                                stopped = await self.runtime.stop(name)
+                            if not stopped.confirmed:
+                                slot.status = "blocked"
+                                slot.evidence = "device_stop_unconfirmed"
+                            else:
+                                slot.pending = False
+                        except Exception:  # noqa: BLE001 - unknown STOP
+                            slot.status = "blocked"
+                            slot.evidence = "device_stop_unknown"
+                        slot.action_done.set()
+                if slot.status == "blocked":
+                    self._blocked.add(name)
+                slot.done.set()
 
     def bind_speech_channel(
         self, performer_id: str, channel, *, amplitude: float,
@@ -816,6 +938,12 @@ class ConversationEnsemble:
                             self._spawn_deferred_speaking(
                                 name, resume_id, resume=True,
                             )
+                            return
+                        if name in self._live and self._state in {"idle", "listening", "speaking"}:
+                            # A live stream reopens at the centre pose for whatever
+                            # the conversation is doing now.
+                            await self._retire_slot(name, slot)
+                            self._spawn(name, self._state, f"{action_id}-resume")
                             return
                         if self._state == "speaking" and name in self._speech_channels:
                             # Resume speech through the same reactive channel used

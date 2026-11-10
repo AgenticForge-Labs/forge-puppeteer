@@ -87,6 +87,32 @@ to 30 seconds). Named taught poses are exposed with `pose_targets`;
 `ensemble_park`. `sleep_check: false` turns the startup check off, for a simulated
 broker only. Examples: `examples/robots/soarm101/v4-*.json`.
 
+### Live presence (breathing, listening, audio-synced talking)
+
+Pinned programs each start and end at rest, so presence built from them pauses between
+motions and cannot follow the voice. With a `live_presence` block in the provider, the
+idle, listening and speaking states instead run as one SDK live stream
+(`/v1/trusted/stream/*`): Puppeteer sends small joint *offsets* about 20 times a second and
+the SDK clamps them to an operator-pinned `JointEnvelope` (centre pose plus at most 15° per
+joint, listed under `envelopes` in the trusted catalog), slews them under the pinned speed and
+acceleration limits and writes every sample through its guarded stream. If offsets stop the arm
+returns to the centre; a STOP or watchdog trip ends the stream. Talking nods follow the
+synthesized speech level (`speech_driven: true`; the same generated-audio features Reachy
+uses) and fall back to a gentle rhythm when none arrive. Gestures (`yes`, `no`, `curious`),
+the wake move and the sleep move stay pinned programs: the ensemble closes the stream
+(back to the centre pose), runs the program, and reopens it.
+
+```json
+"live_presence": {
+  "envelope": "presence", "envelope_revision": "sha256:…",
+  "breath_delta_deg": [0, -0.8, 4, -2.1, 0], "max_offset_deg": [0, 6, 6, 6, 6],
+  "breath_period_s": 4.0, "talk_amplitude_deg": 5.0, "speech_driven": true
+}
+```
+
+`scripts/author-soarm-live.py CONFIG_DIR` pins the envelope and adds the block (it needs the
+SDK's Python environment). The old `idle`/`speaking` programs may stay pinned; they are unused.
+
 With `operator_choreography_only: true` in the private daemon config, no agent lease is
 created, agent state changes are denied by the SDK, and only the exact pinned
 choreography runs, through the authenticated trusted-host route.
@@ -112,4 +138,4 @@ Reachy, defaults first:
 | `legacy_speech_fallback` | rhythmic head motion when features go stale (needs `smooth_v2`, classic style) |
 
 StackChan: `speaking_mode` is `legacy_size` or `native_weight`; `speech_driven` is a
-boolean. SO-ARM101 takes no options.
+boolean. SO-ARM101 takes no `options`; its live presence is configured in the provider.

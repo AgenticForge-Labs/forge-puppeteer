@@ -699,3 +699,47 @@ def test_older_schema_versions_point_to_the_migration_script(tmp_path, version):
     path.write_text(json.dumps({"schema_version": version}))
     with pytest.raises(ValueError, match="migrate-room-config"):
         config_readiness(path)
+
+
+def _live_presence_config(tmp_path, **overrides):
+    pin = "sha256:" + "a" * 64
+    base = {
+        "instance_id": "arm", "mode": "sdk_simulation_daemon",
+        "simulation_state_dir": str(tmp_path / "state"), "simulation_port": 8765,
+        "broker_url": "http://127.0.0.1:8765", "token_env": "TOKEN",
+        "trusted_host_token_env": "HOST", "allowed_tools": ["robot_capabilities", "robot_state", "stop"],
+        "trusted_choreography_catalog": str(tmp_path / "catalog.json"),
+        "choreography_revisions": {"yes": pin}, "choreography_durations_s": {"yes": 2.0},
+        "live_presence": {"envelope_revision": "sha256:" + "b" * 64,
+                          "breath_delta_deg": [0, 3, -2, 0, 0],
+                          "max_offset_deg": [0, 6, 6, 6, 6], "speech_driven": True},
+    }
+    return {**base, **overrides}
+
+
+def test_live_presence_replaces_the_looping_presence_programs(tmp_path):
+    from forge_puppeteer.ensemble.build import _soarm_broker_pack
+    from forge_puppeteer.ensemble.config import SOARMBrokerConfig
+
+    config = SOARMBrokerConfig.model_validate(_live_presence_config(tmp_path))
+    assert config.live_presence.settings().envelope == "presence"
+    pack = _soarm_broker_pack(config)
+    assert {s: pack.behaviors[s].mode for s in ("idle", "listening", "speaking")} == {
+        "idle": "hold", "listening": "hold", "speaking": "hold"}
+    assert pack.behaviors["yes"].mode == "once"
+
+
+@pytest.mark.parametrize("change,message", [
+    ({"live_presence": {"envelope_revision": "sha256:" + "b" * 64,
+                        "breath_delta_deg": [0, 7, 0, 0, 0], "max_offset_deg": [0, 6, 6, 6, 6]}},
+     "exceeds the pinned envelope"),
+    ({"live_presence": {"envelope_revision": "sha256:" + "b" * 64,
+                        "breath_delta_deg": [0, 3, 0, 0, 0], "max_offset_deg": [0, 6, 6, 20, 6]}},
+     "within 0..15"),
+    ({"trusted_host_token_env": None}, "separate token env"),
+])
+def test_live_presence_must_fit_its_pinned_envelope_and_be_trusted(tmp_path, change, message):
+    from forge_puppeteer.ensemble.config import SOARMBrokerConfig
+
+    with pytest.raises(ValueError, match=message):
+        SOARMBrokerConfig.model_validate(_live_presence_config(tmp_path, **change))

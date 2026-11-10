@@ -53,6 +53,8 @@ def build_ensemble(room: EnsembleConfig, robots: dict[str, object],
     connected_contexts = []
     private_tokens = private_tokens or {}
     reachy = None
+    live_presences: dict[str, object] = {}
+    speech_driven: list[str] = []
     for ref in room.robots:
         config = robots[ref.kind]
         if ref.kind == "reachy":
@@ -72,7 +74,14 @@ def build_ensemble(room: EnsembleConfig, robots: dict[str, object],
             token = private_tokens.get(config.instance_id, (os.environ.get(config.token_env, ""), None))[0]
             session = SOARM101BrokerHTTP(config.broker_url, token)
             trusted = None
-            if config.choreography_revisions or config.pose_targets:
+            live_presence = None
+            if config.live_presence is not None:
+                from ..soarm_live import LivePresence
+                live_presence = LivePresence(config.live_presence.settings())
+                live_presences[ref.id] = live_presence
+                if config.live_presence.speech_driven:
+                    speech_driven.append(ref.id)
+            if config.choreography_revisions or config.pose_targets or live_presence:
                 from ..devices.soarm101_trusted_http import (
                     SOARM101TrustedChoreographyHTTP,
                 )
@@ -81,7 +90,7 @@ def build_ensemble(room: EnsembleConfig, robots: dict[str, object],
                     config.broker_url, trusted_token, config.choreography_revisions,
                     durations_s=config.choreography_durations_s,
                     startup_target_revision=config.startup_target_revision,
-                    pose_targets=config.pose_targets)
+                    pose_targets=config.pose_targets, live_presence=live_presence)
             provider = SOARM101Provider(config.instance_id, session,
                                         allowed_tools=frozenset(config.allowed_tools),
                                         trusted_choreography=trusted)
@@ -108,7 +117,6 @@ def build_ensemble(room: EnsembleConfig, robots: dict[str, object],
         return behavior, neutral
 
     resolved = anyio.run(resolve_reachy_pack) if reachy is not None else None
-    speech_driven: list[str] = []
     if resolved is not None:
         behavior, neutral = resolved
         reachy_id = reachy.config.instance_id
@@ -126,6 +134,8 @@ def build_ensemble(room: EnsembleConfig, robots: dict[str, object],
             speech_driven.append(ref.id)
     if speech_driven:
         server_kwargs["speech_driven_performers"] = tuple(speech_driven)
+    if live_presences:
+        server_kwargs["live_presences"] = live_presences
 
     @asynccontextmanager
     async def connected():
@@ -347,9 +357,14 @@ def start_owned_physical(config: SOARMBrokerConfig) -> tuple[tuple[str, str | No
 def _soarm_broker_pack(config: SOARMBrokerConfig) -> PerformerBehaviors:
     """Bind optional presence semantics to exact private-host catalog pins."""
     from ..behavior_contract import BehaviorCue, BehaviorPattern
+    live = config.live_presence is not None
     if config.choreography_revisions:
         patterns = {}
         for state in ("idle", "listening", "speaking"):
+            if live:
+                # The live stream supplies the presence motion; the pack only lists the states.
+                patterns[state] = BehaviorPattern(source="procedural", mode="hold", cues=())
+                continue
             name = state if state in config.choreography_revisions else "idle"
             cue = BehaviorCue(at_s=0, operation="play_choreography", parameters={},
                 asset_id=f"soarm101/choreography/{name}",

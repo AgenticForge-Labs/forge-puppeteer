@@ -35,6 +35,42 @@ class RobotReference(BaseModel):
     file: str = Field(min_length=1)
 
 
+class LivePresenceConfig(BaseModel):
+    """Breathing, listening and talking as a bounded live stream (SDK trusted-host route).
+
+    ``envelope`` and ``envelope_revision`` pin the SDK ``JointEnvelope`` (centre pose and
+    per-joint range) the operator reviewed. The motion below must fit inside it.
+    """
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    envelope: str = Field(default="presence", pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+    envelope_revision: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    breath_delta_deg: tuple[float, float, float, float, float]
+    max_offset_deg: tuple[float, float, float, float, float]
+    breath_period_s: float = Field(default=4.0, ge=1, le=8)
+    talk_amplitude_deg: float = Field(default=5.0, gt=0, le=10)
+    #: Follow the synthesized speech level (needs Conversationalist to send features).
+    speech_driven: StrictBool = False
+
+    @model_validator(mode="after")
+    def fits_envelope(self):
+        self.settings()
+        return self
+
+    def settings(self):
+        import math
+
+        from ..soarm_live import LivePresenceSettings
+        if any(not math.isfinite(v) for v in (*self.breath_delta_deg, *self.max_offset_deg)) or any(
+                not 0 <= v <= 15 for v in self.max_offset_deg):
+            raise ValueError("live presence offsets must be finite and within 0..15 degrees")
+        return LivePresenceSettings(
+            self.envelope, self.envelope_revision,
+            tuple(math.radians(v) for v in self.breath_delta_deg),
+            tuple(math.radians(v) for v in self.max_offset_deg),
+            breath_period_s=self.breath_period_s,
+            talk_amplitude_rad=math.radians(self.talk_amplitude_deg))
+
+
 class SOARMBrokerConfig(BaseModel):
     """SDK-owned simulation daemon or explicitly selected existing broker."""
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -62,6 +98,7 @@ class SOARMBrokerConfig(BaseModel):
     # Compare the pose with the standard sleep pose when the room starts.
     # Turn off only for a simulated broker, which has no physical sleep position.
     sleep_check: bool = True
+    live_presence: LivePresenceConfig | None = None
 
     @field_validator("choreography_durations_s", mode="before")
     @classmethod
@@ -117,7 +154,8 @@ class SOARMBrokerConfig(BaseModel):
             raise ValueError("pose targets require unique finite names, exact pins and trusted-host binding")
         if (self.choreography_revisions and
                 (not self.trusted_host_token_env
-                 or not {"idle", "speaking"} <= set(self.choreography_revisions)
+                 or (not {"idle", "speaking"} <= set(self.choreography_revisions)
+                     and self.live_presence is None)
                  or set(self.choreography_revisions) - presence_names - expression_names
                  or set(self.choreography_durations_s) != set(self.choreography_revisions)
                  or any(not 0.2 <= v <= 30 for v in self.choreography_durations_s.values())
@@ -126,6 +164,13 @@ class SOARMBrokerConfig(BaseModel):
             raise ValueError("trusted choreography requires exact revision pins, finite durations, and a separate token env")
         if self.sleep_target is not None and self.sleep_target not in self.pose_targets:
             raise ValueError("sleep_target must name one of the configured pose_targets")
+        if self.live_presence is not None and (
+                not self.trusted_host_token_env
+                or self.mode not in {"sdk_simulation_daemon", "sdk_physical_daemon"}
+                or not self.trusted_choreography_catalog):
+            raise ValueError("live presence needs an SDK-owned daemon, its trusted catalog and a trusted-host token")
+        if self.live_presence is not None and not self.choreography_revisions and not self.pose_targets:
+            raise ValueError("live presence also needs the pinned wake and gesture programs")
         if self.startup_target_revision and not self.choreography_revisions:
             raise ValueError("startup target requires trusted choreography")
         if self.mode == "sdk_physical_daemon" and self.choreography_revisions and not self.startup_target_revision:

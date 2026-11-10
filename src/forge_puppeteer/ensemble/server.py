@@ -37,6 +37,7 @@ def create_ensemble_server(
     speech_seeds: Mapping[str, int] | None = None,
     speech_dynamics: Mapping[str, str] | None = None,
     speech_fallbacks: Mapping[str, BehaviorPattern] | None = None,
+    live_presences: Mapping[str, object] | None = None,
     stackchan_performer_id: str | None = "stackchan",
     startup_settle_s: float = 0.0,
     startup_gate: StartupGate | None = None,
@@ -82,7 +83,15 @@ def create_ensemble_server(
                 "sequence": latest.sequence, "mouth": latest.mouth,
             }
 
-    for performer in sorted(speech_driven):
+    live_presences = dict(live_presences or {})
+    if not set(live_presences) <= set(ensemble.packs):
+        raise ValueError("live presences must be configured performers")
+    for performer, presence in sorted(live_presences.items()):
+        ensemble.bind_live_presence(performer, presence)
+        if performer in speech_driven:
+            # The live generator reads the same unitless speech window directly.
+            presence.speech = _WindowChannel(performer)
+    for performer in sorted(speech_driven - set(live_presences)):
         if performer == stackchan_performer_id and (
             (speech_dynamics or {}).get(performer) == "smoothed_v1"
         ):
