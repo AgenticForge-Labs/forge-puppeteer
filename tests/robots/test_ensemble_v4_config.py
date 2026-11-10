@@ -99,7 +99,7 @@ def test_stackchan_only_assembly_uses_one_provider_and_never_imports_soarm(tmp_p
 
     monkeypatch.setattr(launcher, "StackChanSDKProvider", FakeProvider)
     before = "soarm101_motion.broker_sdk" in sys.modules
-    runtime, packs, connected = ensemble_v4.build_v4(room, {"stackchan": config})
+    runtime, packs, connected, _extras = ensemble_v4.build_v4(room, {"stackchan": config})
     assert set(runtime._providers) == {"stage"}
     assert [pack.performer_id for pack in packs] == ["stage"]
     assert ("soarm101_motion.broker_sdk" in sys.modules) == before
@@ -132,7 +132,7 @@ def test_soarm_only_assembly_selects_broker_provider_without_sdk_executor(tmp_pa
         yield
 
     monkeypatch.setenv("SOARM_TOKEN", "software-test-token")
-    runtime, packs, _connect = ensemble_v4.build_v4(room, {"soarm101": config})
+    runtime, packs, _connect, _extras = ensemble_v4.build_v4(room, {"soarm101": config})
     assert set(runtime._providers) == {"arm"}
     assert len(packs) == 1
     assert set(packs[0].behaviors) == {"idle", "listening", "speaking"}

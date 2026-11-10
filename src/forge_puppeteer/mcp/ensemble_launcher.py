@@ -628,7 +628,7 @@ def config_readiness(path: str | Path) -> dict[str, object]:
     """
     config = load_config(path)
     if isinstance(config, tuple):
-        room, _robots = config
+        room, _robots, _options = config
         return {
             "configuration": "valid", "schema_version": 4,
             "performers": [robot.id for robot in room.robots],
@@ -683,7 +683,7 @@ def serve(config_path: str | Path) -> None:
             start_owned_physical,
             start_owned_simulation,
         )
-        room, robots = config
+        room, robots, options = config
         owned_cleanup = None
         private_tokens = {}
         try:
@@ -695,12 +695,14 @@ def serve(config_path: str | Path) -> None:
                 elif ref.kind == "soarm101" and broker.mode == "sdk_physical_daemon":
                     (token, trusted_token), owned_cleanup = start_owned_physical(broker)
                     private_tokens[broker.instance_id] = (token, trusted_token)
-            runtime, packs, connected = build_v4(room, robots, private_tokens)
+            runtime, packs, connected, extras = build_v4(room, robots, private_tokens, options)
             ensemble = ConversationEnsemble(runtime, packs, presence_ttl_s=room.presence_ttl_s,
-                                            stop_timeout_s=room.stop_timeout_s)
+                                            stop_timeout_s=room.stop_timeout_s,
+                                            motion_patterns=extras.motion_patterns)
             create_ensemble_server(runtime, ensemble, connected=connected, motion_enabled=True,
                                    startup_gate=build_startup_gate(room, robots, runtime, ensemble),
-                                   stackchan_performer_id=next((r.id for r in room.robots if r.kind == "stackchan"), None)).run(transport="stdio")
+                                   stackchan_performer_id=next((r.id for r in room.robots if r.kind == "stackchan"), None),
+                                   **extras.server_kwargs).run(transport="stdio")
         finally:
             if owned_cleanup is not None:
                 owned_cleanup()

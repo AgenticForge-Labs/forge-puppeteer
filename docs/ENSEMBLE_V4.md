@@ -74,3 +74,32 @@ existing STOP path. Runtime execution has a duration plus five second deadline;
 a timeout has an unknown outcome and requires STOP and reconciliation.
 Authored segments are never retimed automatically. SDK completion does not
 establish physical settling.
+
+## Reachy and StackChan behavior options
+
+A Reachy or StackChan robot file may carry an `options` object next to `provider`.
+Options choose how the standard behaviors are authored and which opt-in motion
+variants run; they never grant device access (that is `physical: true` plus the
+provider's tool grants). Only the options in current use are supported.
+
+Reachy (`options` in `reachy.json`), defaults first:
+
+| Option | Values |
+|---|---|
+| `expression_style` | `classic`, `expressive` |
+| `startup_behavior` | `none`, `wake_up_if_sleeping` (needs the `wake_up` grant) |
+| `listening_mode`, `listening_tilt_rad` | `tilt` or `hold`; tilt 0-0.07 rad |
+| `speaking_axis`, `speaking_amplitude_rad` | `yaw` or `tilt`; 0-0.07 rad |
+| `expressive_amplitude_rad`, `antenna_sway_rad`, `breath_amplitude_m` | 0-0.12 rad, 0-0.26 rad, 0-0.005 m |
+| `neutral_antennas_rad` | `[left, right]`; required for expressive motion |
+| `idle` | `default`, `original_v1` (needs the `original_idle` grant and an identity neutral head) |
+| `speaking` | `default`, `smooth_v2` (needs `speech_driven: true` and the `pose_and_antennas` grant) |
+| `speech_driven` | motion follows the audio-envelope features |
+| `legacy_speech_fallback` | rhythmic head motion when features go stale (needs `smooth_v2`, classic style) |
+
+StackChan (`options` in `stackchan.json`): `speaking_mode` is `legacy_size` or
+`native_weight`; `speech_driven` is a boolean. SO-ARM101 takes no options.
+
+To convert an old v2 (Reachy) or v3 (Reachy + StackChan) config, run
+`python scripts/migrate-room-config.py OLD.json OUT_DIR`. It writes new files, never
+overwrites, and stops with a message on any option v4 no longer supports.
