@@ -170,7 +170,7 @@ class StartupGate:
             return {"outcome": "denied", "reason": exc.code, **self.snapshot()}
         if record.state != ActionState.COMPLETED:
             return {"outcome": "failed", "state": str(record.state), "error": record.error,
-                    "hint": "Not retrying. Check the robot, then re-check or reconcile.", **self.snapshot()}
+                    "hint": "Not retrying. Check the robot, then re-check, or call ensemble_recover once it rests.", **self.snapshot()}
         entry = await self._read(performer_id)
         return {"outcome": "at_sleep" if entry["status"] in OPEN_STATUSES else "not_at_sleep_after_move",
                 **self.snapshot()}

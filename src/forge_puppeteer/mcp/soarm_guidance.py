@@ -1,7 +1,7 @@
 """SO-ARM guidance owned by Puppeteer after SDK MCP migration.
 
-These are semantic instructions only. They never authorize a robot action and
-must not duplicate the broker's dynamic state/capability source of truth.
+Semantic instructions only. They must not duplicate the broker's dynamic
+state/capability source of truth; the broker enforces its own limits and lease.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 GUIDANCE_SCHEMA_VERSION = 1
 
 # Sent in MCP initialization. Host support varies, so repository AGENTS.md
-# reinforces the same preference for Codex without changing broker authority.
+# carries the same working rules for Codex and Claude Code.
 SERVER_INSTRUCTIONS = """For live SO-ARM101 robot tasks, use the connected soarm101 MCP tools
 by default for current state, capabilities, permitted cameras, saved poses, Sleep,
 and bounded movement. Do not require the user to say "use MCP".
@@ -17,12 +17,14 @@ For live images call capture_camera and inspect its fresh returned pixels.
 Do not infer camera availability from local /dev/video* discovery, use the host
 camera CLI instead, or bypass the MCP broker when it denies a capability.
 Read robot_capabilities and robot_state for dynamic configuration and authority.
-Only request motion when the user asks and the broker permits it. Autonomous
-agent motion additionally requires the human-issued lease. Operator-only
-choreography mode has no agent lease and permits motion only through its
-separate authenticated trusted-host choreography route; read-only broker
-discovery never authorizes motion. Never arm, calibrate, or override safety
-through shell.
+When the user asks for physical work, that request is the authorization: do the
+work and do not ask again for every step. The broker still enforces its own
+limits, and autonomous agent motion also needs the human-issued lease.
+Operator-only choreography mode has no agent lease and moves only through its
+separate authenticated trusted-host route. Do not arm, calibrate, or override
+broker safety through shell. Start and end at the sleep pose: read robot_state
+and compare it with the saved sleep pose (within about 5 degrees is fine;
+otherwise report the joint deltas and ask).
 If a tool or camera is unavailable, report the restriction instead of falling
 back to host hardware commands. Normal SDK CLI use remains appropriate for
 explicit software development, testing, and operator-led diagnostics.
@@ -34,8 +36,10 @@ Treat robot_capabilities and robot_state as authoritative runtime evidence.
 The MCP server is a client of the authenticated broker; it does not grant
 authority, calibration, or unrestricted robot access.
 
-Use an observe -> decide -> smallest useful bounded action -> re-observe loop.
-Do not infer physical success from a requested action alone. When success is
+Use an observe -> decide -> bounded action -> re-observe loop. Simulate once when
+you changed motion code, then use the real robot; extra simulation rounds are not
+needed unless something failed. Do not infer physical success from a requested
+action alone. When success is
 visually defined, acquire a fresh permitted camera image and inspect its pixels.
 
 For human workspace directions, read robot_capabilities.world_directions.
@@ -89,14 +93,26 @@ On an action error, preserve the broker's reason and classify the next step:
 - workspace/path/joint safety rejection: do not route around the guard;
 - stale or uncertain scene state: acquire fresh state/camera evidence;
 - ambiguous coordinate direction: reread calibrated world_directions;
-- repeated/no-progress motion: STOP/HOLD and report the residual uncertainty.
+- repeated/no-progress motion: STOP/HOLD and report what you saw. Do not retry the
+  same motion in a loop.
 
 Never arm, calibrate, relax torque, write servo registers, or access host
 devices through an alternate path.
 """
 
+SESSION_GUIDANCE = """# Session start and end
+
+1. Read robot_state and compare the arm joints with the saved sleep pose
+   (`sleep2`). Within about 5 degrees on every joint: proceed without asking.
+   Otherwise report the per-joint differences and ask whether to move to sleep.
+2. Do the work the user asked for.
+3. End by moving to sleep (the broker's sleep tool) and read robot_state again to
+   confirm. If the move fails, stop and report the actual error; do not retry.
+"""
+
 GUIDANCE_RESOURCES = {
     "core": CORE_GUIDANCE,
+    "session": SESSION_GUIDANCE,
     "coordinates": COORDINATE_GUIDANCE,
     "joints": JOINT_GUIDANCE,
     "vision": VISUAL_GUIDANCE,
@@ -120,10 +136,10 @@ def task_prompt(task: str, strategy: str = "auto") -> str:
     return f"""Perform this SO-ARM101 task: {task}
 
 {strategy_text}
-Before acting, read the MCP guidance resource soarm101://guidance/core plus
-soarm101://guidance/coordinates or soarm101://guidance/joints when relevant.
-Read robot_capabilities and robot_state. Respect the broker's active profile
-and human authority state. Use the smallest useful action, re-observe after
-consequential changes, and do not claim visible completion without fresh
-visual evidence.
+Before acting, read the MCP guidance resources soarm101://guidance/core and
+soarm101://guidance/session, plus soarm101://guidance/coordinates or
+soarm101://guidance/joints when relevant. Read robot_capabilities and robot_state.
+Respect the broker's active profile and human authority state. Re-observe after
+consequential changes, and do not claim visible completion without fresh visual
+evidence.
 """
