@@ -68,11 +68,11 @@ def test_unrecorded_pose_needs_confirmation():
 
 
 def test_reachy_neutral_is_sdk_wake_up_end_pose():
-    from reachy_mini.reachy_mini import INIT_ANTENNAS_JOINT_POSITIONS
     init_head = [6.959852054044218e-07, 0.5251518455536499, -0.668710345667336,
                  0.6067086443974802, -0.606711497194891, 0.6687148024583701,
                  -0.5251586523105128]  # SDK goto_sleep() init_positions
-    measured = reachy_measured_pose(init_head, INIT_ANTENNAS_JOINT_POSITIONS)
+    init_antennas = [-0.1745, 0.1745]  # SDK INIT_ANTENNAS_JOINT_POSITIONS (about 10 degrees)
+    measured = reachy_measured_pose(init_head, init_antennas)
     check = pose_check(measured, load_standard_poses("reachy", override_dir=None), "neutral")
     assert check.ok and abs(check.worst_delta_deg) < 0.1
 
