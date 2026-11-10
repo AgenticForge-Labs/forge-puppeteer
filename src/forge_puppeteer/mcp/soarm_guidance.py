@@ -17,8 +17,12 @@ For live images call capture_camera and inspect its fresh returned pixels.
 Do not infer camera availability from local /dev/video* discovery, use the host
 camera CLI instead, or bypass the MCP broker when it denies a capability.
 Read robot_capabilities and robot_state for dynamic configuration and authority.
-Only request motion when the user asks, the human-issued lease is active, and
-the broker permits it. Never arm, calibrate, or override safety through shell.
+Only request motion when the user asks and the broker permits it. Autonomous
+agent motion additionally requires the human-issued lease. Operator-only
+choreography mode has no agent lease and permits motion only through its
+separate authenticated trusted-host choreography route; read-only broker
+discovery never authorizes motion. Never arm, calibrate, or override safety
+through shell.
 If a tool or camera is unavailable, report the restriction instead of falling
 back to host hardware commands. Normal SDK CLI use remains appropriate for
 explicit software development, testing, and operator-led diagnostics.

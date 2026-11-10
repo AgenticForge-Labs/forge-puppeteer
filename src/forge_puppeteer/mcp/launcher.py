@@ -637,8 +637,18 @@ def create_execution(config: ServerConfig):
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="forge-puppeteer-mcp")
     parser.add_argument("--config", required=True, help="trusted operator JSON server configuration")
+    parser.add_argument("--check-config", action="store_true", help="validate a SO-ARM broker configuration without connecting")
     args = parser.parse_args(argv)
     try:
+        if args.check_config:
+            config = load_config(args.config)
+            if config.backend != "soarm101_broker" or config.device != "soarm101":
+                raise ValueError("static direct preflight supports only SO-ARM broker configurations")
+            BrokerProvider(config)
+            print(json.dumps({"outcome": "static_config_valid", "simulation_only": config.simulation_only,
+                              "allowed_tools": config.allowed_tools, "connections_opened": False,
+                              "live_authority_verified": False, "physical_motion_dispatched": False}))
+            return 0
         serve(args.config)
     except (OSError, RuntimeError, ValueError) as exc:
         parser.error(str(exc))

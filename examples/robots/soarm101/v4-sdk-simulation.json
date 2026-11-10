@@ -1,0 +1,27 @@
+{
+  "kind": "soarm101",
+  "id": "soarm-simulation",
+  "provider": {
+    "instance_id": "soarm-simulation",
+    "mode": "sdk_simulation_daemon",
+    "broker_url": "http://127.0.0.1:8765",
+    "simulation_state_dir": "/tmp/puppeteer-soarm-simulation",
+    "simulation_port": 8765,
+    "token_env": "PUPPETEER_SOARM_SIM_TOKEN",
+    "trusted_host_token_env": "PUPPETEER_SOARM_SIM_HOST_TOKEN",
+    "choreography_revisions": {
+      "idle": "sha256:5060947acf6c551a5721b2b6b9ace1fa52bc6f7fdde1aa1fef5bde5b89ca06f7",
+      "speaking": "sha256:46edbb4e38187fc8e8dd2dd1d016865215216a2f1d57e5c9561cfbfd76a0d917"
+    },
+    "choreography_durations_s": {
+      "idle": 0.3,
+      "speaking": 0.3
+    },
+    "trusted_choreography_catalog": "v4-trusted-choreography.json",
+    "allowed_tools": [
+      "robot_capabilities",
+      "robot_state",
+      "stop"
+    ]
+  }
+}

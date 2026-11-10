@@ -46,6 +46,8 @@ class _Slot:
     # Set at the start of a transition stop, before the scope is cancelled,
     # so a speech slot can finish between targets instead of mid-dispatch.
     cancel_requested: bool = False
+    deferred_transition: bool = False
+    queued_expression: tuple[str, str, BehaviorPattern | None] | None = None
 
 
 def _tenths(value: float) -> int:
@@ -222,7 +224,13 @@ class ConversationEnsemble:
                         behavior for behavior in ("idle", "listening", "speaking")
                         if behavior in self.packs[name].behaviors
                     ),
+                    "semantic_intents": sorted(
+                        behavior for behavior, pattern in self.packs[name].behaviors.items()
+                        if pattern.mode == "once"
+                        and behavior not in {"idle", "listening", "speaking", "disconnected"}
+                    ),
                     "startup_behavior": self.packs[name].startup is not None,
+                    "startup_configured": self.packs[name].startup is not None,
                     "startup_pending": name in self._startup_pending,
                 }
                 for name in self.packs
@@ -267,13 +275,23 @@ class ConversationEnsemble:
                     not event.interrupted and previous in {"idle", "speaking"}
                     and event.state in {"idle", "speaking"}
                 )
-                await self._stop_slots(
-                    tuple(name for name, slot in self._slots.items()
-                          if not (preserve_expressions and slot.expression_active)
-                          and not (preserve_continuous and name in self._continuous_presence
-                                   and slot.behavior in {"idle", "speaking"})),
-                    graceful=event.state != "disconnected" and not event.interrupted,
-                )
+                candidates = tuple(name for name, slot in self._slots.items()
+                    if not (preserve_expressions and slot.expression_active)
+                    and not (preserve_continuous and name in self._continuous_presence
+                             and slot.behavior in {"idle", "speaking"}))
+                normal = event.state != "disconnected" and not event.interrupted
+                immediate = []
+                for name in candidates:
+                    slot = self._slots[name]
+                    provider = self.runtime._provider(name)
+                    if normal and slot.pending and getattr(provider, "defer_normal_transition", False):
+                        slot.cancel_requested = True
+                        if not slot.deferred_transition:
+                            slot.deferred_transition = True
+                            self._tasks.start_soon(self._finish_deferred_transition, name, slot)
+                    else:
+                        immediate.append(name)
+                await self._stop_slots(tuple(immediate), graceful=normal)
             if event.state == "disconnected":
                 self._release_owners()
                 self._session = None
@@ -281,7 +299,11 @@ class ConversationEnsemble:
                 # Exclusive runtime ownership prevents an automatic device-wide
                 # STOP from interrupting an unrelated manipulation controller.
                 # A busy performer is skipped, not stopped or auto-retired.
-                for name in self.packs:
+                # An explicit interruption is an urgent stop boundary. Do not
+                # immediately restart the presence behavior from the same
+                # event after stopping an in-flight expression; a later
+                # admitted presence transition may start it again.
+                for name in (() if event.interrupted else self.packs):
                     newly_owned = self._acquire_owner(name)
                     if name in self._owned and (transition or newly_owned) and name not in self._slots:
                         if name in self._startup_pending:
@@ -309,6 +331,7 @@ class ConversationEnsemble:
         *,
         action_id: str,
         performer_ids: tuple[str, ...] | None = None,
+        timing_scale: float = 1.0,
     ) -> dict[str, object]:
         """One-shot named cue; preempts ambient loops and then resumes presence.
 
@@ -317,6 +340,9 @@ class ConversationEnsemble:
         """
         if not expression or not action_id or len(action_id) > 128:
             raise ValueError("expression and bounded action ID required")
+        if (isinstance(timing_scale, bool) or not isinstance(timing_scale, (int, float))
+                or not 1.0 <= timing_scale <= 2.0):
+            raise ValueError("timing_scale must be within [1.0, 2.0]")
         async with self._lock:
             if self._tasks is None or self._session is None or self._state == "disconnected":
                 return {"outcome": "denied", "reason": "no_active_conversation", **self.snapshot()}
@@ -335,7 +361,46 @@ class ConversationEnsemble:
                 return {"outcome": "unsupported", "reason": "unmapped_expression", **self.snapshot()}
             if any(self.packs[n].behaviors[expression].mode != "once" for n in names):
                 return {"outcome": "denied", "reason": "expression_must_be_finite", **self.snapshot()}
-            await self._stop_slots(names, graceful=True)
+            if any(self._slots.get(n) is not None and self._slots[n].queued_expression is not None for n in names):
+                return {"outcome": "denied", "reason": "expression_already_pending", **self.snapshot()}
+            scaled_patterns: dict[str, BehaviorPattern] = {}
+            if timing_scale != 1.0:
+                # Timing is a semantic multiplier. Every selected provider must
+                # accept and preflight it before ambient motion is interrupted.
+                for name in names:
+                    pattern = self.packs[name].behaviors[expression]
+                    cues = tuple(cue.model_copy(update={
+                        "parameters": {**cue.parameters, "timing_scale": float(timing_scale)},
+                    }) for cue in pattern.cues)
+                    candidate = pattern.model_copy(update={"cues": cues})
+                    scaled_patterns[name] = candidate
+                    try:
+                        provider = self.runtime._provider(name)
+                        for index, cue in enumerate(cues):
+                            await provider.validate(ActionRequest(
+                                id=f"{action_id}:{name}:preflight:{index}",
+                                performer_id=name, caller_id=self.caller_id,
+                                session_id=self._session, operation=cue.operation,
+                                parameters=dict(cue.parameters), cue_id=f"{expression}:preflight:{index}",
+                                asset_id=cue.asset_id, asset_revision=cue.asset_revision,
+                            ))
+                    except (TypeError, ValueError, RuntimeError, PermissionError):
+                        return {"outcome": "unsupported", "reason": "timing_preflight_denied", **self.snapshot()}
+            # The same finite-segment transition contract applies to gestures.
+            # Keep a single pending expression in the existing owned slot;
+            # urgent cancellation discards it together with the slot.
+            deferred = []
+            for name in names:
+                slot = self._slots.get(name)
+                if (slot is not None and slot.pending
+                        and getattr(self.runtime._provider(name), "defer_normal_transition", False)):
+                    slot.cancel_requested = True
+                    slot.queued_expression = (expression, action_id, scaled_patterns.get(name))
+                    deferred.append(name)
+                    if not slot.deferred_transition:
+                        slot.deferred_transition = True
+                        self._tasks.start_soon(self._finish_deferred_transition, name, slot)
+            await self._stop_slots(tuple(n for n in names if n not in deferred), graceful=True)
             if any(n in self._blocked for n in names):
                 return {"outcome": "denied", "reason": "unconfirmed_prior_stop", **self.snapshot()}
             self._gesture_ids.add(action_id)
@@ -343,7 +408,12 @@ class ConversationEnsemble:
             if len(self._gesture_order) > 256:
                 self._gesture_ids.discard(self._gesture_order.popleft())
             for name in names:
-                self._spawn(name, expression, action_id, resume=True)
+                if name in deferred:
+                    continue
+                self._spawn(
+                    name, expression, action_id, resume=True,
+                    pattern_override=scaled_patterns.get(name),
+                )
             return {"outcome": "accepted", **self.snapshot()}
 
     async def present(
@@ -485,8 +555,10 @@ class ConversationEnsemble:
         if self._session is None:
             return
         for name in tuple(self._owned):
-            if name in self._blocked:
-                continue  # Preserve authority/quarantine until deliberate reconciliation.
+            # A blocked performer stays blocked in this coordinator. The
+            # runtime independently refuses release while an action or an
+            # unconfirmed STOP still reserves ownership; after confirmed STOP
+            # it can release an idle owner without rearming the performer.
             try:
                 self.runtime.release_control(name, self.caller_id, self._session)
             except ExecutionError:
@@ -494,10 +566,13 @@ class ConversationEnsemble:
                 continue
             self._owned.remove(name)
 
-    def _spawn(self, name: str, behavior: str, action_id: str, *, resume: bool = False):
+    def _spawn(
+        self, name: str, behavior: str, action_id: str, *,
+        resume: bool = False, pattern_override: BehaviorPattern | None = None,
+    ):
         if name in self._blocked or name not in self._owned or self._session is None:
             return
-        pattern = (
+        pattern = pattern_override or (
             self.packs[name].startup if behavior == "startup"
             else self.packs[name].behaviors.get(behavior)
         )
@@ -569,6 +644,24 @@ class ConversationEnsemble:
         else:
             self._speech_fallbacks[performer_id] = fallback
 
+    async def _finish_deferred_transition(self, name: str, slot: _Slot) -> None:
+        # The existing slot retains ownership until completion or urgent STOP.
+        await slot.done.wait()
+        async with self._lock:
+            if self._slots.get(name) is not slot:
+                return
+            self._slots.pop(name, None)
+            if (slot.status in {"blocked", "unavailable"} or name in self._blocked
+                    or name not in self._owned or self._session is None
+                    or self._state == "disconnected" or self._last_seen is None
+                    or anyio.current_time() - self._last_seen >= self.presence_ttl_s):
+                return
+            if slot.queued_expression is not None:
+                expression, action_id, pattern = slot.queued_expression
+                self._spawn(name, expression, action_id, resume=True, pattern_override=pattern)
+            else:
+                self._spawn(name, self._state, f"{self._session}-{self._sequence}-deferred")
+
     async def _stop_slots(self, names: tuple[str, ...], *, graceful: bool = False):
         active = [(n, self._slots.pop(n)) for n in names if n in self._slots]
         # Prevent the speaking loop from admitting another cue while a
@@ -617,11 +710,12 @@ class ConversationEnsemble:
     ):
         with slot.scope:
             try:
-                await self._execute_pattern(name, behavior, pattern, slot, action_id)
+                completed = await self._execute_pattern(name, behavior, pattern, slot, action_id)
                 slot.expression_active = False
                 # An expression returns to the *latest* conversational presence
                 # only if it was not interrupted or blocked.
-                if resume and name not in self._blocked and not slot.scope.cancel_called:
+                if (completed and resume and name not in self._blocked
+                        and not slot.scope.cancel_called):
                     background = self.packs[name].behaviors.get(self._state)
                     if background and self._session:
                         # A completed startup/gesture can resume a long-lived
@@ -926,31 +1020,39 @@ class ConversationEnsemble:
     async def _execute_pattern(
         self, name: str, behavior: str, pattern: BehaviorPattern,
         slot: _Slot, action_id: str
-    ):
+    ) -> bool:
         if pattern.mode == "hold":
             # The preceding transition has already finished or followed the
             # mandatory stop/quarantine path. This is no motor command and
             # provides no independent evidence of physical settling.
             slot.status = "holding"
             slot.evidence = "no_motion_command_dispatched"
-            return
+            return True
         start = anyio.current_time()
         cycles = pattern.max_cycles if pattern.mode == "loop" else 1
         for cycle in range(cycles):
             if anyio.current_time() - start >= pattern.max_duration_s:
                 break
             for index, cue in enumerate(pattern.cues):
+                if slot.cancel_requested:
+                    return False
                 offset = cycle * (pattern.period_s or 0.0) + cue.at_s
                 target = start + offset
                 if offset >= pattern.max_duration_s:
-                    return
+                    return False
                 now = anyio.current_time()
+                # A watchdog tick is not the freshness boundary: a delayed
+                # task-group turn must not admit another finite segment after
+                # the host heartbeat TTL has already elapsed.
+                if (self._last_seen is None
+                        or now - self._last_seen >= self.presence_ttl_s):
+                    return False
                 if pattern.mode == "loop" and now - target > 0.5:
                     # Slow hardware must not trigger high-rate catch-up bursts.
                     continue
                 await anyio.sleep(max(0, target - now))
                 if not self._session or self._state == "disconnected":
-                    return
+                    return False
                 request = ActionRequest(
                     id=f"{action_id}:{name}:{cycle}:{index}",
                     performer_id=name, caller_id=self.caller_id,
@@ -967,6 +1069,11 @@ class ConversationEnsemble:
                 # is held across submit *and* execution. Without this two
                 # robots' patterns overlap and contend for the same device.
                 async with self._dispatch_gate:
+                    if slot.cancel_requested:
+                        return False
+                    if (self._last_seen is None
+                            or anyio.current_time() - self._last_seen >= self.presence_ttl_s):
+                        return False
                     await self.runtime.submit(request)
                     slot.pending = True
                     slot.action_done = anyio.Event()
@@ -985,11 +1092,12 @@ class ConversationEnsemble:
                     slot.evidence = f"action_{record.state.value}"
                     if slot.status == "blocked":
                         self._blocked.add(name)
-                    return
+                    return False
                 slot.status = "active"
                 slot.evidence = "runtime_confirmed_action_completion"
         slot.status = "completed"
         slot.evidence = "behavior_pattern_finished"
+        return True
 
     async def _watchdog(self):
         while True:

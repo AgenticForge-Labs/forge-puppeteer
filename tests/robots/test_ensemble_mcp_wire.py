@@ -96,8 +96,18 @@ async def test_real_stdio_mcp_one_room_controls_three_mock_devices():
         await session.initialize()
         tools = await session.list_tools()
         names = {tool.name for tool in tools.tools}
-        assert {"ensemble_state", "ensemble_presence", "ensemble_expression",
+        assert {"ensemble_state", "ensemble_capabilities", "ensemble_presence",
+                "ensemble_expression", "ensemble_intent",
                 "ensemble_presentation"} <= names
+        capabilities = await session.call_tool("ensemble_capabilities", {})
+        assert capabilities.structured_content["session_id"] is None
+        assert capabilities.structured_content["motion_configured_enabled"] is True
+        assert capabilities.structured_content["live_motion_authority"] == "unknown"
+        assert capabilities.structured_content["session_ready_event"] == "ensemble_presence(state='idle')"
+        for performer in capabilities.structured_content["performers"].values():
+            assert performer["status"] == "idle"
+            assert performer["live_readiness"] == "unknown"
+            assert "yes" in performer["semantic_intents"]
         snapshot = await session.call_tool("ensemble_state", {})
         assert not snapshot.is_error
         assert snapshot.structured_content["state"] == "disconnected"
@@ -128,8 +138,8 @@ async def test_real_stdio_mcp_one_room_controls_three_mock_devices():
             "performer_id": "stackchan", "preset": "enlarged", "action_id": "scale-1",
         })
         assert again.structured_content["outcome"] == "duplicate"
-        yes = await session.call_tool("ensemble_expression", {
-            "expression": "yes", "action_id": "yes-0",
+        yes = await session.call_tool("ensemble_intent", {
+            "intent": "yes", "action_id": "yes-0",
         })
         assert not yes.is_error
         assert yes.structured_content["outcome"] == "accepted"

@@ -185,6 +185,30 @@ def create_ensemble_server(
                 }}
 
     @server.tool()
+    async def ensemble_capabilities() -> dict[str, object]:
+        """Read the configured performers' actual semantic capabilities.
+
+        Discovery is read-only: it never acquires room ownership or starts
+        startup/idle behavior. A fresh caller session must explicitly send an
+        authorized idle presence event to enter the configured startup path.
+        """
+        snapshot = ensemble.snapshot()
+        # The config flag says the operator enabled this software path. It is
+        # not evidence that the connected SDK/session is currently authorized,
+        # ready, calibrated, leased, or safe to move.
+        performers = {
+            performer_id: {**details, "live_readiness": "unknown"}
+            for performer_id, details in snapshot["performers"].items()
+        }
+        return {
+            "outcome": "observed", **snapshot,
+            "performers": performers,
+            "motion_configured_enabled": bool(motion_enabled),
+            "live_motion_authority": "unknown",
+            "session_ready_event": "ensemble_presence(state='idle')",
+        }
+
+    @server.tool()
     async def ensemble_presence(
         session_id: str, event_id: str, sequence: int,
         state: str, source: str = "agent_state", interrupted: bool = False,
@@ -225,6 +249,22 @@ def create_ensemble_server(
             )
         except Exception:  # noqa: BLE001 - all provider failures map to a safe MCP error
             raise ToolError("invalid_or_unavailable_ensemble_expression") from None
+
+    @server.tool()
+    async def ensemble_intent(
+        intent: str, action_id: str,
+        performer_ids: list[str] | None = None,
+    ) -> dict[str, object]:
+        """Perform one authored semantic intent supported by each selected robot."""
+        if not motion_enabled:
+            raise ToolError("ensemble_motion_not_operator_authorized")
+        try:
+            return await ensemble.express(
+                intent, action_id=action_id,
+                performer_ids=tuple(performer_ids) if performer_ids is not None else None,
+            )
+        except Exception:  # noqa: BLE001 - provider failures map to safe MCP error
+            raise ToolError("invalid_or_unavailable_ensemble_intent") from None
 
 
     @server.tool()

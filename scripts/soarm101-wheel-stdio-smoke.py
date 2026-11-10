@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -26,6 +27,80 @@ from soarm101_motion.trajectories import Trajectory, TrajectoryLibrary
 
 from forge_puppeteer.mcp.client import MCPClient, PreflightError
 from forge_puppeteer.mcp.client import ServerConfig as ClientServerConfig
+
+
+async def _local_sim_daemon_mcp_smoke(directory: Path) -> None:
+    """Exercise SDK's managed local simulator through Puppeteer's stdio MCP."""
+    state_dir = directory / "local-sim-daemon"
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+    cli = [sys.executable, "-m", "soarm101_motion.local_sim_daemon"]
+    started = subprocess.run(
+        [*cli, "start", "--state-dir", str(state_dir), "--port", str(port)],
+        check=True, capture_output=True, text=True, timeout=15,
+    )
+    try:
+        assert "ready" in started.stdout.lower(), started.stdout
+        status = subprocess.run(
+            [*cli, "status", "--state-dir", str(state_dir)],
+            check=True, capture_output=True, text=True, timeout=5,
+        )
+        status_data = json.loads(status.stdout)
+        assert status_data["running"] is True
+        assert status_data["health"]["status"] == "ok", status_data
+
+        # Read the local private credential only in the harness and pass it to
+        # the MCP child environment; never put it in config, argv or output.
+        token = (state_dir / "broker.token").read_text().strip()
+        assert token
+        config = directory / "local-sim-forge-server.json"
+        config.write_text(json.dumps({
+            "backend": "soarm101_broker", "device": "soarm101",
+            "instance_id": "local-managed-sim", "simulation_only": True,
+            "broker_url": f"http://127.0.0.1:{port}",
+            "broker_token_env": "SOARM101_BROKER_TOKEN",
+            "allowed_tools": ["robot_health", "robot_capabilities", "robot_state",
+                              "jog_joint", "stop"],
+        }))
+        parameters = StdioServerParameters(
+            command=str(Path(sys.executable).with_name("forge-puppeteer-mcp")),
+            args=["--config", str(config)],
+            env={**os.environ, "PYTHONNOUSERSITE": "1",
+                 "SOARM101_BROKER_TOKEN": token},
+        )
+        async with (stdio_client(parameters) as (reader, writer),
+                    ClientSession(reader, writer) as session):
+            await session.initialize()
+            tools = {tool.name for tool in (await session.list_tools()).tools}
+            assert {"device_info", "device_state", "robot_health",
+                    "robot_capabilities", "jog_joint", "device_stop"} <= tools, tools
+            info = (await session.call_tool("device_info", {})).structured_content
+            assert info["ready"] is True, info
+            health = (await session.call_tool("robot_health", {})).structured_content
+            assert health["result"]["status"] == "ok", health
+            state = (await session.call_tool("device_state", {})).structured_content
+            assert state["result"]["broker_session"]["mode"] == "simulation_actions", state
+            moved = await session.call_tool("jog_joint", {
+                "action_id": "local-sim-daemon-jog", "caller_id": "wheel-smoke",
+                "session_id": "local-sim-daemon",
+                "parameters": {"joint": "shoulder_pan", "delta_deg": 0.5},
+            })
+            assert not moved.is_error, moved
+            terminal = await _terminal(session, "local-sim-daemon-jog")
+            assert terminal["state"] == "completed", terminal
+            stopped = (await session.call_tool("device_stop", {})).structured_content
+            assert stopped["confirmed"] is True, stopped
+            assert stopped["evidence"] == "broker_stop_completed_and_holding", stopped
+    finally:
+        # The daemon owns its own SDK session and watchdog. Its supported
+        # lifecycle command performs SDK STOP and closes both on teardown.
+        subprocess.run(
+            [*cli, "stop", "--state-dir", str(state_dir)],
+            check=True, capture_output=True, text=True, timeout=10,
+        )
+        assert not (state_dir / "daemon.json").exists()
+        assert not (state_dir / "broker.token").exists()
 
 
 def _healthy(request: urllib.request.Request) -> bool:
@@ -224,6 +299,7 @@ def _make_fixture(directory: Path) -> dict[str, tuple[str, str]]:
 async def main() -> None:
     with tempfile.TemporaryDirectory(prefix="soarm101-wheel-smoke-") as raw:
         directory = Path(raw)
+        await _local_sim_daemon_mcp_smoke(directory)
         assets = _make_fixture(directory)
         asset_id, revision = assets["sequence"]
         with socket.socket() as reservation:
@@ -361,7 +437,7 @@ async def main() -> None:
         await _recording_replay_in_fresh_session(
             directory, *assets["recording"], token, broker_env
         )
-    print("installed Forge/SDK wheel sequence and fresh-session recording replay, stale rejection, and STOP smoke passed")
+    print("local_sim_daemon -> installed Forge stdio MCP health/state/jog/STOP/cleanup and installed-wheel sequence/recording smoke passed")
 
 
 if __name__ == "__main__":

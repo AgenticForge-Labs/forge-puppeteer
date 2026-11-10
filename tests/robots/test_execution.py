@@ -232,7 +232,9 @@ try:
     else:
         r.acquire_control("robot", sys.argv[2], "session")
         print("acquired", flush=True)
-        if sys.argv[3] == "hold": input()
+        if sys.argv[3] == "hold":
+            input()
+            r.release_control("robot", sys.argv[2], "session")
 except Exception as exc:
     print(getattr(exc, "code", type(exc).__name__), flush=True)
 finally:
@@ -255,10 +257,8 @@ finally:
             [sys.executable, "-c", source, str(db), "second", "once"],
             capture_output=True, text=True, env=env, timeout=10, check=False,
         )
-        # The first owner holds a row but has admitted no action, so a new
-        # process may reclaim it. A live owner that *is* mid-action still
-        # blocks through performer_activity (covered by the quarantine test).
-        assert second.stdout.strip() == "acquired"
+        # An idle owner is still live and retains its exclusive fence.
+        assert second.stdout.strip() == "ownership_busy"
     finally:
         first.stdin.write("\n")
         first.stdin.flush()
@@ -267,7 +267,6 @@ finally:
         [sys.executable, "-c", source, str(db), "third", "once"],
         capture_output=True, text=True, env=env, timeout=10, check=False,
     )
-    # second's row is also idle, so it too is reclaimable.
     assert recovered.stdout.strip() == "acquired"
 
 
@@ -755,8 +754,8 @@ def test_blocked_failure_event_does_not_block_shutdown_or_hold_lock():
     anyio.run(scenario)
 
 
-def test_stale_owner_row_is_reclaimed_only_when_nothing_is_in_flight(tmp_path):
-    """A crashed owner must not block a robot forever, but an active one must."""
+def test_unproven_owner_row_requires_reconciliation_even_when_idle(tmp_path):
+    """An idle row alone cannot establish that its owner has died."""
     import sqlite3
 
     from forge_puppeteer.execution import (
@@ -788,14 +787,16 @@ def test_stale_owner_row_is_reclaimed_only_when_nothing_is_in_flight(tmp_path):
         con.commit()
         con.close()
 
-        runtime.acquire_control("robot", "conversation", "live-session")
+        with pytest.raises(Exception) as excinfo:
+            runtime.acquire_control("robot", "conversation", "live-session")
+        assert getattr(excinfo.value, "code", "") == "ownership_busy"
         con = sqlite3.connect(db)
         row = con.execute(
             "SELECT caller_id, session_id FROM performer_owners WHERE performer_id=?",
             ("robot",),
         ).fetchone()
         con.close()
-        assert row == ("conversation", "live-session")
+        assert row == ("conversation", "dead-session")
     finally:
         runtime.close()
 

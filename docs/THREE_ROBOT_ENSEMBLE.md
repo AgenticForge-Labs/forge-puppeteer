@@ -7,6 +7,8 @@ use the same `forge-puppeteer-ensemble` executable, `ConversationEnsemble`,
 Reachy and StackChan; it does not import/construct a simulated or physical
 SO-ARM101 SDK and does not require an SO-ARM neutral/calibration/program file.
 Hardware qualification remains a separate attended requirement.
+For the SO-ARM101 startup/check command and the distinction from Reachy's
+managed daemon, see [SO-ARM101 operator run](SOARM101_OPERATOR_RUN.md).
 
 **Historical context:** The PR 4/5 architecture and its original v1
 three-performer instructions below describe the initial implementation.
@@ -56,7 +58,82 @@ speech-reactive hardware actuation, head/antenna settling, or shutdown sleep
 is qualified by software tests.
 
 The original v1 mode is unchanged and retains its seven SHA-pinned SO-ARM
-programs, watchdog, human lease rules and simulation default.
+programs, watchdog, autonomous-agent human-lease rules and simulation default.
+Schema v4 can separately launch an SDK physical daemon with
+`operator_choreography_only: true`; it denies agent motion, creates no agent
+lease, and exposes only exact pinned programs over its authenticated
+trusted-host route. This is a distinct configured daemon mode, not a capability
+obtained by discovering or connecting to an existing read-only broker.
+
+### Shared semantic session and startup/idle
+
+Call `ensemble_capabilities` for the configured performers' actual
+`presence_behaviors` and `semantic_intents`. It is read-only. Its
+`motion_configured_enabled` field reports only operator configuration;
+`live_motion_authority` and each performer's `live_readiness` are explicitly
+`unknown`. Neither config nor discovery proves live authority, SDK readiness,
+calibration, lease, or physical safety. The generic
+`ensemble_intent(intent, action_id, performer_ids?)` accepts only an authored,
+finite intent present on every selected performer; the older
+`ensemble_expression` remains supported. Neither discovery nor MCP
+initialization starts motion.
+
+After the trusted host conversation session is ready, and only when the
+operator configuration has enabled ensemble motion, send the first ordered
+`ensemble_presence` event with state `idle`, `listening`, or `speaking`.
+That explicit event acquires normal room ownership. Each selected performer
+with configured startup runs its finite startup pack first, then resumes the
+current presence behavior (normally idle). Heartbeats renew only that host
+session's TTL; they do not connect, arm, acquire an autonomous-agent human
+lease, or extend an SDK lease. Operator choreography mode has no agent lease.
+Disconnect, interruption, stale session, SDK fault, or unknown STOP
+uses the existing cancellation/quarantine rules, with no automatic retry or
+rearm. MCP discovery is not a session-ready signal.
+
+Startup remains opt-in per performer. Reachy uses the existing explicit
+`wake_up_if_sleeping` selection and `wake_up` grant. Set
+`stackchan_startup_behavior` to `neutral` to use its authored finite neutral
+expression; its default is `none`. SO-ARM uses its exact pinned
+`wake_to_neutral` target and separate physical startup authorization when in
+attended mode. A successful command response or configured startup does not
+prove sensed neutral or physical settling.
+
+SO-ARM `idle_behavior` defaults to `legacy`, preserving the approved finite
+idle program. Select `breathe` only when the config also includes an
+operator-reviewed, SDK-preflighted `breathe` program and pins its exact
+revision in `approved_revisions`. The room scheduler repeats that finite
+program as the idle presence loop; it does not start a device-side autonomous
+loop. Each segment remains subject to the normal fresh host presence,
+single-flight `ExecutionRuntime`, broker watchdog, calibration, resource
+ownership, and adapter checks. Autonomous-agent execution also requires its
+human lease; operator choreography mode uses the separate trusted-host route
+and does not acquire or revoke an agent lease.
+
+The pinned local Reachy Conversation App source is at
+`<forge-reachy checkout>/.forge-reachy/upstream/reachy_mini_conversation_app`
+(commit `5ab905d018de8d88f07444ca57677b2ffbe762ca`). Its `moves.py` starts a
+sensor-seeded `BreathingMove` after 0.3 seconds idle in its own 100 Hz movement
+manager; its separate `idle_policy.py` randomly selects among available idle
+tools. Puppeteer reuses neither lifecycle nor movement manager. Puppeteer
+dispatches finite authored actions through its existing Reachy SDK provider
+and runtime. That Reachy daemon/SDK path does not offer an exclusive
+daemon-wide motion lease: other daemon REST, WebSocket and WebRTC paths can
+also dispatch motion. SO-ARM's SDK-host broker/watchdog and agent-mode human
+lease are a separate authority boundary, not evidence of Reachy daemon exclusivity. Keep
+the Conversation App motion manager stopped while Puppeteer owns Reachy.
+
+#### Conversationalist tool path
+
+The current Conversationalist native ensemble intentionally keeps its fixed
+allowlist: `ensemble_state`, `ensemble_presence`, and `ensemble_expression`.
+Its agent gesture path first calls `ensemble_state`, checks the selected
+performer's `expressions` catalog and availability, then sends the exact
+catalogued name through `ensemble_expression` on that same room-owned MCP
+child. This is the semantic-intent capability path; `expressions` and
+`semantic_intents` identify the same authored one-shot actions. Do not add a
+second agent-facing `ensemble_intent` tool to Conversationalist unless its
+caller API needs different semantics. Presence remains automatically derived
+from the LiveKit session, and the agent cannot send presence directly.
 
 
 ### Operator-selected motion profiles (PR #40 software)
