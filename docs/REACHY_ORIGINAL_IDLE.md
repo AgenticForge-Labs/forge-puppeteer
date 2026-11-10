@@ -10,13 +10,11 @@ and 15 degree opposing antenna sway. The pinned source changes antenna
 targets at the one-second transition; the app's wider motion composition
 and listening blend may also affect what is observed in the original app.
 
-This profile requires the `original_idle` tool grant and the separate
-`reachy_original_idle_authority` marker
-`I_AUTHORIZE_REACHY_ORIGINAL_IDLE`. The selected operator-reviewed neutral
-head file must contain the identity transform used by the original curve.
-These checks validate configuration; they do not establish clearance,
-calibration, physical neutral or safe motion. Do not add these markers to a
-real configuration without operator review of the full curve and geometry.
+Select it with `"idle": "original_v1"` in the Reachy robot file's `options`
+(see `ENSEMBLE.md`). It requires the `original_idle` tool grant, and the
+operator-reviewed neutral head file must contain the identity transform used by
+the original curve. These checks validate configuration; they do not establish
+clearance, calibration, physical neutral or safe motion.
 
 The pinned daemon accepts commands through multiple transports and can compose
 persistent speech offsets and tracking with targets. It does not provide an
@@ -31,23 +29,13 @@ does not block other performers. If the SDK command loop cannot return, STOP
 remains unconfirmed and the runtime fences the performer. A returned loop is
 software evidence, not proof that the physical robot settled or slept.
 
-An independently selected `original_v1` speaking profile requires the same
-original idle profile, the `original_speech` grant, and the separate
-`reachy_original_speech_authority` marker
-`I_AUTHORIZE_REACHY_ORIGINAL_SPEECH`. It binds the room's native-gain
-observation window to the same continuous primary action; it does not accept
-arbitrary pose targets. The SDK must advertise the required methods before
-the room is ready. Conversationalist requires an identified output-segment
-capability for this speaking selection; the stock LiveKit SDK does not yet
-provide it, so voice continues without the robot on that SDK. A local SDK
-prototype and fake-device integration exist but remain unqualified on hardware.
-
-Neither path yet clones the original app's listening blend, audio timing,
-gesture composition, or tracking. Both are unqualified on hardware. Fake
-SDK and MCP tests do not constitute physical acceptance.
+It does not clone the original app's listening blend, audio timing, gesture
+composition, or tracking, and it has only been exercised in one attended idle
+trial. (An `original_v1` *speaking* profile that composed speech offsets over
+this idle was removed; speech-driven motion is `speaking: smooth_v2`.)
 
 For the separately selected `smooth_v2` speaking profile, an operator may set
-`reachy_legacy_speech_fallback: true` with classic Reachy expression style and
+`"legacy_speech_fallback": true` with classic Reachy expression style and
 speech-driven Reachy enabled. When no fresh speech features are available,
 the existing runtime plays the reviewed head-only legacy speaking rhythm. It
 does not replay stale features and does not activate after an unconfirmed motor

@@ -323,18 +323,14 @@ async def test_original_profiles_connect_with_explicit_grants(monkeypatch, tmp_p
     provider = ReachySDKProvider(
         config(asset_root=str(root), manifest=str(manifest_path),
                allowed_tools=["device_info", "play_move", "device_stop",
-                              "original_idle", "original_speech"]),
+                              "original_idle"]),
         robot_factory=lambda **kwargs: robot,
         catalog_factory=lambda path, _manifest: ReachyCatalog(path, manifest, move_factory=Move),
         daemon_factory=lambda *_args, **_kwargs: FakeDaemon(),
     )
-    source = lambda: None
-    provider.bind_native_speech_source(source)
-    with pytest.raises(RuntimeError, match="cannot be rebound"):
-        provider.bind_native_speech_source(source)
     async with provider.connected():
-        assert await provider.permitted("original_speech")
-        assert "original_speech" in (await provider.describe()).supported_operations
+        assert await provider.permitted("original_idle")
+        assert "original_idle" in (await provider.describe()).supported_operations
     assert robot.closed and not robot.calls
 
 

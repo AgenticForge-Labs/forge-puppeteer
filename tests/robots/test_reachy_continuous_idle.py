@@ -9,6 +9,7 @@ import pytest
 np = pytest.importorskip("numpy")
 pytest.importorskip("reachy_mini")
 
+
 from forge_puppeteer.behavior_contract import (
     BehaviorCue,
     BehaviorPattern,
@@ -23,7 +24,6 @@ from forge_puppeteer.execution import (
     ExecutionRuntime,
     StopResult,
 )
-from forge_puppeteer.reachy_native_speech import NativeSpeechGainWindow
 from forge_puppeteer.runtime import PerformanceStage
 
 
@@ -79,12 +79,6 @@ async def test_capability_requires_grant_and_sdk_methods():
                                    original_idle_authorized=True)
     assert "original_idle" in (await ready.describe()).supported_operations
     assert await ready.permitted("original_idle")
-
-
-def test_native_speech_source_requires_separate_authority():
-    with pytest.raises(ValueError, match="separate explicit authorization"):
-        ReachyPlaybackProvider(Catalog(), FakeRobot(), motion_authorized=True,
-                               original_idle_authorized=True, native_speech_source=lambda: None)
 
 
 @pytest.mark.anyio
@@ -266,94 +260,6 @@ async def test_continuous_reachy_does_not_block_another_performer():
         await asyncio.wait_for(other.started.wait(), timeout=1.0)
         assert (await reachy.state())["active"]
         await ensemble.observe(EnsemblePresence(session_id="room", event_id="1", sequence=1,
-                                                state="disconnected", source="manual"))
-
-
-@pytest.mark.anyio
-async def test_speech_offsets_compose_over_one_continuous_idle_action():
-    robot = FakeRobot()
-    window = NativeSpeechGainWindow()
-    provider = ReachyPlaybackProvider(
-        Catalog(), robot, motion_authorized=True, original_idle_authorized=True,
-        native_speech_authorized=True, native_speech_source=window.latest,
-    )
-    runtime = ExecutionRuntime(PerformanceStage())
-    runtime.register("reachy", provider)
-    ambient = BehaviorPattern(source="procedural", mode="loop", period_s=10,
-                              cues=(BehaviorCue(at_s=0, operation="original_idle",
-                                                parameters={"duration_s": 10}),))
-    pack = PerformerBehaviors.author("reachy", {"idle": ambient, "speaking": ambient})
-    ensemble = ConversationEnsemble(runtime, [pack], continuous_presence_performers=("reachy",))
-    async with runtime.run(), ensemble.run():
-        def presence(seq, state, interrupted=False):
-            return EnsemblePresence(session_id="room", event_id=str(seq), sequence=seq,
-                                    state=state, source="manual", interrupted=interrupted)
-
-        await ensemble.observe(presence(0, "idle"))
-        for _ in range(100):
-            if len(robot.commands) >= 2:
-                break
-            await asyncio.sleep(0.005)
-        assert len(robot.commands) >= 2
-        action = ensemble.snapshot()["performers"]["reachy"]["action_id"]
-        await ensemble.observe(presence(1, "speaking"))
-        assert ensemble.snapshot()["performers"]["reachy"]["action_id"] == action
-        window.accept([{
-            "schema": "forge.native_speech_gain.v1", "stream_id": "speech",
-            "sequence": 0, "offset_ms": 0, "duration_ms": 50, "gain": 1.0,
-            "timing_source": "generated_pcm", "acoustic_playout_measured": False,
-        }])
-        for _ in range(100):
-            if not np.allclose(robot.commands[-1]["head"][:3, :3], np.eye(3)):
-                break
-            await asyncio.sleep(0.005)
-        assert not np.allclose(robot.commands[-1]["head"][:3, :3], np.eye(3))
-        assert ensemble.snapshot()["performers"]["reachy"]["action_id"] == action
-        window.invalidate()
-        await ensemble.observe(presence(2, "idle"))
-        for _ in range(100):
-            if np.allclose(robot.commands[-1]["head"][:3, :3], np.eye(3)):
-                break
-            await asyncio.sleep(0.005)
-        assert np.allclose(robot.commands[-1]["head"][:3, :3], np.eye(3))
-        assert ensemble.snapshot()["performers"]["reachy"]["action_id"] == action
-        await ensemble.observe(presence(3, "disconnected", interrupted=True))
-        count = len(robot.commands)
-        await asyncio.sleep(0.05)
-        assert len(robot.commands) == count
-
-
-@pytest.mark.anyio
-async def test_startup_resume_preserves_continuous_action_on_speaking_transition():
-    class FakeStartupProvider(ReachyPlaybackProvider):
-        def _wake_up_if_sleeping(self):
-            return "fake startup returned"
-
-    robot = FakeRobot()
-    provider = FakeStartupProvider(Catalog(), robot, motion_authorized=True,
-                                   original_idle_authorized=True)
-    runtime = ExecutionRuntime(PerformanceStage())
-    runtime.register("reachy", provider)
-    ambient = BehaviorPattern(source="procedural", mode="loop", period_s=10,
-                              cues=(BehaviorCue(at_s=0, operation="original_idle",
-                                                parameters={"duration_s": 10}),))
-    startup = BehaviorPattern(source="procedural", mode="once",
-                              cues=(BehaviorCue(at_s=0, operation="wake_up"),))
-    pack = PerformerBehaviors.author("reachy", {"idle": ambient, "speaking": ambient}, startup=startup)
-    ensemble = ConversationEnsemble(runtime, [pack], continuous_presence_performers=("reachy",))
-    async with runtime.run(), ensemble.run():
-        await ensemble.observe(EnsemblePresence(session_id="room", event_id="0", sequence=0,
-                                                state="idle", source="manual"))
-        for _ in range(200):
-            if robot.commands:
-                break
-            await asyncio.sleep(0.005)
-        assert robot.commands
-        action = ensemble.snapshot()["performers"]["reachy"]["action_id"]
-        await ensemble.observe(EnsemblePresence(session_id="room", event_id="1", sequence=1,
-                                                state="speaking", source="manual"))
-        assert ensemble.snapshot()["performers"]["reachy"]["action_id"] == action
-        await ensemble.observe(EnsemblePresence(session_id="room", event_id="2", sequence=2,
                                                 state="disconnected", source="manual"))
 
 

@@ -60,7 +60,6 @@ def main():
     )
     create_ensemble_server(
         runtime, ensemble, name="Mock 3-Robot Room", motion_enabled=True,
-        native_gain_performers=("reachy",),
         presentation_presets={
             "stackchan": {
                 "normal": BehaviorCue(
