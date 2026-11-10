@@ -121,7 +121,10 @@ def test_v4_room_resolves_each_nonempty_robot_subset_and_checks_file_identity(tm
     robot_files = {
         "reachy": {"kind": "reachy", "id": "reachy", "provider": data["reachy"]},
         "stackchan": {"kind": "stackchan", "id": "stackchan", "provider": data["stackchan"]},
-        "soarm101": {"kind": "soarm101", "id": "soarm101", "provider": data["soarm101"]},
+        "soarm101": {"kind": "soarm101", "id": "soarm101", "provider": {
+            "instance_id": "soarm101", "mode": "existing_broker",
+            "broker_url": "http://127.0.0.1:8765", "token_env": "SOARM_TOKEN",
+            "allowed_tools": ["robot_capabilities", "robot_state", "stop"]}},
     }
     refs = []
     for kind in selected:

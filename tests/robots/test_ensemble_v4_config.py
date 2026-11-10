@@ -529,3 +529,31 @@ def test_v4_startup_target_is_explicit_pinned_and_bound():
     cfg = SOARMBrokerConfig.model_validate({**base, 'startup_authority': 'I_AUTHORIZE_SOARM101_WAKE_TO_NEUTRAL_STARTUP'})
     cue = _soarm_broker_pack(cfg).startup.cues[0]
     assert cue.operation == 'wake_to_neutral' and cue.asset_revision == pin
+
+
+def test_stale_daemon_state_is_cleared_but_running_daemon_blocks(tmp_path, monkeypatch):
+    import json as _json
+    import os as _os
+
+    import pytest as _pytest
+
+    from forge_puppeteer.mcp import ensemble_v4
+
+    def seed(pid):
+        (tmp_path / "daemon.json").write_text(_json.dumps({"pid": pid}))
+        (tmp_path / "broker.token").write_text("t")
+        (tmp_path / "trusted-host.token").write_text("h")
+
+    seed(2**22 + 1)  # above default pid_max: never alive
+    ensemble_v4.clear_stale_daemon_state(tmp_path, "SDK physical")
+    assert not any(tmp_path.iterdir())
+
+    (tmp_path / "broker.token").write_text("orphan")  # token without record
+    ensemble_v4.clear_stale_daemon_state(tmp_path, "SDK physical")
+    assert not any(tmp_path.iterdir())
+
+    seed(_os.getpid())
+    monkeypatch.setattr(ensemble_v4, "_daemon_process_alive", lambda pid: True)
+    with _pytest.raises(RuntimeError, match="already running"):
+        ensemble_v4.clear_stale_daemon_state(tmp_path, "SDK physical")
+    assert (tmp_path / "daemon.json").exists()

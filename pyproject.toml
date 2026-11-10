@@ -25,5 +25,8 @@ forge-puppeteer-reconcile = "forge_puppeteer.operator_reconcile:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+forge_puppeteer = ["poses/*.yaml"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]

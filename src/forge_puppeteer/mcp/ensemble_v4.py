@@ -305,6 +305,40 @@ def build_v4(room: RoomConfigV4, robots: dict[str, object], private_tokens: dict
     return runtime, tuple(packs), connected
 
 
+def _daemon_process_alive(pid: int) -> bool:
+    """True when ``pid`` exists and (on Linux) still looks like an SO-ARM daemon."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    cmdline = Path(f"/proc/{pid}/cmdline")
+    try:
+        return b"soarm101" in cmdline.read_bytes()
+    except FileNotFoundError:
+        return not Path("/proc").is_dir()  # non-Linux: trust os.kill
+    except OSError:
+        return True
+
+
+def clear_stale_daemon_state(state_dir: Path, label: str) -> None:
+    """Remove a daemon record/tokens left by a dead daemon; refuse if one is still running."""
+    record = state_dir / "daemon.json"
+    files = (record, state_dir / "broker.token", state_dir / "trusted-host.token")
+    if not any(f.exists() for f in files):
+        return
+    pid = None
+    try:
+        pid = int(json.loads(record.read_text(encoding="utf-8"))["pid"])
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    if pid is not None and _daemon_process_alive(pid):
+        raise RuntimeError(f"{label} daemon is already running (pid {pid}); stop it before starting another controller")
+    for f in files:
+        f.unlink(missing_ok=True)
+
+
 def start_owned_simulation(config: SOARMBrokerConfig) -> tuple[tuple[str, str | None], Callable[[], None]]:
     """Start the SDK's supervised simulation daemon and return its secret token.
 
@@ -317,8 +351,7 @@ def start_owned_simulation(config: SOARMBrokerConfig) -> tuple[tuple[str, str | 
     record = state_dir / "daemon.json"
     token_path = state_dir / "broker.token"
     host_token_path = state_dir / "trusted-host.token"
-    if record.exists() or token_path.exists() or host_token_path.exists():
-        raise RuntimeError("SDK simulation state already exists; refusing to claim or stop an unowned broker")
+    clear_stale_daemon_state(state_dir, "SDK simulation")
     command = [config.sdk_simulation_executable, "start",
                "--state-dir", str(state_dir), "--port", str(config.simulation_port)]
     if config.choreography_revisions or config.pose_targets:
@@ -386,8 +419,7 @@ def start_owned_physical(config: SOARMBrokerConfig) -> tuple[tuple[str, str | No
     state_dir = Path(daemon["state_dir"])
     record = state_dir / "daemon.json"
     token_path, host_path = state_dir / "broker.token", state_dir / "trusted-host.token"
-    if record.exists() or token_path.exists() or host_path.exists():
-        raise RuntimeError("physical daemon state already exists; refusing to claim an unowned daemon")
+    clear_stale_daemon_state(state_dir, "SDK physical")
     if hashlib.sha256(daemon_path.read_bytes()).digest() != daemon_digest:
         raise RuntimeError("physical daemon config changed before launch")
     # Preserve the SDK's actual admission/readiness error in a private local

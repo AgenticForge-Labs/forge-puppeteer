@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import sqlite3
 import uuid
 from contextlib import asynccontextmanager
@@ -129,8 +130,6 @@ class ExecutionRuntime:
         ownership_path: str | None = None,
     ):
         import math
-        import os
-
         if any(
             not math.isfinite(v) or v <= 0 for v in (execution_timeout, stop_timeout)
         ):
@@ -141,7 +140,8 @@ class ExecutionRuntime:
         self._providers: dict[str, ExecutionProvider] = {}
         self._entries: dict[str, _Entry] = {}
         self._owners: dict[str, tuple[str, str]] = {}
-        self._owner_process = uuid.uuid4().hex
+        # "pid<PID>-<uuid>": the PID lets other runtimes detect a dead owner.
+        self._owner_process = f"pid{os.getpid()}-{uuid.uuid4().hex}"
         self._generation: dict[str, int] = {}
         self._stopping: set[str] = set()
         self._inhibited: set[str] = set()
@@ -191,11 +191,53 @@ class ExecutionRuntime:
                 "CREATE TABLE IF NOT EXISTS performer_owners (performer_id TEXT PRIMARY KEY, caller_id TEXT NOT NULL, session_id TEXT NOT NULL, process_id TEXT NOT NULL)"
             )
             # A durable admission row prevents a second server from dispatching
-            # while this process has work in flight. Unknown/crashed work stays
-            # here until an operator reconciles the physical device.
+            # while this process has work in flight. Rows left by a process that
+            # has since died are reaped; the next session's sleep-pose check
+            # (see standard_poses) covers the robot's physical state.
             self._ownership_db.execute(
                 "CREATE TABLE IF NOT EXISTS performer_activity (performer_id TEXT NOT NULL, process_id TEXT NOT NULL, action_id TEXT NOT NULL, caller_id TEXT NOT NULL, session_id TEXT NOT NULL, PRIMARY KEY (performer_id, process_id, action_id))"
             )
+            self._reap_dead_owners_now()
+
+    @staticmethod
+    def _process_alive(process_id: str) -> bool:
+        """Liveness of an ownership row's process. Legacy IDs without a PID count as dead."""
+        if not process_id.startswith("pid") or "-" not in process_id:
+            return False
+        try:
+            pid = int(process_id[3:].split("-", 1)[0])
+        except ValueError:
+            return False
+        if pid == os.getpid():
+            return True
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def _reap_dead_owners(self, db) -> None:
+        """Delete ownership/activity rows whose process no longer exists. Caller holds the transaction."""
+        dead = {
+            pid for (pid,) in db.execute(
+                "SELECT process_id FROM performer_owners UNION SELECT process_id FROM performer_activity"
+            ) if pid != self._owner_process and not self._process_alive(pid)
+        }
+        for pid in dead:
+            db.execute("DELETE FROM performer_owners WHERE process_id=?", (pid,))
+            db.execute("DELETE FROM performer_activity WHERE process_id=?", (pid,))
+
+    def _reap_dead_owners_now(self) -> None:
+        db = self._ownership_db
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            self._reap_dead_owners(db)
+            db.execute("COMMIT")
+        except sqlite3.Error:
+            if db.in_transaction:
+                db.execute("ROLLBACK")
 
     def _persist(self, entry: _Entry) -> None:
         if self._journal is None:
@@ -247,9 +289,9 @@ class ExecutionRuntime:
             db = self._ownership_db
             try:
                 db.execute("BEGIN IMMEDIATE")
-                # Any admitted-but-unsettled action keeps the performer busy,
-                # including one admitted by a process that later crashed: its
-                # physical outcome is unknown until an operator reconciles it.
+                self._reap_dead_owners(db)
+                # Any admitted-but-unsettled action of a live process keeps the
+                # performer busy. Dead processes were reaped above.
                 activity = db.execute(
                     "SELECT 1 FROM performer_activity WHERE performer_id=? LIMIT 1",
                     (performer_id,),
@@ -267,9 +309,8 @@ class ExecutionRuntime:
                         (performer_id, caller_id, session_id, self._owner_process),
                     )
                 elif row != (caller_id, session_id, self._owner_process):
-                    # An idle owner may still be alive and about to admit its
-                    # next action. An empty activity table cannot prove death.
-                    # Preserve the fence until release or operator reconciliation.
+                    # A live owner (dead ones were reaped above) keeps the
+                    # fence until it releases control.
                     db.execute("ROLLBACK")
                     raise ExecutionError("ownership_busy")
                 db.execute("COMMIT")
@@ -370,6 +411,7 @@ class ExecutionRuntime:
         db = self._ownership_db
         try:
             db.execute("BEGIN IMMEDIATE")
+            self._reap_dead_owners(db)
             owner = db.execute(
                 "SELECT caller_id, session_id, process_id FROM performer_owners WHERE performer_id=?",
                 (request.performer_id,),
@@ -732,6 +774,7 @@ class ExecutionRuntime:
         if performer_id in self._stopping:
             raise ExecutionError("stop_in_progress")
         if self._ownership_db is not None:
+            self._reap_dead_owners_now()
             try:
                 remote = self._ownership_db.execute(
                     "SELECT 1 FROM performer_activity WHERE performer_id=? AND process_id<>? LIMIT 1",
