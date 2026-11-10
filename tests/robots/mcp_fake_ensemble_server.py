@@ -8,8 +8,8 @@ from forge_puppeteer.behavior_contract import (
     PerformerBehaviors,
 )
 from forge_puppeteer.conversation_ensemble import ConversationEnsemble
+from forge_puppeteer.ensemble.server import create_ensemble_server
 from forge_puppeteer.execution import Completion, ExecutionRuntime, StopResult
-from forge_puppeteer.mcp.ensemble import create_ensemble_server
 from forge_puppeteer.runtime import PerformanceStage
 
 

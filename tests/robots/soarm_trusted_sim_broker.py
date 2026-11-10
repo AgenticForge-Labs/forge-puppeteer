@@ -7,16 +7,24 @@ import os
 import sys
 import threading
 import time
+from http import HTTPStatus
 from pathlib import Path
 
 from soarm101_motion.agent_control import AgentAuthorityStore
-from soarm101_motion.broker import AgentMotionRates, RobotBrokerHTTPServer, RobotBrokerService
-from soarm101_motion.broker import BrokerResponse
-from http import HTTPStatus
+from soarm101_motion.broker import (
+    AgentMotionRates,
+    BrokerResponse,
+    RobotBrokerHTTPServer,
+    RobotBrokerService,
+)
 from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.capability_profile import CapabilityProfile
+from soarm101_motion.choreography import (
+    ChoreographyPolicy,
+    JointChoreography,
+    JointFrame,
+)
 from soarm101_motion.config import SOARM101Config
-from soarm101_motion.choreography import ChoreographyPolicy, JointChoreography, JointFrame
 
 
 def main() -> None:
@@ -114,7 +122,7 @@ def main() -> None:
         while not heartbeat_done.wait(1.0):
             try:
                 service.watchdog.heartbeat()
-            except Exception:
+            except Exception:  # noqa: BLE001 - deliberate: an unknown device outcome must not be retried
                 return
 
     threading.Thread(target=maintain_watchdog, daemon=True).start()

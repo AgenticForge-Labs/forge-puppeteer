@@ -22,24 +22,17 @@ checked. Start the room only after reviewing the file:
 forge-puppeteer-ensemble --config /absolute/path/to/operator-approved.json
 ```
 
-The v1 three-performer config defaults SO-ARM101 to simulation. Its autonomous
-agent physical mode requires the explicit `attended_physical_trial` setting,
-selected port, calibration identity, operator authorization marker, and active
-human lease. The operator must already own torque HOLD. Startup does not arm,
-enable torque, or make a physical readiness claim. The schema-v4 room can
-instead own an SDK physical daemon configured with
+The ensemble can own an SDK physical daemon configured with
 `operator_choreography_only: true`; this mode does not require or manage an
 agent lease, denies agent state changes, and admits only exact pinned
 choreography through its authenticated trusted-host route. Existing-broker
 discovery remains read-only and does not grant that route or authorize motion.
-See [Three robot ensemble](THREE_ROBOT_ENSEMBLE.md) for the config and room
-lifecycle.
+See [Ensembles](ENSEMBLE.md) for the config and lifecycle.
 
 ## Session ownership
 
-Legacy rooms use an in-process SDK executor. V4 may instead own one SDK
-physical daemon and use its authenticated trusted-host choreography route.
-Do not start a direct broker or another room against the same arm concurrently.
+The ensemble may own one SDK physical daemon and use its authenticated
+trusted-host choreography route. Do not start a direct broker or another room against the same arm concurrently.
 A separately selected direct broker profile retains the SDK's agent permissions
 and lease rules; operator-only choreography mode denies agent state changes.
 V4 physical choreography needs an exact `startup_target_revision` bound to the

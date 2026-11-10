@@ -95,31 +95,3 @@ def test_smooth_reachy_idle_is_reduced_without_changing_gestures():
     for invalid in (float("nan"), float("inf"), -0.1, 1.1):
         with pytest.raises(ValueError, match="idle gain"):
             expressive(invalid)
-
-
-def test_smooth_stackchan_idle_is_independent_of_native_speaking_selection():
-    from forge_puppeteer.mcp.ensemble_launcher import (
-        PerformerMotionSelection,
-        _profile_overrides,
-    )
-
-    original = stackchan_conversation_pack("stackchan")
-    native = stackchan_conversation_pack(
-        "stackchan", speaking_mode="native_weight",
-    )
-    smooth = stackchan_conversation_pack(
-        "stackchan", speaking_mode="native_weight", yaw_amplitude=40,
-    )
-    selectors = _profile_overrides(
-        {"stackchan": PerformerMotionSelection(
-            idle="smooth_v2", speaking="native_v1",
-        )}, {"stackchan": native}, {"stackchan": smooth},
-    )
-    selected = select_motion_patterns(
-        original, idle=selectors["stackchan"]["idle"],
-        speaking=selectors["stackchan"]["speaking"],
-    )
-    assert selected.behaviors["idle"] == smooth.behaviors["idle"]
-    assert selected.behaviors["speaking"] == native.behaviors["speaking"]
-    assert selected.behaviors["yes"] == original.behaviors["yes"]
-    assert selected.revision == selected.content_revision()

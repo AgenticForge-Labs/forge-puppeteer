@@ -102,7 +102,8 @@ class FakeRobot:
 @pytest.mark.anyio
 async def test_expressive_motion_uses_single_sdk_goto_for_head_and_antennas():
     class Catalog:
-        manifest = {"sdk_version": "1.10.0rc5"}
+        def __init__(self):
+            self.manifest = {"sdk_version": "1.10.0rc5"}
 
     robot = FakeRobot()
     provider = ReachyPlaybackProvider(Catalog(), robot, motion_authorized=True)

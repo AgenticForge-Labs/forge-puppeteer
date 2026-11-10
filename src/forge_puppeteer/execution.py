@@ -29,7 +29,6 @@ import anyio
 from pydantic import Field, JsonValue
 
 from .events import EventType, PerformanceEvent
-
 from .robot_contracts import ActionRecord, ActionState, ContractModel
 from .runtime import PerformanceStage
 

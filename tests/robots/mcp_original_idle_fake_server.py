@@ -12,9 +12,9 @@ from forge_puppeteer.behavior_contract import (
 )
 from forge_puppeteer.conversation_ensemble import ConversationEnsemble
 from forge_puppeteer.devices.reachy import ReachyPlaybackProvider
+from forge_puppeteer.ensemble.options import _original_idle_pack
+from forge_puppeteer.ensemble.server import create_ensemble_server
 from forge_puppeteer.execution import ExecutionRuntime
-from forge_puppeteer.mcp.ensemble import create_ensemble_server
-from forge_puppeteer.mcp.ensemble_launcher import _original_idle_pack
 from forge_puppeteer.runtime import PerformanceStage
 
 

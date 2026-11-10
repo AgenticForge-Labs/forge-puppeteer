@@ -18,7 +18,7 @@ The project takes inspiration from [Reachy Mini](https://github.com/pollen-robot
 - Use MCP tool calls to discover supported capabilities and request operator-authorized native controls and shared expressions. Available tools vary by device, configuration, and MCP server.
 - Experiment without robots using mock stages and fake providers.
 
-The ensemble launcher supports configurations for Reachy alone, Reachy with StackChan, or all three performers. Actual capabilities depend on the configured providers, operator grants and device readiness. See [Native conversational performers](docs/THREE_ROBOT_ENSEMBLE.md).
+The ensemble launcher supports configurations for Reachy alone, Reachy with StackChan, or all three performers. Actual capabilities depend on the configured providers, operator grants and device readiness. See [Ensembles](docs/ENSEMBLE.md).
 
 ## How it works
 
@@ -55,7 +55,7 @@ The server communicates over **stdio**; it must be launched by an MCP client rat
 
 ## Working with real devices
 
-These are small hobby robots, so the safety model is light. Set `physical: true` on a room to let it drive real hardware. At startup the room reads each robot's pose and compares it with its standard `sleep` pose (within about 5°). A robot that is not there stays still until you decide to move it to sleep. A session ends with `ensemble_park`. A fault stops the run and is reported, with no retry loops. See [AGENTS.md](AGENTS.md) for the working rules, and the [robot deployment guide](docs/ROBOT_DEPLOYMENT.md) and [ensemble guide](docs/THREE_ROBOT_ENSEMBLE.md) for setup.
+These are small hobby robots, so the safety model is light. Set `physical: true` on an ensemble to let it drive real hardware. At startup the ensemble reads each robot's pose and compares it with its standard `sleep` pose (within about 5°). A robot that is not there stays still until you decide to move it to sleep. A session ends with `ensemble_park`. A fault stops the run and is reported, with no retry loops. See [AGENTS.md](AGENTS.md) for the working rules, and the [robot deployment guide](docs/ROBOT_DEPLOYMENT.md) and [ensemble guide](docs/ENSEMBLE.md) for setup.
 
 ## Robot SDKs
 

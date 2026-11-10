@@ -11,9 +11,9 @@ from ..execution import ActionRequest
 from .server import Gateway
 from .soarm_guidance import GUIDANCE_RESOURCES, task_prompt
 
-
 if TYPE_CHECKING:
     from mcp.server import MCPServer
+
     from ..devices.soarm101 import SOARM101Provider
 
 
@@ -179,7 +179,7 @@ def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
         await gateway.check("robot_health")
         try:
             return await provider._call("robot_health")
-        except Exception:
+        except Exception:  # noqa: BLE001 - deliberate: an unknown device outcome must not be retried
             raise ToolError("broker_read_failed") from None
 
     @server.tool(annotations=read_only)
@@ -189,7 +189,7 @@ def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
         await gateway.check("robot_capabilities")
         try:
             return await provider._call("robot_capabilities")
-        except Exception:
+        except Exception:  # noqa: BLE001 - deliberate: an unknown device outcome must not be retried
             raise ToolError("broker_read_failed") from None
 
     @server.tool(annotations=read_only)
@@ -199,7 +199,7 @@ def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
         await gateway.check("robot_state")
         try:
             return await provider.state()
-        except Exception:
+        except Exception:  # noqa: BLE001 - deliberate: an unknown device outcome must not be retried
             raise ToolError("broker_read_failed") from None
 
     @server.tool(annotations=read_only, structured_output=False)
@@ -211,7 +211,7 @@ def register_soarm101_tools(server: MCPServer, gateway: Gateway) -> None:
         await gateway.check("capture_camera")
         try:
             metadata, image = await provider.capture_camera(camera)
-        except Exception:
+        except Exception:  # noqa: BLE001 - deliberate: an unknown device outcome must not be retried
             raise ToolError("broker_camera_unavailable_or_unverified") from None
         return [
             TextContent(type="text", text=json.dumps(metadata, sort_keys=True)),

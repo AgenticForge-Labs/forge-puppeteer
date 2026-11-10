@@ -157,7 +157,9 @@ def test_sdk_simulation_preflights_feasible_and_infeasible_authored_paths(tmp_pa
 
 def test_v4_export_round_trips_sdk_catalog_without_physical_authority(tmp_path):
     import json
+
     from soarm101_motion.broker import load_trusted_choreography_catalog
+
     from forge_puppeteer.soarm_pose_assets import export_v4_candidates
     programs = author_complete_programs(robot_id="arm", calibration_id="cal",
         neutral=(0,) * 5, bottom=(0,) * 5, top=(0,) * 5,

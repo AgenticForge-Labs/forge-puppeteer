@@ -1,6 +1,5 @@
 """Offline and real-stdio regression coverage for fake embodiment v1."""
 
-import json
 import os
 import sys
 from pathlib import Path
@@ -9,7 +8,10 @@ import anyio
 import pytest
 
 from forge_puppeteer.embodiment import (
-    ExpressionRequest, FakeEmbodiment, PresenceObservation, SCHEMA,
+    SCHEMA,
+    ExpressionRequest,
+    FakeEmbodiment,
+    PresenceObservation,
 )
 from forge_puppeteer.mcp.launcher import ServerConfig, create_execution
 from forge_puppeteer.mcp.server import Gateway
@@ -39,7 +41,7 @@ def presence(device, event_id, sequence, state, *, session="room", source="agent
 @pytest.mark.parametrize("device", ["reachy", "stackchan", "soarm101"])
 def test_fake_performer_discovery_and_ordered_presence(device):
     async def run():
-        cfg, _provider, runtime, gateway = make_fake(device)
+        _cfg, _provider, runtime, gateway = make_fake(device)
         now = [100.0]
         service = FakeEmbodiment(gateway, ttl_s=10, clock=lambda: now[0])
         try:

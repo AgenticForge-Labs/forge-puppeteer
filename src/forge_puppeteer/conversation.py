@@ -99,7 +99,7 @@ class ConversationBehaviors:
             return "unavailable", "native_behavior_unavailable"
         except PermissionError:
             return "unavailable", "not_authorized_or_resource_busy"
-        except Exception:
+        except Exception:  # noqa: BLE001 - deliberate: an unknown device outcome must not be retried
             # No automatic retry of an operation whose device outcome is unknown.
             return "blocked", "adapter_outcome_unknown"
 

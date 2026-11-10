@@ -276,7 +276,7 @@ class SOARM101Provider:
         response = await self._call("capture_camera", {"camera": camera})
         result = response.get("result")
         if not isinstance(result, Mapping):
-            raise RuntimeError("invalid_broker_camera_result")
+            raise RuntimeError("invalid_broker_camera_result")  # noqa: TRY004 - the documented contract is this exception type
         encoded, claimed = result.get("image_base64"), result.get("sha256")
         if not isinstance(encoded, str) or not isinstance(claimed, str) or not claimed:
             raise RuntimeError("broker_camera_image_or_digest_missing")

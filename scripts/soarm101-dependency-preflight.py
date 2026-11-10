@@ -8,7 +8,8 @@ import sys
 requirements = {
     "soarm101_motion.choreography": ("JointTarget", "JointChoreography", "JointFrame", "ChoreographyPolicy"),
     "soarm101_motion.broker": ("load_trusted_choreography_catalog",),
-    "forge_puppeteer.mcp.ensemble_v4": ("load_v4", "build_v4"),
+    "forge_puppeteer.ensemble.config": ("load_config",),
+    "forge_puppeteer.ensemble.build": ("build_ensemble",),
     "mcp": ("ClientSession",),
 }
 failed = False

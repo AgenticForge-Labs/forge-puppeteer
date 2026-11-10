@@ -110,7 +110,8 @@ once per session.
 ## SO-ARM101 notes
 
 - The live demo is started through the configured Puppeteer MCP launcher
-  (`mcp/ensemble_launcher.py`, v4 configs in `examples/robots/soarm101/`). It
+  (`ensemble/launcher.py`, the `forge-puppeteer-ensemble` command; schema-v4
+  configs in `examples/robots/soarm101/`, documented in `docs/ENSEMBLE.md`). It
   owns the SDK daemon and the single device connection.
 - Named taught poses live in the SDK pose store
   (`~/.config/soarm101/poses/so101.json`). Expose them via `pose_targets`.
