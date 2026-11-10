@@ -16,6 +16,7 @@ import time
 import urllib.request
 from collections.abc import Callable
 from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -31,9 +32,16 @@ from pydantic import (
 )
 
 from ..behavior_contract import PerformerBehaviors
-from ..conversation_native import stackchan_conversation_pack
 from ..execution import ExecutionRuntime
 from ..runtime import PerformanceStage
+from .ensemble_options import (
+    ReachyOptions,
+    StackChanOptions,
+    build_reachy_behavior,
+    build_stackchan_pack,
+    check_reachy_options,
+    parse_options,
+)
 from .launcher import ServerConfig
 
 
@@ -185,10 +193,12 @@ class RoomConfigV4(BaseModel):
         return self
 
 
-def load_v4(path: str | Path) -> tuple[RoomConfigV4, dict[str, object]]:
+def load_v4(path: str | Path) -> tuple[RoomConfigV4, dict[str, object], dict[str, object]]:
+    """Returns ``(ensemble config, provider config by kind, behavior options by kind)``."""
     room_path = Path(path).resolve()
     room = RoomConfigV4.model_validate(json.loads(room_path.read_text(encoding="utf-8")))
     robots: dict[str, object] = {}
+    options: dict[str, object] = {}
     for ref in room.robots:
         child = Path(ref.file)
         child = child if child.is_absolute() else room_path.parent / child
@@ -213,6 +223,10 @@ def load_v4(path: str | Path) -> tuple[RoomConfigV4, dict[str, object]]:
                         else {"head_move", "face_update", "device_stop"})
             if not required <= set(config.allowed_tools):
                 raise ValueError(f"v4 {ref.kind} requires its core tool grants")
+            options[ref.kind] = parse_options(ref.kind, data.get("options"))
+            if ref.kind == "reachy":
+                check_reachy_options(options["reachy"], config.allowed_tools,
+                                     config.restricted_actions, room.reachy_neutral_head)
             robots[ref.kind] = config
         else:
             provider_data = dict(data.get("provider") or {})
@@ -229,12 +243,28 @@ def load_v4(path: str | Path) -> tuple[RoomConfigV4, dict[str, object]]:
                 raise ValueError("v4 SO-ARM101 provider identity mismatch")
             if config.mode == "sdk_physical_daemon" and not room.physical:
                 raise ValueError("an SDK physical daemon needs physical: true on the room")
+            parse_options(ref.kind, data.get("options"))
             robots[ref.kind] = config
-    return room, robots
+    return room, robots, options
 
 
-def build_v4(room: RoomConfigV4, robots: dict[str, object], private_tokens: dict[str, tuple[str, str | None]] | None = None):
-    """Construct only selected providers and packs; all actions use one runtime."""
+@dataclass(frozen=True)
+class V4Extras:
+    """What the ensemble and MCP server need beyond the packs."""
+    #: ``{performer_id: {"idle": pack, "speaking": pack}}`` for ConversationEnsemble.
+    motion_patterns: dict[str, dict[str, object]] = field(default_factory=dict)
+    #: Keyword arguments for ``create_ensemble_server`` (speech-driven motion).
+    server_kwargs: dict[str, object] = field(default_factory=dict)
+
+
+def build_v4(room: RoomConfigV4, robots: dict[str, object],
+             private_tokens: dict[str, tuple[str, str | None]] | None = None,
+             options: dict[str, object] | None = None):
+    """Construct only selected providers and packs; all actions use one runtime.
+
+    Returns ``(runtime, packs, connected, extras)``.
+    """
+    options = options or {}
     providers: dict[str, object] = {}
     packs: list[PerformerBehaviors] = []
     runtime = ExecutionRuntime(PerformanceStage(), journal_path=room.action_journal,
@@ -254,7 +284,7 @@ def build_v4(room: RoomConfigV4, robots: dict[str, object], private_tokens: dict
             from .launcher import StackChanSDKProvider
             provider = StackChanSDKProvider(config)
             providers[ref.id] = provider
-            packs.append(stackchan_conversation_pack(ref.id))
+            packs.append(build_stackchan_pack(ref.id, options.get("stackchan") or StackChanOptions()))
             connected_contexts.append(provider.connected)
         else:
             from ..devices.soarm101 import SOARM101Provider
@@ -283,19 +313,39 @@ def build_v4(room: RoomConfigV4, robots: dict[str, object], private_tokens: dict
             connected_contexts.append(lambda f=arm_connected: f())
         runtime.register(ref.id, providers[ref.id])
 
+    extras_motion: dict[str, dict[str, object]] = {}
+    server_kwargs: dict[str, object] = {}
+    reachy_options = options.get("reachy") or ReachyOptions()
+    stackchan_options = options.get("stackchan") or StackChanOptions()
+
     async def resolve_reachy_pack():
         if reachy is None:
-            return
+            return None
+        neutral = json.loads(Path(room.reachy_neutral_head).read_text(encoding="utf-8"))
+        behavior = await build_reachy_behavior(
+            reachy.config.instance_id, reachy.catalog, reachy_options, neutral)
+        packs.insert(0, behavior.pack)
+        return behavior, neutral
 
-        import json as _json
-
-        from ..conversation_native import reachy_pack_from_catalog
-        packs.insert(0, await reachy_pack_from_catalog(
-            reachy.config.instance_id, reachy.catalog,
-            neutral_head=_json.loads(Path(room.reachy_neutral_head).read_text(encoding="utf-8"))))
-
-    if reachy is not None:
-        anyio.run(resolve_reachy_pack)
+    resolved = anyio.run(resolve_reachy_pack) if reachy is not None else None
+    speech_driven: list[str] = []
+    if resolved is not None:
+        behavior, neutral = resolved
+        reachy_id = reachy.config.instance_id
+        if behavior.motion_patterns:
+            extras_motion[reachy_id] = dict(behavior.motion_patterns)
+        if reachy_options.speech_driven:
+            speech_driven.append(reachy_id)
+            server_kwargs["speech_neutral_heads"] = {reachy_id: neutral}
+        if behavior.speech_dynamics:
+            server_kwargs["speech_dynamics"] = {reachy_id: behavior.speech_dynamics}
+        if behavior.speech_fallback is not None:
+            server_kwargs["speech_fallbacks"] = {reachy_id: behavior.speech_fallback}
+    for ref in room.robots:
+        if ref.kind == "stackchan" and stackchan_options.speech_driven:
+            speech_driven.append(ref.id)
+    if speech_driven:
+        server_kwargs["speech_driven_performers"] = tuple(speech_driven)
 
     @asynccontextmanager
     async def connected():
@@ -312,7 +362,7 @@ def build_v4(room: RoomConfigV4, robots: dict[str, object], private_tokens: dict
                     await trusted.validate_catalog(config.choreography_durations_s)
             yield
 
-    return runtime, tuple(packs), connected
+    return runtime, tuple(packs), connected, V4Extras(extras_motion, server_kwargs)
 
 
 def _daemon_process_alive(pid: int) -> bool:
@@ -559,8 +609,8 @@ def build_startup_gate(room: RoomConfigV4, robots: dict[str, object], runtime, e
     Returns None when nothing needs gating.
     """
     from ..behavior_contract import BehaviorCue
-    from ..startup_gate import StartupGate
     from ..standard_poses import load_standard_poses
+    from ..startup_gate import StartupGate
 
     readers, poses, cues = {}, {}, {}
     for ref in room.robots:

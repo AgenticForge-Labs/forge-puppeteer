@@ -117,9 +117,9 @@ if BUSY:
     from forge_puppeteer.mcp import ensemble_v4
     original_build = ensemble_v4.build_v4
     def busy_build(*args, **kwargs):
-        runtime, packs, connected = original_build(*args, **kwargs)
+        runtime, packs, connected, extras = original_build(*args, **kwargs)
         runtime.acquire_control('arm', 'foreign-controller', 'foreign-session')
-        return runtime, packs, connected
+        return runtime, packs, connected, extras
     ensemble_v4.build_v4 = busy_build
 from forge_puppeteer.mcp.ensemble_launcher import main
 main()
