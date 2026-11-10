@@ -34,7 +34,7 @@ class FakeArm:
         self.stop_calls = 0
 
     async def validate(self, request):
-        if request.operation not in {"live_presence", "play_choreography", "wake_to_neutral"}:
+        if request.operation not in {"live_presence", "play_choreography", "wake_to_neutral", "play_joint_target"}:
             raise ValueError("unsupported")
 
     def resources_for(self, request):
@@ -75,12 +75,20 @@ def program(name, operation="play_choreography"):
         max_duration_s=5)
 
 
+def pose(name, operation):
+    return BehaviorPattern(source="recorded", mode="once", cues=(BehaviorCue(
+        at_s=0, operation=operation, asset_id=f"soarm101/target/{name}", asset_revision=REV),),
+        max_duration_s=5)
+
+
 def build(startup=False):
     presence = LivePresence(SETTINGS)
     arm = FakeArm(presence)
     runtime = ExecutionRuntime(PerformanceStage())
     runtime.register("arm", arm)
-    behaviors = {"idle": hold(), "listening": hold(), "speaking": hold(), "yes": program("yes")}
+    behaviors = {"idle": hold(), "listening": hold(), "speaking": hold(), "yes": program("yes"),
+                 "sleep2": pose("sleep2", "play_joint_target"),
+                 "neutral": pose("wake_to_neutral", "wake_to_neutral")}
     wake = BehaviorPattern(source="recorded", mode="once", cues=(BehaviorCue(
         at_s=0, operation="wake_to_neutral", asset_id="soarm101/target/wake_to_neutral",
         asset_revision=REV),), max_duration_s=5) if startup else None
@@ -171,3 +179,42 @@ async def test_the_stream_only_opens_after_the_wake_motion_even_for_a_spoken_gre
         await until(lambda: arm.open)
         assert arm.events[:2] == ["wake_to_neutral", "open"]
         assert arm.behaviors[-1] == "speaking"
+
+
+@pytest.mark.anyio
+async def test_a_sleep_gesture_leaves_the_arm_resting_until_it_is_woken():
+    arm, runtime, ensemble = build()
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(event(0, "listening"))
+        await until(lambda: arm.open)
+        assert (await ensemble.express("sleep2", action_id="sleep-1"))["outcome"] == "accepted"
+        await until(lambda: arm.events == ["open", "close", "play_joint_target"])
+        # Presence changes while lying down start nothing: no stream, no refused opens.
+        await ensemble.observe(event(1, "speaking"))
+        await ensemble.observe(event(2, "idle"))
+        await anyio.sleep(0.15)
+        assert arm.events == ["open", "close", "play_joint_target"] and not arm.open
+        # Other gestures wait for the wake move instead of being sent to a lying arm.
+        denied = await ensemble.express("yes", action_id="yes-1")
+        assert denied["outcome"] == "denied" and denied["reason"] == "performer_resting_needs_wake"
+        # "neutral" runs the wake move and presence resumes for the current state.
+        assert (await ensemble.express("neutral", action_id="wake-1"))["outcome"] == "accepted"
+        await until(lambda: arm.events[-2:] == ["wake_to_neutral", "open"])
+        assert arm.behaviors[-1] == "idle"
+        assert (await ensemble.express("yes", action_id="yes-2"))["outcome"] == "accepted"
+        assert arm.stop_calls == 0
+
+
+@pytest.mark.anyio
+async def test_resting_does_not_carry_into_the_next_conversation():
+    arm, runtime, ensemble = build()
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(event(0, "listening"))
+        await until(lambda: arm.open)
+        await ensemble.express("sleep2", action_id="sleep-1")
+        await until(lambda: "play_joint_target" in arm.events)
+        await ensemble.observe(event(1, "disconnected"))
+        arm.events.clear()
+        await ensemble.observe(EnsemblePresence(
+            session_id="next", event_id="n0", sequence=0, state="listening", source="agent_state"))
+        await until(lambda: arm.open)

@@ -394,6 +394,10 @@ def _soarm_broker_pack(config: SOARMBrokerConfig) -> PerformerBehaviors:
             at_s=0, operation="wake_to_neutral", parameters={},
             asset_id="soarm101/target/wake_to_neutral",
             asset_revision=config.startup_target_revision),), max_duration_s=30)
+        if live and "neutral" not in patterns:
+            # With a pose gesture such as sleep2 available, the conversation needs a
+            # way back up: "neutral" runs the same wake move as startup.
+            patterns["neutral"] = startup
     return PerformerBehaviors.author(config.instance_id, patterns, startup=startup)
 
 

@@ -111,6 +111,9 @@ class ConversationEnsemble:
         # Performers whose presence runs as a live stream (SO-ARM): the state is
         # passed to the performer's LivePresence instead of switching programs.
         self._live: dict[str, object] = {}
+        # Performers a pose-target gesture (such as sleep) left away from neutral:
+        # no presence or other gesture runs until ``wake_to_neutral`` completes.
+        self._rest: set[str] = set()
         self._speech_channels: dict[
             str, tuple[object, float, list | None, object | None]
         ] = {}
@@ -298,6 +301,7 @@ class ConversationEnsemble:
                 self._release_owners()
                 self._session = None
                 self._settled = False
+                self._rest.clear()
             elif self._settled:
                 pass  # The caller is ending the session; no new motion starts.
             else:
@@ -359,6 +363,8 @@ class ConversationEnsemble:
                 return {"outcome": "denied", "reason": "reserved_presence_state", **self.snapshot()}
             if any(n in self._blocked for n in names):
                 return {"outcome": "denied", "reason": "performer_quarantined", **self.snapshot()}
+            if any(n in self._rest and not self._wakes(n, expression) for n in names):
+                return {"outcome": "denied", "reason": "performer_resting_needs_wake", **self.snapshot()}
             if any(n not in self._owned for n in names):
                 return {"outcome": "denied", "reason": "performer_not_owned", **self.snapshot()}
             if any(expression not in self.packs[n].behaviors for n in names):
@@ -641,6 +647,8 @@ class ConversationEnsemble:
         if name in self._blocked or name not in self._owned or self._session is None:
             return
         if name in self._live and behavior in {"idle", "listening", "speaking"} and pattern_override is None:
+            if name in self._rest:
+                return  # lying down: stays still until woken with wake_to_neutral
             if behavior == "speaking" and not self.startup_complete(name):
                 self._spawn_deferred_speaking(name, action_id, resume=resume)
                 return
@@ -683,6 +691,11 @@ class ConversationEnsemble:
         if performer_id not in self.packs:
             raise ValueError("live presence requires a configured performer")
         self._live[performer_id] = presence
+
+    def _wakes(self, name: str, expression: str) -> bool:
+        """True when this gesture is the wake-to-neutral move."""
+        pattern = self.packs[name].behaviors.get(expression)
+        return pattern is not None and any(cue.operation == "wake_to_neutral" for cue in pattern.cues)
 
     def _live_following(self, name: str) -> bool:
         """True when this performer's running slot is a live stream that can take a new state."""
@@ -912,13 +925,19 @@ class ConversationEnsemble:
         with slot.scope:
             try:
                 completed = await self._execute_pattern(name, behavior, pattern, slot, action_id)
+                if completed and name in self._live:
+                    operations = {cue.operation for cue in pattern.cues}
+                    if "play_joint_target" in operations:
+                        self._rest.add(name)
+                    elif "wake_to_neutral" in operations:
+                        self._rest.discard(name)
                 if behavior == "startup":
                     self._startup_finished(name)
                 slot.expression_active = False
                 # An expression returns to the *latest* conversational presence
                 # only if it was not interrupted or blocked.
                 if (completed and resume and name not in self._blocked
-                        and not slot.scope.cancel_called):
+                        and name not in self._rest and not slot.scope.cancel_called):
                     background = self.packs[name].behaviors.get(self._state)
                     if background and self._session:
                         # A completed startup/gesture can resume a long-lived
@@ -1319,4 +1338,5 @@ class ConversationEnsemble:
                     self._release_owners()
                     self._session = None
                     self._state = "disconnected"
+                    self._rest.clear()
                     self._expired = True
