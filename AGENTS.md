@@ -95,8 +95,10 @@ once per session.
   function plus CLI/API before it goes into orchestration.
 - **Direction: live first, scripts later (issue #56).** Today a live
   conversation drives one robot, or all three with the same behaviors. Later,
-  Studios will send scripts (timed events that wait for behaviors and lines to
-  finish; silence is explicit) with one robot per character, and characters such
+  Studios (the coordinator; it also drives video recording and calls
+  Conversationalist for audio) will send scripts (timed events that wait for
+  behaviors and lines to finish; silence is explicit) with one robot per
+  character, and characters such
   as "4g" or a dog-like one will restyle the standard behaviors. Write live code
   so that stays easy: treat each robot separately (never one state for the whole
   ensemble), layer character style over standard behaviors, prefer "after X
