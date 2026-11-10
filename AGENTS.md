@@ -93,6 +93,17 @@ once per session.
   start/end times, the result and media references.
 - **Reusable work.** A useful manual operation should become a tested
   function plus CLI/API before it goes into orchestration.
+- **Direction: live first, scripts later (issue #56).** Today a live
+  conversation drives one robot, or all three with the same behaviors. Later,
+  Studios will send scripts (timed events that wait for behaviors and lines to
+  finish; silence is explicit) with one robot per character, and characters such
+  as "4g" or a dog-like one will restyle the standard behaviors. Write live code
+  so that stays easy: treat each robot separately (never one state for the whole
+  ensemble), layer character style over standard behaviors, prefer "after X
+  completes" over fixed timestamps, and keep start/end timestamps for every
+  behavior. Don't build script features yet.
+- **Name.** The unit that owns a set of robots is an *ensemble*, not a "room"
+  (that is LiveKit's word; Puppeteer must work without LiveKit).
 
 ## SO-ARM101 notes
 
