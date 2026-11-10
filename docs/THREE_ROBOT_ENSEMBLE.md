@@ -235,7 +235,7 @@ before execution. No arbitrary agent requests can turn candidate
 programs into approved motions.
 
 Exact SDK source refs for this PR:
-- SOARM SDK `60589ef56e02084ff53e432771d0cc7b7d257e1c`
+- SOARM SDK `1245f35a23571fa4ed09ccb4eb7b2cecad21f4cf`
 - StackChan SDK `391ccb9b5ff777fbd88df6a97e2477161a34c7ec`
 - Reachy SDK `1.10.0rc5`, using the checked-in official Pollen
   recording manifest and the explicit SHA-verified importer from PR 2.
@@ -244,7 +244,7 @@ Install standalone dependencies:
 
 ```bash
 python -m pip install -e '.[mcp,reachy]'
-python -m pip install 'soarm101-motion-sdk @ git+https://github.com/AgenticForge-Labs/soarm101-motion-sdk.git@60589ef56e02084ff53e432771d0cc7b7d257e1c'
+python -m pip install 'soarm101-motion-sdk @ git+https://github.com/AgenticForge-Labs/soarm101-motion-sdk.git@1245f35a23571fa4ed09ccb4eb7b2cecad21f4cf'
 python -m pip install 'stackchan-control[serial] @ git+https://github.com/AgenticForge-Labs/stackchan-control-sdk.git@391ccb9b5ff777fbd88df6a97e2477161a34c7ec'
 forge-puppeteer-ensemble --config /absolute/path/to/operator-reviewed-ensemble.json
 ```

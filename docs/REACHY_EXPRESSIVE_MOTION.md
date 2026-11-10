@@ -110,7 +110,7 @@ From the branch's exact committed SHA:
 
 ```bash
 python -m pip install -e '.[dev,mcp,reachy]'
-python -m pip install 'soarm101-motion-sdk @ git+https://github.com/AgenticForge-Labs/soarm101-motion-sdk.git@60589ef56e02084ff53e432771d0cc7b7d257e1c'
+python -m pip install 'soarm101-motion-sdk @ git+https://github.com/AgenticForge-Labs/soarm101-motion-sdk.git@1245f35a23571fa4ed09ccb4eb7b2cecad21f4cf'
 python -m pip install 'stackchan-control[serial] @ git+https://github.com/AgenticForge-Labs/stackchan-control-sdk.git@391ccb9b5ff777fbd88df6a97e2477161a34c7ec'
 pytest -q tests/robots/test_reachy_expressive_motion.py tests/robots/test_conversation_native.py tests/robots/test_ensemble_launcher_config.py tests/robots/test_conversation_native_integration.py
 pytest -q
