@@ -256,6 +256,23 @@ def create_ensemble_server(
         return {"outcome": "denied", "reason": "unknown_action"}
 
     @server.tool()
+    async def ensemble_recover(performer_id: str) -> dict[str, object]:
+        """Lift a performer's quarantine after fresh evidence; never retries a motion.
+
+        Evidence is a measured pose that is settled near sleep/neutral, or a
+        confirmed STOP. Refused while a conversation is active. Afterwards the
+        sleep check runs again.
+        """
+        if startup_gate is None:
+            return {"outcome": "unsupported", "reason": "startup_gate_not_configured"}
+        if not motion_enabled:
+            raise ToolError("ensemble_motion_not_operator_authorized")
+        try:
+            return await startup_gate.recover(performer_id)
+        except Exception:  # noqa: BLE001
+            raise ToolError("recover_unavailable") from None
+
+    @server.tool()
     async def ensemble_park(action_id: str) -> dict[str, object]:
         """End of session: move every robot to sleep and report the re-check.
 

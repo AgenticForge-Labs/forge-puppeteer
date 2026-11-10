@@ -541,6 +541,31 @@ class ConversationEnsemble:
     def _mark_startup_pending(self) -> None:
         self._startup_deadline = anyio.current_time() + self._startup_settle_s
 
+    def is_blocked(self, name: str) -> bool:
+        return name in self._blocked
+
+    async def recover(self, name: str) -> dict[str, object]:
+        """Clear this coordinator's quarantine of one performer after independent evidence.
+
+        The caller must already have cleared the runtime fence. Refused while a
+        conversation is active or the performer's last action is still running.
+        """
+        async with self._lock:
+            if name not in self.packs:
+                return {"outcome": "denied", "reason": "unknown_performer"}
+            if self._session is not None:
+                return {"outcome": "denied", "reason": "conversation_session_active"}
+            slot = self._slots.get(name)
+            if slot is not None and not slot.done.is_set():
+                return {"outcome": "denied", "reason": "action_still_running"}
+            was_blocked = name in self._blocked
+            self._slots.pop(name, None)
+            self._blocked.discard(name)
+            self._owned.discard(name)
+            if name not in self._gate:
+                self._unavailable.pop(name, None)
+            return {"outcome": "recovered" if was_blocked else "not_quarantined"}
+
     def set_gate(self, name: str, reason: str | None) -> None:
         """Hold a performer still (reason) or release it (None) for the next presence event.
 

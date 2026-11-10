@@ -23,6 +23,8 @@ import uuid
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
+import anyio
+
 from .behavior_contract import BehaviorCue
 from .execution import ActionRequest, ActionState, ExecutionError, ExecutionRuntime
 from .standard_poses import (
@@ -53,6 +55,8 @@ class StartupGate:
         sleep_cues: Mapping[str, BehaviorCue] | None = None,
         *,
         caller_id: str = "startup-gate",
+        settle_s: float = 0.5,
+        settled_motion_deg: float = 1.0,
     ):
         if set(readers) != set(poses) or not set(readers) <= set(ensemble.packs):
             raise ValueError("readers and standard poses must cover the same configured performers")
@@ -62,6 +66,7 @@ class StartupGate:
         self.runtime, self.ensemble = runtime, ensemble
         self.readers, self.poses, self.sleep_cues = dict(readers), dict(poses), sleep_cues
         self.caller_id = caller_id
+        self.settle_s, self.settled_motion_deg = settle_s, settled_motion_deg
         self._session_id = f"startup-gate-{uuid.uuid4().hex[:12]}"
         self._status: dict[str, dict[str, object]] = {}
 
@@ -192,3 +197,78 @@ class StartupGate:
         return {"outcome": "parked" if all(
             r["outcome"] in {"at_sleep", "already_at_sleep"} for r in results.values()
         ) else "parked_with_notes", "results": results, **self.snapshot()}
+
+    # -- recovery from quarantine -----------------------------------------
+    def _quarantine_sources(self, name: str) -> list[str]:
+        sources = []
+        if self.ensemble.is_blocked(name):
+            sources.append("ensemble")
+        if self.runtime.is_inhibited(name):
+            sources.append("runtime")
+        probe = getattr(self.readers[name], "is_quarantined", None)
+        if callable(probe) and probe():
+            sources.append("provider")
+        return sources
+
+    async def _settled_near_standard_pose(self, name: str) -> str | None:
+        """Two reads ``settle_s`` apart, both near sleep or neutral and not moving."""
+        try:
+            first = await self.readers[name].read_pose()
+            await anyio.sleep(self.settle_s)
+            second = await self.readers[name].read_pose()
+        except Exception:  # noqa: BLE001 - no evidence, fall back to STOP
+            return None
+        if first.source != "measured" or second.source != "measured":
+            return None
+        if set(first.channels) != set(second.channels) or not first.channels:
+            return None
+        moved = max(abs(first.channels[k] - second.channels[k]) for k in first.channels)
+        if moved > self.settled_motion_deg:
+            return None
+        for pose in ("sleep", "neutral"):
+            a = pose_check(first, self.poses[name], pose)
+            b = pose_check(second, self.poses[name], pose)
+            if a.ok and b.ok:
+                return (f"measured pose settled near {pose} "
+                        f"(worst delta {abs(b.worst_delta_deg):.1f} deg, moved {moved:.2f} deg in {self.settle_s:g} s)")
+        return None
+
+    async def recover(self, performer_id: str) -> dict[str, object]:
+        """Lift a quarantine after fresh evidence; never retries or moves the robot.
+
+        Evidence is either a measured pose that is settled near sleep/neutral, or a
+        confirmed STOP. Afterwards the sleep check runs again, so a robot recovered
+        at neutral is asked to go to sleep before the next session.
+        """
+        if (bad := self._unknown(performer_id)) is not None:
+            return bad
+        sources = self._quarantine_sources(performer_id)
+        if not sources:
+            return {"outcome": "not_quarantined", **self.snapshot()}
+        if self.ensemble.snapshot()["session_id"] is not None:
+            return {"outcome": "denied", "reason": "conversation_session_active", **self.snapshot()}
+        provider = self.readers[performer_id]
+        evidence = await self._settled_near_standard_pose(performer_id)
+        try:
+            if evidence is not None:
+                self.runtime.recover_unknown(performer_id, evidence)
+            else:
+                stop = await self.runtime.stop(performer_id)
+                if not stop.confirmed:
+                    return {"outcome": "not_recovered", "reason": "no_settled_pose_and_stop_unconfirmed",
+                            "quarantine": sources,
+                            "hint": "Not retrying. Check the robot; once it rests at sleep or neutral, run recover again.",
+                            **self.snapshot()}
+                evidence = f"confirmed STOP: {stop.evidence}"
+            clear = getattr(provider, "clear_quarantine", None)
+            if callable(clear):
+                clear()
+            self.runtime.release_any_control(performer_id, self.ensemble.caller_id)
+        except ExecutionError as exc:
+            return {"outcome": "not_recovered", "reason": exc.code, "quarantine": sources, **self.snapshot()}
+        result = await self.ensemble.recover(performer_id)
+        if result["outcome"] == "denied":
+            return {"outcome": "not_recovered", "reason": result["reason"], "quarantine": sources, **self.snapshot()}
+        await self._read(performer_id)
+        return {"outcome": "recovered", "evidence": evidence, "was_quarantined_by": sources,
+                **self.snapshot()}

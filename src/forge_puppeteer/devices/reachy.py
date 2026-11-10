@@ -291,6 +291,15 @@ class ReachyPlaybackProvider:
             authority={"motion": "granted" if self.motion_authorized else "denied"},
         )
 
+    def is_quarantined(self) -> bool:
+        with self._lock:
+            return self._quarantined
+
+    def clear_quarantine(self) -> None:
+        """Lift the provider quarantine. Only call after independent evidence the robot is settled."""
+        with self._lock:
+            self._quarantined = False
+
     async def read_pose(self):
         """Measured head and antenna joints from the SDK (read-only)."""
         from ..standard_poses import reachy_measured_pose

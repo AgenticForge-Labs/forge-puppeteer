@@ -4,6 +4,8 @@ from contextlib import asynccontextmanager
 
 import pytest
 
+from types import SimpleNamespace
+
 from forge_puppeteer.behavior_contract import BehaviorCue, BehaviorPattern, PerformerBehaviors
 from forge_puppeteer.conversation_ensemble import ConversationEnsemble
 from forge_puppeteer.execution import Completion, ExecutionRuntime, StopResult
@@ -26,15 +28,20 @@ SLEEP_CUE = BehaviorCue(at_s=0, operation="go_sleep")
 class FakeArm:
     """Reports a joint pose; a 'go_sleep' action moves it (or not, or fails)."""
 
-    def __init__(self, offset_deg=0.0, *, reaches_sleep=True, fail=False, commanded=False):
+    def __init__(self, offset_deg=0.0, *, reaches_sleep=True, fail=False, commanded=False,
+                 stop_confirms=True, pose=None, drift_deg=0.0):
         self.offset = offset_deg
         self.reaches_sleep, self.fail, self.commanded = reaches_sleep, fail, commanded
-        self.executed = []
+        self.stop_confirms, self.pose, self.drift_deg = stop_confirms, pose, drift_deg
+        self.executed, self.stops, self._reads = [], 0, 0
 
     async def read_pose(self):
         if self.commanded:
             return MeasuredPose({}, "commanded")
-        return MeasuredPose({k: v + self.offset for k, v in SLEEP.items()})
+        self._reads += 1
+        if self.pose is not None:
+            return MeasuredPose(dict(self.pose))
+        return MeasuredPose({k: v + self.offset + self.drift_deg * self._reads for k, v in SLEEP.items()})
 
     async def validate(self, request):
         pass
@@ -47,11 +54,12 @@ class FakeArm:
         if self.fail:
             raise RuntimeError("sdk fault")
         if self.reaches_sleep:
-            self.offset = 0.0
+            self.offset, self.pose = 0.0, None
         return Completion("done")
 
     async def stop(self):
-        return StopResult(True, "stopped")
+        self.stops += 1
+        return StopResult(self.stop_confirms, "stopped" if self.stop_confirms else "no acknowledgment")
 
 
 def _pack(performer_id):
@@ -67,7 +75,7 @@ async def room(arms, *, cues=None):
     ensemble = ConversationEnsemble(runtime, [_pack(n) for n in arms])
     poses = {n: load_standard_poses("soarm101", override_dir=None) for n in arms}
     gate = StartupGate(runtime, ensemble, arms, poses,
-                       {n: SLEEP_CUE for n in arms} if cues is None else cues)
+                       {n: SLEEP_CUE for n in arms} if cues is None else cues, settle_s=0.01)
     async with runtime.run():
         async with ensemble.run():
             yield gate, ensemble
@@ -212,3 +220,119 @@ def test_gate_requires_matching_configured_performers():
         StartupGate(runtime, ensemble, {"arm": arm}, {"arm": None}, {"ghost": SLEEP_CUE})
     runtime.close()
     assert math.isfinite(SLEEP["shoulder_pan"])
+
+
+# --- quarantine recovery ------------------------------------------------------
+
+NEUTRAL = load_standard_poses("soarm101", override_dir=None).pose("neutral").channels
+
+
+async def _quarantine(runtime, ensemble, arm, name="arm"):
+    """A real unknown-outcome quarantine: failed action, then an unconfirmed STOP."""
+    from forge_puppeteer.execution import ActionRequest
+    arm.fail, arm.stop_confirms = True, False
+    await runtime.submit(ActionRequest(id="boom", performer_id=name, caller_id="c",
+                                       session_id="s", operation="go_sleep"))
+    await runtime.wait("boom")
+    await runtime.stop(name)
+    arm.fail = False
+    ensemble._blocked.add(name)  # what a failed ambient slot would have recorded
+    assert runtime.is_inhibited(name) and ensemble.is_blocked(name)
+
+
+async def test_recover_from_settled_pose_near_sleep_clears_every_fence():
+    arm = FakeArm(1.0)
+    async with room({"arm": arm}) as (gate, ensemble):
+        await _quarantine(gate.runtime, ensemble, arm)
+        result = await gate.recover("arm")
+        assert result["outcome"] == "recovered" and "settled near sleep" in result["evidence"]
+        assert result["was_quarantined_by"] == ["ensemble", "runtime"]
+        assert not gate.runtime.is_inhibited("arm") and not ensemble.is_blocked("arm")
+        assert result["ready"]
+        # The original action stays recorded as unknown, with the recovery evidence.
+        record = gate.runtime.lookup("boom")
+        assert str(record.state) == "unknown" and record.cancellation_outcome.startswith("recovered:")
+        # And the performer can be used again by a new conversation.
+        await ensemble.observe(_idle_event())
+        assert ensemble.snapshot()["performers"]["arm"]["status"] != "blocked"
+
+
+async def test_recover_without_settled_pose_falls_back_to_a_confirmed_stop():
+    arm = FakeArm(pose={k: v + 40.0 for k, v in SLEEP.items()})  # mid-air, near nothing
+    async with room({"arm": arm}) as (gate, ensemble):
+        await _quarantine(gate.runtime, ensemble, arm)
+        arm.stop_confirms = True
+        result = await gate.recover("arm")
+        assert result["outcome"] == "recovered" and result["evidence"].startswith("confirmed STOP")
+        assert not gate.runtime.is_inhibited("arm")
+        # Not at sleep, so the gate now asks the user.
+        assert result["performers"]["arm"]["status"] == "not_at_sleep" and not result["ready"]
+
+
+async def test_recover_with_moving_pose_and_unconfirmed_stop_stays_quarantined_and_does_not_retry():
+    arm = FakeArm(drift_deg=1.5)  # still moving between reads
+    async with room({"arm": arm}) as (gate, ensemble):
+        await _quarantine(gate.runtime, ensemble, arm)
+        stops = arm.stops
+        result = await gate.recover("arm")
+        assert result["outcome"] == "not_recovered"
+        assert result["reason"] == "no_settled_pose_and_stop_unconfirmed" and "Not retrying" in result["hint"]
+        assert arm.stops == stops + 1  # exactly one STOP attempt
+        assert gate.runtime.is_inhibited("arm") and ensemble.is_blocked("arm")
+
+
+async def test_recovered_at_neutral_is_then_asked_to_go_to_sleep():
+    arm = FakeArm(pose=NEUTRAL)
+    async with room({"arm": arm}) as (gate, ensemble):
+        await _quarantine(gate.runtime, ensemble, arm)
+        result = await gate.recover("arm")
+        assert result["outcome"] == "recovered" and "settled near neutral" in result["evidence"]
+        assert result["performers"]["arm"]["status"] == "not_at_sleep"
+        moved = await gate.move_to_sleep("arm", "sleep-after-recover")
+        assert moved["outcome"] == "at_sleep" and moved["ready"]
+
+
+async def test_recover_is_refused_during_a_conversation_and_when_nothing_is_quarantined():
+    arm = FakeArm(1.0)
+    async with room({"arm": arm}) as (gate, ensemble):
+        assert (await gate.recover("arm"))["outcome"] == "not_quarantined"
+        await _quarantine(gate.runtime, ensemble, arm)
+        await ensemble.observe(_idle_event())
+        result = await gate.recover("arm")
+        assert result["outcome"] == "denied" and result["reason"] == "conversation_session_active"
+        assert gate.runtime.is_inhibited("arm")
+        assert (await gate.recover("ghost"))["reason"] == "unknown_performer"
+
+
+async def test_runtime_refuses_to_recover_while_an_action_is_in_flight():
+    import anyio
+
+    from forge_puppeteer.execution import ActionRequest, ExecutionError
+
+    release = anyio.Event()
+
+    class Slow(FakeArm):
+        async def execute(self, request):
+            await release.wait()
+            return Completion("done")
+
+    arm = Slow()
+    async with room({"arm": arm}) as (gate, _):
+        await gate.runtime.submit(ActionRequest(id="slow", performer_id="arm", caller_id="c",
+                                                session_id="s", operation="go_sleep"))
+        with pytest.raises(ExecutionError) as excinfo:
+            gate.runtime.recover_unknown("arm", "pose looked fine")
+        assert excinfo.value.code == "action_in_flight"
+        release.set()
+        await gate.runtime.wait("slow")
+
+
+def test_reachy_provider_quarantine_can_be_inspected_and_lifted():
+    from forge_puppeteer.devices.reachy import ReachyPlaybackProvider
+
+    provider = ReachyPlaybackProvider(SimpleNamespace(), SimpleNamespace())
+    assert not provider.is_quarantined()
+    provider._quarantined = True
+    assert provider.is_quarantined()
+    provider.clear_quarantine()
+    assert not provider.is_quarantined()

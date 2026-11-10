@@ -57,7 +57,10 @@ once per session.
   against the same device at once.
 - **Faults stop the run.** On an SDK fault, collision, failed or uncertain
   STOP, or unexpected position: stop, report the actual error and ask. Don't
-  retry the same motion in a loop and don't auto-rearm.
+  retry the same motion in a loop and don't auto-rearm. A quarantined robot is
+  recovered with `ensemble_recover(performer_id)` once it has been seen settled:
+  a measured pose that stops changing near sleep or neutral, or a confirmed
+  STOP. No restart or typed confirmation phrase is needed.
 - **No bypassing.** Don't get around a fault or denial with raw serial, direct
   motor calls or a different controller.
 - **No secrets in git.** Never commit credentials, Wi-Fi/device secrets,

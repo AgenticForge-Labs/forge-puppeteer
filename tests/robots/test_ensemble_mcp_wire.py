@@ -353,6 +353,9 @@ async def test_startup_gate_reports_asks_moves_to_sleep_and_parks_over_real_stdi
             "performer_id": "arm", "action": "move_to_sleep", "action_id": "sleep-1"})).structured_content
         assert moved["outcome"] == "at_sleep" and moved["ready"]
         assert log.read_text().splitlines() == ["go_sleep"]
+        # Nothing is quarantined, so recovery reports that and does nothing.
+        recovered = (await session.call_tool("ensemble_recover", {"performer_id": "arm"})).structured_content
+        assert recovered["outcome"] == "not_quarantined"
         # Parking an already-parked robot makes no move.
         parked = (await session.call_tool("ensemble_park", {"action_id": "end-1"})).structured_content
         assert parked["outcome"] == "parked"

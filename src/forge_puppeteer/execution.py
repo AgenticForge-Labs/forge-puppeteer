@@ -272,6 +272,76 @@ class ExecutionRuntime:
         self._providers[performer_id] = provider
         self._generation[performer_id] = 0
 
+    def is_inhibited(self, performer_id: str) -> bool:
+        """True while an unconfirmed STOP or unknown outcome fences this performer."""
+        return performer_id in self._inhibited
+
+    def release_any_control(self, performer_id: str, caller_id: str) -> bool:
+        """Release this process's ownership held by ``caller_id``, whatever its session.
+
+        Used after recovery, when the session that held ownership is gone. Refuses
+        (``performer_busy``) while any action is active. Returns False if this
+        caller held nothing.
+        """
+        owner = self._owners.get(performer_id)
+        session = owner[1] if owner is not None and owner[0] == caller_id else None
+        if session is None and self._ownership_db is not None:
+            try:
+                row = self._ownership_db.execute(
+                    "SELECT caller_id, session_id, process_id FROM performer_owners WHERE performer_id=?",
+                    (performer_id,),
+                ).fetchone()
+            except sqlite3.Error:
+                raise ExecutionError("ownership_unavailable") from None
+            if row is not None and row[0] == caller_id and row[2] == self._owner_process:
+                session = row[1]
+        if session is None:
+            return False
+        self.release_control(performer_id, caller_id, session)
+        return True
+
+    def recover_unknown(self, performer_id: str, evidence: str) -> int:
+        """Clear the unknown-outcome fence from fresh, independent evidence.
+
+        The caller has just observed the robot settled (for example a measured
+        pose that stopped changing near a standard pose). Actions stay recorded as
+        ``unknown`` with this evidence attached; their reservations are released.
+        Refuses while any action is in flight or another live process has work
+        admitted. Returns the number of released actions.
+        """
+        self._provider(performer_id)
+        if not evidence or len(evidence) > 900:
+            raise ValueError("recovery evidence is required (at most 900 characters)")
+        if performer_id in self._stopping:
+            raise ExecutionError("stop_in_progress")
+        mine = [e for e in self._entries.values() if e.request.performer_id == performer_id]
+        if any(e.record.state not in _TERMINAL for e in mine):
+            raise ExecutionError("action_in_flight")
+        if self._ownership_db is not None:
+            self._reap_dead_owners_now()
+            try:
+                remote = self._ownership_db.execute(
+                    "SELECT 1 FROM performer_activity WHERE performer_id=? AND process_id<>? LIMIT 1",
+                    (performer_id, self._owner_process),
+                ).fetchone()
+            except sqlite3.Error:
+                raise ExecutionError("ownership_unavailable") from None
+            if remote is not None:
+                raise ExecutionError("other_process_active")
+        released = 0
+        for entry in mine:
+            if not entry.reserved:
+                continue
+            entry.reserved = False
+            entry.record = entry.record.model_copy(update={
+                "cancellation_outcome": f"recovered: {evidence}",
+            })
+            self._persist(entry)
+            self._release_shared_activity(entry.request)
+            released += 1
+        self._inhibited.discard(performer_id)
+        return released
+
     def _provider(self, performer_id):
         try:
             return self._providers[performer_id]
