@@ -6,7 +6,10 @@ and refuses to overwrite anything. Only the options still supported by v4 are
 carried over; anything else is reported and stops the conversion, so nothing is
 dropped silently. The old file is never modified.
 
-    python scripts/migrate-room-config.py OLD.json OUT_DIR
+With ``--drop-unsupported`` those options are dropped instead (an unsupported idle or
+speaking profile becomes ``default``) and every one is reported as a note.
+
+    python scripts/migrate-room-config.py [--drop-unsupported] OLD.json OUT_DIR
 """
 
 from __future__ import annotations
@@ -40,8 +43,12 @@ class MigrationError(ValueError):
     pass
 
 
-def migrate(old: dict) -> dict[str, dict]:
-    """Return ``{filename: json-able}`` for a v4 ensemble. Raises MigrationError."""
+def migrate(old: dict, *, drop_unsupported: bool = False) -> dict[str, dict]:
+    """Return ``{filename: json-able}`` for a v4 ensemble. Raises MigrationError.
+
+    ``_warnings`` in the result lists notes (options not carried over, or dropped).
+    """
+    dropped: list[str] = []
     version = old.get("schema_version")
     if version not in (2, 3):
         raise MigrationError(f"only v2 (Reachy) and v3 (Reachy + StackChan) configs migrate; got {version!r}")
@@ -49,23 +56,38 @@ def migrate(old: dict) -> dict[str, dict]:
         raise MigrationError("SO-ARM entries are not migrated; write a v4 SO-ARM robot file instead")
     unsupported = sorted(k for k in old if k not in HANDLED and k not in WARN_IF_SET)
     if unsupported:
-        raise MigrationError(f"options not supported by v4: {unsupported}")
-    warnings = [k for k, default in WARN_IF_SET.items() if old.get(k, default) != default]
+        if not drop_unsupported:
+            raise MigrationError(f"options not supported by v4: {unsupported}")
+        dropped += [f"{k} is not supported by v4 and was dropped" for k in unsupported]
+    warnings = [f"{k} is not carried over to v4" for k, default in WARN_IF_SET.items()
+                if old.get(k, default) != default]
 
     reachy = dict(old["reachy"])
     reachy_id = reachy["instance_id"]
     reachy.pop("physical_authority", None)
     options = {new: old[key] for key, new in REACHY_OPTION_MAP.items() if key in old}
+    startup = options.get("startup_behavior")
+    if startup is not None and startup not in ("none", "wake_up_if_sleeping"):
+        if not drop_unsupported:
+            raise MigrationError(f"Reachy startup behavior {startup!r} is no longer supported in v4")
+        options["startup_behavior"] = "wake_up_if_sleeping"
+        dropped.append(f"Reachy startup behavior {startup!r} is not supported by v4; using wake_up_if_sleeping")
     profile = (old.get("motion_profiles") or {}).get(reachy_id, {})
     for state, mapping in SUPPORTED_PROFILES.items():
         value = profile.get(state, "legacy")
         if value not in mapping:
-            raise MigrationError(f"Reachy {state} profile {value!r} is no longer supported in v4")
+            if not drop_unsupported:
+                raise MigrationError(f"Reachy {state} profile {value!r} is no longer supported in v4")
+            dropped.append(f"Reachy {state} profile {value!r} is not supported by v4; using default")
+            value = "legacy"
         if mapping[value] != "default":
             options[state] = mapping[value]
     speech_driven = set(old.get("speech_driven_performers") or [])
     if reachy_id in speech_driven:
         options["speech_driven"] = True
+    if drop_unsupported and options.get("legacy_speech_fallback") and options.get("speaking") != "smooth_v2":
+        del options["legacy_speech_fallback"]
+        dropped.append("legacy_speech_fallback needs smooth_v2 speaking, which was not carried over; dropped")
     robots = [("reachy", reachy_id, {"kind": "reachy", "id": reachy_id, "provider": reachy,
                                       "options": options})]
     other_profiles = set(old.get("motion_profiles") or {}) - {reachy_id}
@@ -75,7 +97,9 @@ def migrate(old: dict) -> dict[str, dict]:
         stackchan.pop("physical_authority", None)
         stack_profile = (old.get("motion_profiles") or {}).get(stack_id, {})
         if any(v != "legacy" for v in stack_profile.values()):
-            raise MigrationError("StackChan motion profiles are no longer supported in v4")
+            if not drop_unsupported:
+                raise MigrationError("StackChan motion profiles are no longer supported in v4")
+            dropped.append("StackChan motion profiles are not supported by v4; using defaults")
         other_profiles -= {stack_id}
         stack_options = {"speaking_mode": old.get("stackchan_speaking_mode", "legacy_size")}
         if stack_id in speech_driven:
@@ -93,7 +117,7 @@ def migrate(old: dict) -> dict[str, dict]:
         if key in old:
             room[key] = old[key]
     files = {"ensemble.json": room, **{f"{k}.json": body for k, _, body in robots}}
-    files["_warnings"] = warnings  # type: ignore[assignment]
+    files["_warnings"] = [*dropped, *warnings]  # type: ignore[assignment]
     return files
 
 
@@ -113,9 +137,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("old_config")
     parser.add_argument("out_dir")
+    parser.add_argument("--drop-unsupported", action="store_true",
+                        help="drop options v4 no longer has instead of stopping (each is reported)")
     args = parser.parse_args(argv)
     try:
-        files = migrate(json.loads(Path(args.old_config).read_text(encoding="utf-8")))
+        files = migrate(json.loads(Path(args.old_config).read_text(encoding="utf-8")),
+                        drop_unsupported=args.drop_unsupported)
         warnings = files.pop("_warnings")
         written = write(files, Path(args.out_dir))
     except (MigrationError, OSError, KeyError, ValueError) as exc:
@@ -123,8 +150,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     for path in written:
         print(f"wrote {path}")
-    for key in warnings:
-        print(f"note: {key} is not carried over to v4")
+    for note in warnings:
+        print(f"note: {note}")
     return 0
 
 
