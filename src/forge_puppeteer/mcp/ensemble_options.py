@@ -71,7 +71,7 @@ def parse_options(kind: str, data: object):
     if data is None:
         data = {}
     if not isinstance(data, dict):
-        raise ValueError(f"v4 {kind} options must be an object")
+        raise ValueError(f"v4 {kind} options must be an object")  # noqa: TRY004 - config errors are ValueErrors
     if kind == "reachy":
         return ReachyOptions.model_validate(data)
     if kind == "stackchan":

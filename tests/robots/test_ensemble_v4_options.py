@@ -3,7 +3,11 @@ import json
 
 import pytest
 
-from forge_puppeteer.behavior_contract import BehaviorCue, BehaviorPattern, PerformerBehaviors
+from forge_puppeteer.behavior_contract import (
+    BehaviorCue,
+    BehaviorPattern,
+    PerformerBehaviors,
+)
 from forge_puppeteer.mcp import ensemble_options as opts
 from forge_puppeteer.mcp.ensemble_launcher import config_readiness
 from forge_puppeteer.mcp.ensemble_options import (
@@ -149,7 +153,9 @@ def test_stackchan_native_weight_speaking_is_a_distinct_authored_pack():
 # --- config files -> launcher wiring -------------------------------------------------
 
 def _write_room(tmp_path, reachy_options=None, stackchan_options=None, *, reachy_tools=None):
-    from tests.robots.test_ensemble_v4_config import provider  # reuse the provider fixtures
+    from tests.robots.test_ensemble_v4_config import (
+        provider,  # reuse the provider fixtures
+    )
 
     reachy = provider("reachy", "reachy", tmp_path)
     reachy["allowed_tools"] = reachy_tools or [*TOOLS, "wake_up", "original_idle", "pose_and_antennas"]
@@ -207,7 +213,7 @@ def test_build_v4_returns_motion_patterns_and_speech_server_kwargs(tmp_path, mon
         def connected(self):
             raise AssertionError("must not connect")
 
-    import forge_puppeteer.mcp.launcher as launcher
+    from forge_puppeteer.mcp import launcher
     monkeypatch.setattr(launcher, "ReachySDKProvider", FakeReachy)
     monkeypatch.setattr(launcher, "StackChanSDKProvider", FakeStackChan)
     runtime, packs, _connected, extras = ensemble_v4.build_v4(room, robots, options=options)

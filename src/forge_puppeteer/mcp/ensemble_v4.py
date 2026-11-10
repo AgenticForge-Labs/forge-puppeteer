@@ -14,9 +14,9 @@ import signal
 import subprocess
 import time
 import urllib.request
-from dataclasses import dataclass, field
 from collections.abc import Callable
 from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -609,8 +609,8 @@ def build_startup_gate(room: RoomConfigV4, robots: dict[str, object], runtime, e
     Returns None when nothing needs gating.
     """
     from ..behavior_contract import BehaviorCue
-    from ..startup_gate import StartupGate
     from ..standard_poses import load_standard_poses
+    from ..startup_gate import StartupGate
 
     readers, poses, cues = {}, {}, {}
     for ref in room.robots:
