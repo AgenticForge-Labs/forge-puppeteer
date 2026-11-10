@@ -146,12 +146,19 @@ class StartupGate:
         self.ensemble.set_gate(performer_id, None)
         return {"outcome": "confirmed", **self.snapshot()}
 
-    async def _sleep_move(self, performer_id: str, action_id: str) -> dict[str, object]:
-        """One sleep move + one re-check. Never retries."""
+    async def _sleep_move(
+        self, performer_id: str, action_id: str, *, allow_held_during_session: bool = False,
+    ) -> dict[str, object]:
+        """One sleep move + one re-check. Never retries.
+
+        During a conversation only a performer the gate is holding still may move
+        (``allow_held_during_session``): the conversation never acquired it.
+        """
         cue = self.sleep_cues.get(performer_id)
         if cue is None:
             return {"outcome": "unsupported", "reason": "no_sleep_move_configured", **self.snapshot()}
-        if self.ensemble.snapshot()["state"] != "disconnected":
+        if self.ensemble.snapshot()["state"] != "disconnected" and not (
+                allow_held_during_session and self.ensemble.is_idle_held(performer_id)):
             return {"outcome": "denied", "reason": "conversation_session_active", **self.snapshot()}
         if len(action_id) > 128:
             return {"outcome": "denied", "reason": "action_id_too_long"}
@@ -179,7 +186,7 @@ class StartupGate:
         """The user's 'yes': move one performer to sleep, re-check once."""
         if (bad := self._unknown(performer_id)) is not None:
             return bad
-        return await self._sleep_move(performer_id, action_id)
+        return await self._sleep_move(performer_id, action_id, allow_held_during_session=True)
 
     async def park(self, action_id: str) -> dict[str, object]:
         """End of session: every performer to sleep, re-checked. Stops at the first fault."""

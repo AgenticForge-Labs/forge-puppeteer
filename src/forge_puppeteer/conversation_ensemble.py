@@ -527,6 +527,15 @@ class ConversationEnsemble:
     def is_blocked(self, name: str) -> bool:
         return name in self._blocked
 
+    def is_idle_held(self, name: str) -> bool:
+        """True when the startup gate holds this performer and nothing else is using it.
+
+        A held performer was never acquired by the conversation, so the user can
+        answer the gate (move it to sleep) while the conversation continues with the
+        other robots.
+        """
+        return name in self._gate and name not in self._owned and name not in self._slots
+
     async def recover(self, name: str) -> dict[str, object]:
         """Clear this coordinator's quarantine of one performer after independent evidence.
 
