@@ -599,6 +599,13 @@ class ConversationEnsemble:
                                 name, resume_id, resume=True,
                             )
                             return
+                        if self._state == "speaking" and name in self._speech_channels:
+                            # Resume speech through the same reactive channel
+                            # used for ordinary speaking transitions.
+                            resume_id = f"{action_id}-resume"
+                            await self._retire_slot(name, slot)
+                            self._spawn(name, "speaking", resume_id)
+                            return
                         await self._execute_pattern(
                             name, self._state, background, slot, f"{action_id}-resume"
                         )
