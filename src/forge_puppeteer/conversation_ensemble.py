@@ -75,7 +75,6 @@ class ConversationEnsemble:
         stop_timeout_s: float = 5,
         startup_settle_s: float = 0.0,
         motion_patterns: Mapping[str, Mapping[str, PerformerBehaviors]] | None = None,
-        continuous_presence_performers: Iterable[str] = (),
     ):
         if not caller_id or not 1 <= presence_ttl_s <= 3600 or not 0.1 <= stop_timeout_s <= 60:
             raise ValueError("invalid conversation coordinator settings")
@@ -100,16 +99,6 @@ class ConversationEnsemble:
                 idle=choices.get("idle"),
                 speaking=choices.get("speaking"),
             )
-        continuous = tuple(continuous_presence_performers)
-        if len(set(continuous)) != len(continuous) or set(continuous) - set(selected):
-            raise ValueError("continuous presence requires unique configured performers")
-        for name in continuous:
-            idle = selected[name].behaviors.get("idle")
-            speaking = selected[name].behaviors.get("speaking")
-            if (idle is None or speaking != idle or len(idle.cues) != 1
-                    or idle.cues[0].operation != "original_idle"):
-                raise ValueError("continuous presence requires the same reviewed original idle action")
-        self._continuous_presence = frozenset(continuous)
         self._presence_observers: list[Callable[[EnsemblePresence], None]] = []
         self.runtime = runtime
         self.packs = selected
@@ -273,14 +262,8 @@ class ConversationEnsemble:
                 # acknowledging a requested gesture) must not preempt that
                 # finite gesture. Real interruption/disconnect remains urgent.
                 preserve_expressions = event.state != "disconnected" and not event.interrupted
-                preserve_continuous = (
-                    not event.interrupted and previous in {"idle", "speaking"}
-                    and event.state in {"idle", "speaking"}
-                )
                 candidates = tuple(name for name, slot in self._slots.items()
-                    if not (preserve_expressions and slot.expression_active)
-                    and not (preserve_continuous and name in self._continuous_presence
-                             and slot.behavior in {"idle", "speaking"}))
+                    if not (preserve_expressions and slot.expression_active))
                 normal = event.state != "disconnected" and not event.interrupted
                 immediate = []
                 for name in candidates:
@@ -516,7 +499,7 @@ class ConversationEnsemble:
             if pattern is None:
                 slot.done.set()
                 return
-            if name in self._speech_channels and name not in self._continuous_presence:
+            if name in self._speech_channels:
                 await self._play_speech_driven(name, pattern, slot, action_id)
             else:
                 await self._play(
@@ -623,8 +606,7 @@ class ConversationEnsemble:
         )
         if pattern is None:
             return  # Missing device behavior is unsupported, never substituted.
-        if (behavior == "speaking" and name in self._speech_channels
-                and name not in self._continuous_presence):
+        if behavior == "speaking" and name in self._speech_channels:
             if not self.startup_complete():
                 # Startup motion owns the robot; defer rather than talk over it.
                 self._spawn_deferred_speaking(name, action_id, resume=resume)
@@ -781,8 +763,7 @@ class ConversationEnsemble:
                                 name, resume_id, resume=True,
                             )
                             return
-                        if (self._state == "speaking" and name in self._speech_channels
-                                and name not in self._continuous_presence):
+                        if self._state == "speaking" and name in self._speech_channels:
                             # Resume speech through the same reactive channel used
                             # for ordinary speaking transitions. Executing the
                             # authored pattern here bypasses the feature channel

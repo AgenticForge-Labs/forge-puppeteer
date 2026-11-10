@@ -167,8 +167,6 @@ class ReachyPlaybackProvider:
         restricted_actions: bool = False,
         approved_moves: frozenset[tuple[str, str]] | None = None,
         original_idle_authorized: bool = False,
-        native_speech_authorized: bool = False,
-        native_speech_source: Callable[[], object | None] | None = None,
     ):
         self.catalog = catalog
         self.robot = robot
@@ -177,15 +175,7 @@ class ReachyPlaybackProvider:
         self.approved_moves = frozenset(approved_moves or ())
         if type(original_idle_authorized) is not bool:
             raise ValueError("original idle authorization must be an explicit boolean")
-        if type(native_speech_authorized) is not bool:
-            raise ValueError("native speech authorization must be an explicit boolean")
-        if native_speech_source is not None and (
-            not callable(native_speech_source) or not native_speech_authorized
-        ):
-            raise ValueError("native speech source requires separate explicit authorization")
         self.original_idle_authorized = original_idle_authorized
-        self.native_speech_authorized = native_speech_authorized
-        self._native_speech_source = native_speech_source
         if self.restricted_actions and not self.approved_moves:
             raise ValueError("restricted Reachy actions require an exact approved move allowlist")
         self._lock = threading.Lock()
@@ -228,9 +218,6 @@ class ReachyPlaybackProvider:
                     resources=_RESOURCES,
                     concurrency_constraints=("serialized across all Reachy motion",),
                 ))
-            if (self.native_speech_authorized and self._native_speech_source is not None
-                    and self.original_idle_authorized and self._supports_original_idle()):
-                operations.append("original_speech")
             controls.append(ControlDescriptor(
                 id="reachy.wake_up",
                 description="Run the SDK wake-up sequence only when the head is in its SDK sleep pose",
@@ -321,10 +308,6 @@ class ReachyPlaybackProvider:
         motion = {"play_move", "head_pose", "antenna_targets", "pose_and_antennas", "wake_up", "action_cancel", "device_stop"}
         if tool == "original_idle":
             return (self.motion_authorized and self.original_idle_authorized
-                    and not self.restricted_actions and self._supports_original_idle())
-        if tool == "original_speech":
-            return (self.motion_authorized and self.original_idle_authorized
-                    and self.native_speech_authorized and self._native_speech_source is not None
                     and not self.restricted_actions and self._supports_original_idle())
         if self.restricted_actions and tool in {"head_pose", "antenna_targets", "pose_and_antennas"}:
             return False
@@ -479,12 +462,6 @@ class ReachyPlaybackProvider:
             target_head, target_antennas, body_yaw = reachy_original_idle_sample(
                 elapsed, start_head=head, start_antennas=antennas,
             )
-            if self.native_speech_authorized and self._native_speech_source is not None:
-                offsets = self._native_speech_source()
-                if offsets is not None:
-                    from ..reachy_native_speech import compose_original_speech_offset
-
-                    target_head = compose_original_speech_offset(target_head, offsets)
             # Apply the same native pose/antenna limits as finite moves before
             # sending each combined target. No arbitrary caller target is used.
             checked = request.model_copy(update={
@@ -507,15 +484,6 @@ class ReachyPlaybackProvider:
         return all(callable(getattr(self.robot, method, None)) for method in (
             "get_current_head_pose", "get_present_antenna_joint_positions", "set_target",
         ))
-
-    def bind_native_speech_source(self, source: Callable[[], object | None]) -> None:
-        """Bind a trusted observation source before a runtime action starts."""
-        if not self.native_speech_authorized or not callable(source):
-            raise PermissionError("native speech source requires explicit authorization")
-        with self._lock:
-            if self._active or self._native_speech_source is not None:
-                raise RuntimeError("native speech source cannot be rebound")
-            self._native_speech_source = source
 
     def _wake_up_if_sleeping(self) -> str:
         """Use the pinned SDK's sleep pose and wake-up choreography unchanged."""

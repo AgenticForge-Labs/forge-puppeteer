@@ -38,27 +38,15 @@ class FakeRobot:
 
 
 def main():
-    speech_mode = len(sys.argv) > 2 and sys.argv[2] == "speech"
     idle = BehaviorPattern(source="procedural", mode="loop", period_s=1,
                            cues=(BehaviorCue(at_s=0, operation="unused"),))
     pack = _original_idle_pack(PerformerBehaviors.author("reachy", {"idle": idle}))
-    if speech_mode:
-        pack = PerformerBehaviors.author("reachy", {
-            **pack.behaviors, "speaking": pack.behaviors["idle"],
-        })
     runtime = ExecutionRuntime(PerformanceStage())
     runtime.register("reachy", ReachyPlaybackProvider(
         FakeCatalog(), FakeRobot(), motion_authorized=True, original_idle_authorized=True,
-        native_speech_authorized=speech_mode,
     ))
-    ensemble = ConversationEnsemble(
-        runtime, [pack], continuous_presence_performers=("reachy",) if speech_mode else (),
-    )
-    create_ensemble_server(
-        runtime, ensemble, motion_enabled=True,
-        native_gain_performers=("reachy",) if speech_mode else (),
-        native_motion_performers=("reachy",) if speech_mode else (),
-    ).run(transport="stdio")
+    ensemble = ConversationEnsemble(runtime, [pack])
+    create_ensemble_server(runtime, ensemble, motion_enabled=True).run(transport="stdio")
 
 
 if __name__ == "__main__":
