@@ -12,7 +12,6 @@ from forge_puppeteer.behavior_contract import (
 from forge_puppeteer.conversation_ensemble import ConversationEnsemble
 from forge_puppeteer.execution import Completion, ExecutionRuntime, StopResult
 from forge_puppeteer.runtime import PerformanceStage
-from forge_puppeteer.devices.soarm101 import SOARM101Provider
 
 
 class SlowNative:

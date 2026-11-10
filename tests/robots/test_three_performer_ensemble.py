@@ -17,7 +17,10 @@ from soarm101_motion.broker import AgentMotionRates
 from soarm101_motion.broker_sdk import SDKAgentExecutor
 from soarm101_motion.broker_watchdog import BrokerWatchdog
 from soarm101_motion.choreography import (
-    ChoreographyPolicy, JointChoreography, JointFrame, preflight_choreography,
+    ChoreographyPolicy,
+    JointChoreography,
+    JointFrame,
+    preflight_choreography,
 )
 from soarm101_motion.config import SOARM101Config
 from soarm101_motion.constants import ARM_JOINTS

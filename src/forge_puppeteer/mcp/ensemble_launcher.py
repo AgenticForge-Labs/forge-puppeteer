@@ -628,7 +628,7 @@ def config_readiness(path: str | Path) -> dict[str, object]:
     """
     config = load_config(path)
     if isinstance(config, tuple):
-        room, robots = config
+        room, _robots = config
         return {
             "configuration": "valid", "schema_version": 4,
             "performers": [robot.id for robot in room.robots],
@@ -677,7 +677,12 @@ def stackchan_display_presets(config: EnsembleConfig) -> dict[str, dict[str, Beh
 def serve(config_path: str | Path) -> None:
     config = load_config(config_path)
     if isinstance(config, tuple):
-        from .ensemble_v4 import build_startup_gate, build_v4, start_owned_simulation, start_owned_physical
+        from .ensemble_v4 import (
+            build_startup_gate,
+            build_v4,
+            start_owned_physical,
+            start_owned_simulation,
+        )
         room, robots = config
         owned_cleanup = None
         private_tokens = {}

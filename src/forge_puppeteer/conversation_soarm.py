@@ -54,12 +54,12 @@ def import_taught_pose_candidates(
         raise ValueError("gesture mapping must use named one-shot expressions and saved pose names")
     raw_poses = pose_library.get("poses")
     if not isinstance(raw_poses, Mapping):
-        raise ValueError("SDK pose library must contain a poses mapping")
+        raise ValueError("SDK pose library must contain a poses mapping")  # noqa: TRY004 - ValueError is the documented contract for bad pose input
 
     def joint_values(pose_name: str) -> tuple[float, ...]:
         raw = raw_poses.get(pose_name)
         if not isinstance(raw, Mapping):
-            raise ValueError(f"saved pose {pose_name!r} is unavailable")
+            raise ValueError(f"saved pose {pose_name!r} is unavailable")  # noqa: TRY004 - ValueError is the documented contract for bad pose input
         identities = (
             (raw.get("source_robot_id"), raw.get("source_calibration_id")),
             (raw.get("target_robot_id"), raw.get("target_calibration_id")),
@@ -128,7 +128,7 @@ def import_taught_pose_candidate_file(
     """Read one SDK PoseLibrary JSON file without retaining its local path."""
     data = json.loads(Path(pose_library_path).expanduser().read_text(encoding="utf-8"))
     if not isinstance(data, Mapping):
-        raise ValueError("SDK pose library must be a JSON object")
+        raise ValueError("SDK pose library must be a JSON object")  # noqa: TRY004 - ValueError is the documented contract for bad pose input
     return import_taught_pose_candidates(data, **kwargs)
 
 
