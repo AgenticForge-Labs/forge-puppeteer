@@ -95,3 +95,42 @@ def test_trusted_transport_ignores_environment_proxy(monkeypatch):
     proxy = next(item for item in captured["handlers"] if isinstance(item, urllib.request.ProxyHandler))
     assert proxy.proxies == {}
     assert type(captured["handlers"][-1]).__name__ == "_NoRedirects"
+
+
+def _broker_answering(status, body):
+    class Answer(BaseHTTPRequestHandler):
+        def do_POST(self):
+            payload = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Answer)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
+@pytest.mark.parametrize("error,refused", [
+    ("active bound host watchdog required", True),
+    ("completion superseded by STOP; outcome unknown", False),
+    ("anything else the SDK says mid-move", False),
+])
+def test_only_a_known_pre_dispatch_refusal_is_a_definite_refusal(error, refused):
+    from forge_puppeteer.execution import ActionRefused
+
+    server, thread = _broker_answering(409, {"ok": False, "error": error})
+    try:
+        client = SOARM101TrustedChoreographyHTTP(f"http://127.0.0.1:{server.server_port}", "t", {"idle": PIN})
+        with pytest.raises(RuntimeError) as raised:
+            client._post(client.url, {"request_id": "r"})
+        assert isinstance(raised.value, ActionRefused) is refused
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

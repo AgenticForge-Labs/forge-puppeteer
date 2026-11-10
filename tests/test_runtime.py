@@ -115,3 +115,48 @@ def test_camera_calibration_round_trip(tmp_path):
     path=tmp_path/'cal.json'; save_calibration(cal,path); loaded=load_calibration(path)
     assert loaded.controller_id=='cam'
     assert loaded.presets['close'].zoom==.5
+
+
+def test_a_definite_provider_refusal_fails_the_action_without_quarantining_the_performer():
+    import anyio
+
+    from forge_puppeteer.execution import (
+        ActionRefused,
+        ActionRequest,
+        ActionState,
+        ExecutionRuntime,
+        StopResult,
+    )
+
+    class Refusing:
+        def __init__(self, error):
+            self.error = error
+
+        async def validate(self, request):
+            pass
+
+        def resources_for(self, request):
+            return ("motion",)
+
+        async def execute(self, request):
+            raise self.error
+
+        async def stop(self):
+            return StopResult(True, "stopped")
+
+    async def run(error):
+        runtime = ExecutionRuntime(PerformanceStage())
+        runtime.register("arm", Refusing(error))
+        async with runtime.run():
+            await runtime.submit(ActionRequest(
+                id="a1", performer_id="arm", caller_id="c", session_id="s",
+                operation="go_sleep", parameters={}, cue_id="x"))
+            record = await runtime.wait("a1")
+            inhibited = runtime.is_inhibited("arm")
+        runtime.close()
+        return record, inhibited
+
+    record, inhibited = anyio.run(run, ActionRefused("declined"))
+    assert record.state == ActionState.FAILED and not inhibited
+    record, inhibited = anyio.run(run, RuntimeError("outcome unknown"))
+    assert record.state == ActionState.UNKNOWN

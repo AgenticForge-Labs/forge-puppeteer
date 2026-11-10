@@ -234,10 +234,13 @@ def create_ensemble_server(
             raise ToolError("recover_unavailable") from None
 
     @server.tool()
-    async def ensemble_park(action_id: str) -> dict[str, object]:
+    async def ensemble_park(action_id: str, settle_session: bool = False) -> dict[str, object]:
         """End of session: move every robot to sleep and report the re-check.
 
-        Refused while a conversation session is active. Stops at the first fault
+        Refused while a conversation session is active, unless ``settle_session`` is
+        true: the caller that owns that conversation is ending it, so running
+        behaviors finish (no STOP), the robots are released and then moved to sleep;
+        the caller should send the disconnect afterwards. Stops at the first fault
         and reports it; never retries.
         """
         if startup_gate is None:
@@ -247,7 +250,7 @@ def create_ensemble_server(
         if not action_id:
             return {"outcome": "denied", "reason": "action_id_required"}
         try:
-            return await startup_gate.park(action_id)
+            return await startup_gate.park(action_id, settle_session=settle_session)
         except Exception:  # noqa: BLE001
             raise ToolError("park_unavailable") from None
 

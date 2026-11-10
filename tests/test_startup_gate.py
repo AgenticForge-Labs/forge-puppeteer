@@ -370,3 +370,24 @@ async def test_only_a_held_robot_may_move_during_a_conversation_and_park_stays_r
         parked = await gate.park("end")
         assert parked["results"]["arm"]["reason"] == "conversation_session_active"
         assert arm.executed == []
+
+
+async def test_park_can_settle_the_session_it_is_ending_then_sleep_then_disconnect():
+    from forge_puppeteer.behavior_contract import EnsemblePresence
+
+    arm = FakeArm(20.0)
+    async with room({"arm": arm}) as (gate, ensemble):
+        await ensemble.observe(_idle_event())
+        assert not ensemble.is_settled()
+        result = await gate.park("end", settle_session=True)
+        assert result["outcome"] == "parked"
+        assert result["results"]["arm"]["outcome"] == "at_sleep"
+        assert arm.executed == ["go_sleep"] and arm.stops == 0  # finishing is not a STOP
+        # A late presence event cannot restart motion; the disconnect then closes it.
+        await ensemble.observe(EnsemblePresence(
+            session_id="s1", event_id="e1", sequence=1, state="listening", source="agent_state"))
+        assert arm.executed == ["go_sleep"]
+        await ensemble.observe(EnsemblePresence(
+            session_id="s1", event_id="e2", sequence=2, state="disconnected", source="agent_state"))
+        assert ensemble.snapshot()["session_id"] is None and ensemble.is_settled()
+        assert arm.stops == 0

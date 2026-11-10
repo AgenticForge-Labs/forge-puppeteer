@@ -364,6 +364,45 @@ def test_startup_behavior_runs_once_before_latest_presence_and_is_not_an_express
     anyio.run(run)
 
 
+def test_startup_is_complete_only_after_the_wake_motion_finishes_and_ignores_held_robots():
+    async def run():
+        startup_started = anyio.Event()
+        finish_startup = anyio.Event()
+
+        class StartupSDK(FakeSDK):
+            async def execute(self, request):
+                self.calls.append(request.operation)
+                if request.operation == "fake_wake_up":
+                    startup_started.set()
+                    await finish_startup.wait()
+                return Completion("fake SDK completed")
+
+        runtime = ExecutionRuntime(PerformanceStage())
+        runtime.register("reachy", StartupSDK())
+        runtime.register("held", FakeSDK())
+        base = pack("reachy")
+        ensemble = ConversationEnsemble(runtime, [
+            PerformerBehaviors.author("reachy", base.behaviors, startup=once("fake_wake_up")),
+            pack("held"),
+        ], startup_settle_s=0.0)
+        ensemble.set_gate("held", "not_at_sleep")
+        # Before the first presence event the wake-up has not started: not complete.
+        assert ensemble.snapshot()["startup_complete"] is False
+        async with runtime.run(), ensemble.run():
+            result = await ensemble.observe(event("room", 0, "idle"))
+            await startup_started.wait()
+            assert result["startup_complete"] is False
+            assert result["performers"]["reachy"]["startup_complete"] is False
+            # A robot the gate is holding has nothing to wait for.
+            assert result["performers"]["held"]["startup_complete"] is True
+            finish_startup.set()
+            with anyio.fail_after(5):
+                while not ensemble.snapshot()["startup_complete"]:
+                    await anyio.sleep(0.01)
+
+    anyio.run(run)
+
+
 def test_failed_startup_does_not_resume_presence_motion():
     async def run():
         class FailedWake(FakeSDK):

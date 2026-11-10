@@ -29,7 +29,9 @@ work. Simulation is a quick sanity check, not a qualification process.
      `ensemble_startup_check` re-reads without moving. A SO-ARM sleep move needs
      `sleep_target` (a `pose_targets` name) in its robot config. A held robot can
      be answered mid-conversation (it joins at the next presence change);
-     `ensemble_park` only works after the conversation has ended.
+     `ensemble_park` while a conversation is active is refused unless the caller that owns it passes
+     `settle_session` (it finishes the running behaviors without a STOP, releases the robots, then
+     sleeps them; the caller disconnects afterwards).
 3. **Do the physical work.** If the user asked for physical work in this
    session, that is the authorization. Don't re-ask for each step, action or
    restart, and don't ask for "physical qualification" first. Running it on

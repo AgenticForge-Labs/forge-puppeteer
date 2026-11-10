@@ -151,6 +151,67 @@ def author_breathing_segments(robot_id, calibration_id, neutral, bottom, top, *,
     }
 
 
+def _raised_cosine(t: float, period_s: float, cycles: int = 1) -> float:
+    """0 at both ends and zero slope there; ``cycles`` smooth 0 -> 1 -> 0 bumps."""
+    return (1.0 - math.cos(2.0 * math.pi * cycles * t / period_s)) / 2.0
+
+
+def author_presence_programs(
+    robot_id, calibration_id, neutral, *, breath_delta_rad, breath_period_s=4.0,
+    talk_amplitude_deg=5.0, talk_period_s=2.4, sample_s=0.05,
+):
+    """Author the looping ``idle`` (breathing) and ``speaking`` (talking) programs.
+
+    Both begin and end at ``neutral`` with zero velocity, so a loop of repeated
+    programs never jerks at the seam, and every joint moves as a raised cosine:
+    breathing is one slow swell per cycle (no fast legs), talking is two nods of
+    ``talk_amplitude_deg`` on the wrist plus one slight wrist tilt. A program is
+    also the longest the robot takes to react to a change of conversation state,
+    so the breathing cycle is kept short.
+    """
+    from soarm101_motion.choreography import JointChoreography, JointFrame
+
+    if len(neutral) != 5 or len(breath_delta_rad) != 5:
+        raise ValueError("neutral and breathing delta need five joints")
+    if not 1.0 <= breath_period_s <= 8.0 or not 1.0 <= talk_period_s <= 8.0:
+        raise ValueError("breathing and talking periods must be within 1..8 seconds")
+    if not 0 < talk_amplitude_deg <= 10:
+        raise ValueError("talking amplitude must be within 0..10 degrees")
+    amplitude = math.radians(talk_amplitude_deg)
+
+    def build(name, period_s, offsets):
+        steps = max(2, math.ceil(period_s / sample_s))
+        frames = []
+        for i in range(steps + 1):
+            t = period_s * i / steps
+            frames.append(JointFrame(float(t), tuple(
+                float(n + offset(t)) for n, offset in zip(neutral, offsets, strict=True))))
+        return JointChoreography.author(name, robot_id, calibration_id, tuple(frames))
+
+    def swell(delta):
+        return lambda t: delta * _raised_cosine(t, breath_period_s)
+
+    def talk(scale, cycles):
+        return lambda t: amplitude * scale * _raised_cosine(t, talk_period_s, cycles)
+
+    still = lambda t: 0.0
+    return {
+        "idle": build("idle", breath_period_s, [swell(d) for d in breath_delta_rad]),
+        "speaking": build("speaking", talk_period_s, [still, still, still, talk(1.0, 2), talk(0.6, 1)]),
+    }
+
+
+def program_limits(program) -> tuple[float, float]:
+    """Peak joint speed (deg/s) and acceleration (deg/s^2) of a program's frames."""
+    import numpy as np
+
+    t = np.array([f.at_s for f in program.frames], dtype=float)
+    q = np.degrees(np.array([f.joints_rad for f in program.frames], dtype=float))
+    v = np.diff(q, axis=0) / np.diff(t)[:, None]
+    a = np.diff(v, axis=0) / ((t[2:] - t[:-2]) / 2.0)[:, None]
+    return float(np.abs(v).max()), float(np.abs(a).max()) if len(a) else 0.0
+
+
 def smooth_joint_frames(frames: Sequence[object]):
     """Apply the same zero-slope, SDK-cadence easing used by reference programs."""
     from soarm101_motion.choreography import JointFrame

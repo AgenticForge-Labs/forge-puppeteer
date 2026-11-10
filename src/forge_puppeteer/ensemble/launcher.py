@@ -61,7 +61,10 @@ def serve(config_path: str | Path) -> None:
         ensemble = ConversationEnsemble(
             runtime, packs, presence_ttl_s=ensemble_config.presence_ttl_s,
             stop_timeout_s=ensemble_config.stop_timeout_s,
-            motion_patterns=extras.motion_patterns)
+            motion_patterns=extras.motion_patterns,
+            # SDK completion cannot prove the arm has stopped moving: give it a
+            # moment before the first spoken turn is allowed to start.
+            startup_settle_s=1.0)
         create_ensemble_server(
             runtime, ensemble, connected=connected, motion_enabled=True,
             startup_gate=build_startup_gate(ensemble_config, robots, runtime, ensemble),
