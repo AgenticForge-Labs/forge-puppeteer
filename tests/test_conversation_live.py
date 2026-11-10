@@ -202,6 +202,7 @@ async def test_a_sleep_gesture_leaves_the_arm_resting_until_it_is_woken():
         await until(lambda: arm.events[-2:] == ["wake_to_neutral", "open"])
         assert arm.behaviors[-1] == "idle"
         assert (await ensemble.express("yes", action_id="yes-2"))["outcome"] == "accepted"
+        await until(lambda: arm.events[-4:] == ["open", "close", "yes", "open"])
         assert arm.stop_calls == 0
 
 
@@ -218,3 +219,19 @@ async def test_resting_does_not_carry_into_the_next_conversation():
         await ensemble.observe(EnsemblePresence(
             session_id="next", event_id="n0", sequence=0, state="listening", source="agent_state"))
         await until(lambda: arm.open)
+
+
+@pytest.mark.anyio
+async def test_a_gesture_asked_right_after_the_wake_queues_behind_it():
+    arm, runtime, ensemble = build()
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(event(0, "listening"))
+        await until(lambda: arm.open)
+        await ensemble.express("sleep2", action_id="sleep-1")
+        await until(lambda: "play_joint_target" in arm.events)
+        await anyio.sleep(0.1)  # the sleep move has finished
+        assert (await ensemble.express("neutral", action_id="wake-1"))["outcome"] == "accepted"
+        await anyio.sleep(0.005)  # the model's next tool call comes after the wake has started
+        queued = await ensemble.express("yes", action_id="yes-1")
+        assert queued["outcome"] == "accepted", queued.get("reason")
+        await until(lambda: arm.events[-3:] == ["wake_to_neutral", "yes", "open"])

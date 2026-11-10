@@ -418,6 +418,9 @@ class ConversationEnsemble:
             if len(self._gesture_order) > 256:
                 self._gesture_ids.discard(self._gesture_order.popleft())
             for name in names:
+                if name in self._rest and self._wakes(name, expression):
+                    # Accepted wake: other gestures may queue behind it from now on.
+                    self._rest.discard(name)
                 if name in deferred:
                     continue
                 self._spawn(
@@ -925,12 +928,14 @@ class ConversationEnsemble:
         with slot.scope:
             try:
                 completed = await self._execute_pattern(name, behavior, pattern, slot, action_id)
-                if completed and name in self._live:
+                if name in self._live:
                     operations = {cue.operation for cue in pattern.cues}
-                    if "play_joint_target" in operations:
+                    if completed and "play_joint_target" in operations:
                         self._rest.add(name)
                     elif "wake_to_neutral" in operations:
-                        self._rest.discard(name)
+                        # Woken: the arm is at neutral. A failed or interrupted wake
+                        # leaves it somewhere unknown, so it keeps resting.
+                        (self._rest.discard if completed else self._rest.add)(name)
                 if behavior == "startup":
                     self._startup_finished(name)
                 slot.expression_active = False
@@ -958,7 +963,8 @@ class ConversationEnsemble:
                                 name, resume_id, resume=True,
                             )
                             return
-                        if name in self._live and self._state in {"idle", "listening", "speaking"}:
+                        if (name in self._live and not slot.cancel_requested
+                                and self._state in {"idle", "listening", "speaking"}):
                             # A live stream reopens at the centre pose for whatever
                             # the conversation is doing now.
                             await self._retire_slot(name, slot)
