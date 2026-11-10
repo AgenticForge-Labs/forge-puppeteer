@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 import uuid
@@ -19,6 +20,8 @@ PRE_DISPATCH_REFUSALS = (
     "persistent SDK executor/watchdog unavailable",
     "request cancelled by a newer STOP",
 )
+# The SDK validates the whole path against its joint limits before it moves.
+_LIMIT_REFUSAL = re.compile(r"joint \w+ target -?\d+(\.\d+)? rad is outside \[-?\d+(\.\d+)?, -?\d+(\.\d+)?\]")
 
 
 class _NoRedirects(urllib.request.HTTPRedirectHandler):
@@ -80,7 +83,8 @@ class SOARM101TrustedChoreographyHTTP:
         except (OSError, ValueError):
             return None
         message = body.get("error") if isinstance(body, dict) else None
-        if error.code == 409 and isinstance(message, str) and message in PRE_DISPATCH_REFUSALS:
+        if error.code == 409 and isinstance(message, str) and (
+                message in PRE_DISPATCH_REFUSALS or _LIMIT_REFUSAL.fullmatch(message)):
             return message
         return None
 

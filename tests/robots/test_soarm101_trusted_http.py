@@ -118,6 +118,7 @@ def _broker_answering(status, body):
 
 @pytest.mark.parametrize("error,refused", [
     ("active bound host watchdog required", True),
+    ("joint elbow_flex target 1.678585 rad is outside [-1.674941, 1.674941]", True),
     ("completion superseded by STOP; outcome unknown", False),
     ("anything else the SDK says mid-move", False),
 ])
