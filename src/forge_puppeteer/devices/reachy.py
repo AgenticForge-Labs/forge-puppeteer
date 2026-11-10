@@ -291,6 +291,12 @@ class ReachyPlaybackProvider:
             authority={"motion": "granted" if self.motion_authorized else "denied"},
         )
 
+    async def read_pose(self):
+        """Measured head and antenna joints from the SDK (read-only)."""
+        from ..standard_poses import reachy_measured_pose
+        head, antennas = await asyncio.to_thread(self.robot.get_current_joint_positions)
+        return reachy_measured_pose(head, antennas)
+
     async def state(self) -> dict[str, object]:
         return {
             "feedback": "commanded",

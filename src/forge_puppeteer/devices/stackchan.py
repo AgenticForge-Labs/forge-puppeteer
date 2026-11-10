@@ -166,6 +166,11 @@ class StackChanProvider:
             return ()
         return _sdk()[1](self.asset_directory)
 
+    async def read_pose(self):
+        """StackChan firmware reports commanded positions only, so no joints are measured."""
+        from ..standard_poses import MeasuredPose
+        return MeasuredPose({}, "commanded")
+
     async def state(self) -> dict[str, object]:
         robot = self._connected()
         state = await _call(self._invoke, robot, robot.state)

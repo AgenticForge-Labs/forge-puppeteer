@@ -27,7 +27,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 
 import yaml
 
@@ -68,6 +68,16 @@ class RobotStandardPoses:
 class MeasuredPose:
     channels: dict[str, float]
     source: FeedbackSource = "measured"
+
+
+class PoseReader(Protocol):
+    """Implemented by every provider: a read-only snapshot of its current pose.
+
+    Must not command motion or change torque. Providers whose hardware reports
+    only commanded positions return ``MeasuredPose({}, "commanded")``.
+    """
+
+    async def read_pose(self) -> MeasuredPose: ...
 
 
 @dataclass(frozen=True)
@@ -177,7 +187,12 @@ REACHY_ANTENNAS = ("right_antenna", "left_antenna")
 
 
 def soarm_measured_pose(state: Mapping) -> MeasuredPose:
-    """From SO-ARM broker ``robot_state`` (``joint_positions_rad``). Gripper excluded."""
+    """From SO-ARM broker ``robot_state`` (``joint_positions_rad``). Gripper excluded.
+
+    Accepts the state directly or wrapped as ``{"result": {...}}`` (broker HTTP envelope).
+    """
+    if "joint_positions_rad" not in state and isinstance(state.get("result"), Mapping):
+        state = state["result"]
     joints = state.get("joint_positions_rad")
     if not isinstance(joints, Mapping):
         return MeasuredPose({}, "unavailable")

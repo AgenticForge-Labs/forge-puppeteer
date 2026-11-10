@@ -188,6 +188,11 @@ class SOARM101Provider:
     async def state(self) -> dict[str, object]:
         return await self._call("robot_state")
 
+    async def read_pose(self):
+        """Measured arm joints (gripper excluded) from the broker's read-only state."""
+        from ..standard_poses import soarm_measured_pose
+        return soarm_measured_pose(await self.state())
+
     async def list_assets(self) -> tuple[AssetDescriptor, ...]:
         # The broker returns a page and next_offset. Follow that wire contract
         # instead of assuming the catalog fits in a single page.

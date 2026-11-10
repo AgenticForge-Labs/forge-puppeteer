@@ -100,3 +100,66 @@ def test_unknown_kind_and_pose_fail():
         load_standard_poses("nope", override_dir=None)
     with pytest.raises(ValueError):
         load_standard_poses("soarm101", override_dir=None).pose("dance")
+
+
+def test_soarm_reader_accepts_broker_result_envelope():
+    state = _soarm_state(shoulder_lift=1.0)
+    assert soarm_measured_pose({"request_id": "r", "result": state}).channels == \
+        soarm_measured_pose(state).channels
+
+
+# --- providers implement PoseReader ------------------------------------------
+
+import anyio  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+
+def test_soarm_provider_read_pose_is_measured_and_checks_against_sleep():
+    from forge_puppeteer.devices.soarm101 import SOARM101Provider
+
+    state = _soarm_state(wrist_flex=2.0)
+
+    class Broker:
+        async def list_tools(self):
+            return SimpleNamespace(tools=[SimpleNamespace(name="robot_state")])
+
+        async def call_tool(self, name, arguments):
+            assert name == "robot_state"
+            return SimpleNamespace(is_error=False, structured_content={"result": state})
+
+    async def run():
+        provider = SOARM101Provider("arm", Broker(), allowed_tools=frozenset({"robot_state"}))
+        return await provider.read_pose()
+
+    measured = anyio.run(run)
+    assert measured.source == "measured"
+    assert pose_check(measured, load_standard_poses("soarm101", override_dir=None)).ok
+
+
+def test_reachy_provider_read_pose_reads_sdk_joints_only():
+    from forge_puppeteer.devices.reachy import ReachyPlaybackProvider
+
+    head = [0, -0.9848156658225817, 1.2624661884298831, -0.24390294527381684,
+            0.20555342557667577, -1.2363885150358267, 1.0032234352772091]
+
+    class Robot:
+        calls = []
+
+        def get_current_joint_positions(self):
+            self.calls.append("read")
+            return head, [-3.05, 3.05]
+
+    robot = Robot()
+    provider = ReachyPlaybackProvider(SimpleNamespace(), robot)
+    measured = anyio.run(provider.read_pose)
+    assert robot.calls == ["read"]
+    assert pose_check(measured, load_standard_poses("reachy", override_dir=None)).ok
+
+
+def test_stackchan_provider_read_pose_is_commanded_only():
+    from forge_puppeteer.devices.stackchan import StackChanProvider
+
+    measured = anyio.run(StackChanProvider("robot").read_pose)
+    assert measured.source == "commanded"
+    check = pose_check(measured, load_standard_poses("stackchan", override_dir=None))
+    assert not check.ok and check.needs_confirmation
