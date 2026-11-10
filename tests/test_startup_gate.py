@@ -1,12 +1,15 @@
 """Sleep-pose startup gate and park, on the real runtime with fake robots."""
 import math
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 
-from types import SimpleNamespace
-
-from forge_puppeteer.behavior_contract import BehaviorCue, BehaviorPattern, PerformerBehaviors
+from forge_puppeteer.behavior_contract import (
+    BehaviorCue,
+    BehaviorPattern,
+    PerformerBehaviors,
+)
 from forge_puppeteer.conversation_ensemble import ConversationEnsemble
 from forge_puppeteer.execution import Completion, ExecutionRuntime, StopResult
 from forge_puppeteer.runtime import PerformanceStage
@@ -76,9 +79,8 @@ async def room(arms, *, cues=None):
     poses = {n: load_standard_poses("soarm101", override_dir=None) for n in arms}
     gate = StartupGate(runtime, ensemble, arms, poses,
                        {n: SLEEP_CUE for n in arms} if cues is None else cues, settle_s=0.01)
-    async with runtime.run():
-        async with ensemble.run():
-            yield gate, ensemble
+    async with runtime.run(), ensemble.run():
+        yield gate, ensemble
     runtime.close()
 
 

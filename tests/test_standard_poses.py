@@ -110,8 +110,9 @@ def test_soarm_reader_accepts_broker_result_envelope():
 
 # --- providers implement PoseReader ------------------------------------------
 
-import anyio  # noqa: E402
-from types import SimpleNamespace  # noqa: E402
+from types import SimpleNamespace
+
+import anyio
 
 
 def test_soarm_provider_read_pose_is_measured_and_checks_against_sleep():
@@ -143,7 +144,8 @@ def test_reachy_provider_read_pose_reads_sdk_joints_only():
             0.20555342557667577, -1.2363885150358267, 1.0032234352772091]
 
     class Robot:
-        calls = []
+        def __init__(self):
+            self.calls = []
 
         def get_current_joint_positions(self):
             self.calls.append("read")
