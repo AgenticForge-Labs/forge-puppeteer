@@ -51,12 +51,15 @@ forge-puppeteer-ensemble --config /absolute/path/ensemble.json                  
 ```
 
 At startup the ensemble reads each real robot's pose and compares it with its standard
-sleep pose (`src/forge_puppeteer/poses/`, ±5° by default). A robot that is not at sleep
-and has a `sleep_target` is laid down at sleep first (one move, never retried), so every
-conversation starts at sleep and then wakes the same way. A robot that cannot get there
-stays still; the caller relays the per-joint deltas and asks. A held robot can be answered
-while the conversation carries on with the other robots (it joins at the next presence
-change). `ensemble_state` reports `startup_complete` (per robot and overall) once the
+sleep pose (`src/forge_puppeteer/poses/`, ±5° by default). A robot not at sleep stays
+still. The question about it is plain code, asked before anything else starts:
+`forge-puppeteer-ensemble --config ensemble.json --preflight` prints a warning with the
+per-joint deltas and asks `y/N` in the terminal (`--yes` answers for you); yes lays the
+robot down at sleep (one move to its `sleep_target`, never retried, a leftover STOP fence
+lifted once on the usual evidence), anything else leaves it as it is. Conversationalist's
+`scripts/dev.py` runs this first (`--yes-sleep` to answer yes). A held robot can be
+answered by tools while the conversation carries on with the other robots (it joins at the
+next presence change). `ensemble_state` reports `startup_complete` (per robot and overall) once the
 wake-up motion has finished and settled; a caller should not speak before then. MCP tools:
 `ensemble_startup_check` (re-read, no motion), `ensemble_prepare` (`move_to_sleep` /
 `confirm_at_sleep`), `ensemble_park` (end of session: sleep move, re-check, report; refused

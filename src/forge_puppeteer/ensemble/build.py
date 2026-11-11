@@ -423,8 +423,7 @@ def build_startup_gate(room: EnsembleConfig, robots: dict[str, object], runtime,
             cues[ref.id] = BehaviorCue(
                 at_s=0, operation="play_joint_target", parameters={},
                 asset_id=f"soarm101/target/{target}", asset_revision=config.pose_targets[target])
-    # Every conversation starts at sleep: a robot found elsewhere is laid down first.
-    return StartupGate(runtime, ensemble, readers, poses, cues, sleep_on_start=True) if readers else None
+    return StartupGate(runtime, ensemble, readers, poses, cues) if readers else None
 
 
 def _soarm_broker_connected(provider):

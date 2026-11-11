@@ -447,3 +447,81 @@ async def test_sleep_on_start_leaves_a_fence_it_cannot_justify_lifting():
         gate.sleep_on_start = True
         result = await gate.prepare_for_start()
         assert arm.executed == [] and not result["ready"] and gate.runtime.is_inhibited("arm")
+
+
+class _Answers:
+    """A scripted terminal: records the questions it was asked and answers in order."""
+
+    def __init__(self, *answers):
+        self.answers, self.asked = list(answers), []
+
+    def __call__(self, question):
+        self.asked.append(question)
+        if not self.answers:
+            raise EOFError
+        return self.answers.pop(0)
+
+
+async def test_cli_prompt_warns_with_the_degrees_and_moves_only_on_yes():
+    from io import StringIO
+
+    from forge_puppeteer.ensemble.launcher import prompt_for_sleep
+
+    arm = FakeArm(12.0)
+    async with room({"arm": arm}) as (gate, _):
+        out, terminal = StringIO(), _Answers("y")
+        assert await prompt_for_sleep(gate, read_line=terminal, out=out) == 0
+        text = out.getvalue()
+        assert "WARNING" in text and "12.0" in text, "the warning carries the per-joint deltas"
+        assert terminal.asked == ["Move arm to its sleep position now? [y/N] "]
+        assert arm.executed == ["go_sleep"] and "arm: at_sleep" in text
+
+
+@pytest.mark.parametrize("answers", [("n",), ("",), ("maybe",), ()])
+async def test_cli_prompt_leaves_the_robot_alone_unless_the_answer_is_yes(answers):
+    from io import StringIO
+
+    from forge_puppeteer.ensemble.launcher import prompt_for_sleep
+
+    arm = FakeArm(12.0)
+    async with room({"arm": arm}) as (gate, _):
+        out = StringIO()
+        assert await prompt_for_sleep(gate, read_line=_Answers(*answers), out=out) == 1
+        assert arm.executed == [] and "Left arm as it is" in out.getvalue()
+
+
+async def test_cli_prompt_with_yes_flag_asks_nothing_and_a_robot_at_sleep_is_not_asked():
+    from io import StringIO
+
+    from forge_puppeteer.ensemble.launcher import prompt_for_sleep
+
+    arms = {"away": FakeArm(30.0), "home": FakeArm(1.0)}
+    async with room(arms) as (gate, _):
+        out, terminal = StringIO(), _Answers()
+        assert await prompt_for_sleep(gate, assume_yes=True, read_line=terminal, out=out) == 0
+        assert terminal.asked == [] and arms["away"].executed == ["go_sleep"] and arms["home"].executed == []
+        assert "home is at its sleep position" in out.getvalue()
+
+
+async def test_cli_prompt_asks_a_commanded_only_robot_whether_it_is_parked():
+    from io import StringIO
+
+    from forge_puppeteer.ensemble.launcher import prompt_for_sleep
+
+    arm = FakeArm(commanded=True)
+    async with room({"arm": arm}) as (gate, _):
+        terminal = _Answers("yes")
+        assert await prompt_for_sleep(gate, read_line=terminal, out=StringIO()) == 0
+        assert terminal.asked == ["Is arm parked at its sleep position? [y/N] "] and arm.executed == []
+
+
+async def test_cli_prompt_reports_a_robot_with_no_sleep_move_without_asking():
+    from io import StringIO
+
+    from forge_puppeteer.ensemble.launcher import prompt_for_sleep
+
+    arm = FakeArm(30.0)
+    async with room({"arm": arm}, cues={}) as (gate, _):
+        out, terminal = StringIO(), _Answers("y")
+        assert await prompt_for_sleep(gate, read_line=terminal, out=out) == 1
+        assert terminal.asked == [] and "cannot be moved to sleep automatically" in out.getvalue()

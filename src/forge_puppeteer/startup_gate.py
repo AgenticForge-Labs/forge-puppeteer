@@ -139,20 +139,28 @@ class StartupGate:
             entry = self._status.get(name, {})
             if entry.get("status") in OPEN_STATUSES or not entry.get("can_move_to_sleep"):
                 continue
-            outcome = await self._sleep_move(name, f"start-sleep-{uuid.uuid4().hex[:12]}")
-            if outcome.get("reason") == "stop_unconfirmed":
-                # A fence left by an earlier session that ended without a confirmed STOP.
-                # Lift it once on the usual evidence (a measured pose that has settled, or a
-                # confirmed STOP), then make the one sleep move. Nothing is moved by recover.
-                recovered = await self.recover(name)
-                logger.info("recover before start: %s -> %s %s", name, recovered.get("outcome"),
-                            recovered.get("reason") or "")
-                if recovered.get("outcome") == "recovered":
-                    outcome = await self._sleep_move(name, f"start-sleep-{uuid.uuid4().hex[:12]}")
-            logger.info("sleep before start: %s -> %s %s", name, outcome.get("outcome"), outcome.get("reason") or outcome.get("error") or "")
+            outcome = await self.sleep_robot(name)
             if outcome.get("outcome") == "failed":
                 break  # a fault stops the run; the rest stay as they are
         return {"outcome": "observed", **self.snapshot()}
+
+    async def sleep_robot(self, name: str) -> dict[str, object]:
+        """One sleep move for one held robot, lifting a leftover STOP fence first if needed.
+
+        A fence left by an earlier session that ended without a confirmed STOP is lifted once
+        on the usual evidence (a measured pose that has settled, or a confirmed STOP);
+        recovering moves nothing. Then exactly one sleep move is made; it is never retried.
+        """
+        outcome = await self._sleep_move(name, f"start-sleep-{uuid.uuid4().hex[:12]}")
+        if outcome.get("reason") == "stop_unconfirmed":
+            recovered = await self.recover(name)
+            logger.info("recover before sleep: %s -> %s %s", name, recovered.get("outcome"),
+                        recovered.get("reason") or "")
+            if recovered.get("outcome") == "recovered":
+                outcome = await self._sleep_move(name, f"start-sleep-{uuid.uuid4().hex[:12]}")
+        logger.info("sleep move: %s -> %s %s", name, outcome.get("outcome"),
+                    outcome.get("reason") or outcome.get("error") or "")
+        return outcome
 
     def snapshot(self) -> dict[str, object]:
         return {
