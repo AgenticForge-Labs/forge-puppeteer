@@ -108,6 +108,12 @@ class ConversationEnsemble:
         self._lock = anyio.Lock()
         self._tasks = None
         self._slots: dict[str, _Slot] = {}
+        # Performers whose presence runs as a live stream (SO-ARM): the state is
+        # passed to the performer's LivePresence instead of switching programs.
+        self._live: dict[str, object] = {}
+        # Performers a pose-target gesture (such as sleep) left away from neutral:
+        # no presence or other gesture runs until ``wake_to_neutral`` completes.
+        self._rest: set[str] = set()
         self._speech_channels: dict[
             str, tuple[object, float, list | None, object | None]
         ] = {}
@@ -201,6 +207,14 @@ class ConversationEnsemble:
                         if pattern.mode == "once"
                         and behavior not in {"idle", "listening", "speaking", "disconnected"}
                     ),
+                    # Approximate run time of each gesture, so a caller can start its
+                    # speech partway through instead of talking over the whole move.
+                    "expression_durations_s": {
+                        behavior: round(float(pattern.max_duration_s), 3)
+                        for behavior, pattern in sorted(self.packs[name].behaviors.items())
+                        if pattern.mode == "once"
+                        and behavior not in {"idle", "listening", "speaking", "disconnected"}
+                    },
                     # Recorded expressions replay an exact pinned asset; authored
                     # ones are procedural gestures. Callers may group or filter
                     # by this without inferring intent from device type.
@@ -223,6 +237,8 @@ class ConversationEnsemble:
                         if pattern.mode == "once"
                         and behavior not in {"idle", "listening", "speaking", "disconnected"}
                     ),
+                    # Lying down after a pose gesture such as sleep: only a wake move is accepted.
+                    "resting": name in self._rest,
                     "startup_behavior": self.packs[name].startup is not None,
                     "startup_configured": self.packs[name].startup is not None,
                     "startup_pending": name in self._startup_pending,
@@ -271,6 +287,15 @@ class ConversationEnsemble:
                 preserve_expressions = event.state != "disconnected" and not event.interrupted
                 candidates = tuple(name for name, slot in self._slots.items()
                     if not (preserve_expressions and slot.expression_active))
+                if event.state in {"idle", "listening", "speaking"}:
+                    # A live stream follows a change of presence (even an
+                    # interruption) by changing its motion; nothing is stopped.
+                    following = tuple(n for n in candidates if self._live_following(n))
+                    for n in following:
+                        self._live[n].set_behavior(event.state)
+                    candidates = tuple(n for n in candidates if n not in following)
+                if previous == "speaking" and (event.state != "speaking" or event.interrupted):
+                    self._end_speech()
                 normal = event.state != "disconnected" and not event.interrupted
                 immediate = []
                 for name in candidates:
@@ -288,6 +313,7 @@ class ConversationEnsemble:
                 self._release_owners()
                 self._session = None
                 self._settled = False
+                self._rest.clear()
             elif self._settled:
                 pass  # The caller is ending the session; no new motion starts.
             else:
@@ -349,6 +375,8 @@ class ConversationEnsemble:
                 return {"outcome": "denied", "reason": "reserved_presence_state", **self.snapshot()}
             if any(n in self._blocked for n in names):
                 return {"outcome": "denied", "reason": "performer_quarantined", **self.snapshot()}
+            if any(n in self._rest and not self._wakes(n, expression) for n in names):
+                return {"outcome": "denied", "reason": "performer_resting_needs_wake", **self.snapshot()}
             if any(n not in self._owned for n in names):
                 return {"outcome": "denied", "reason": "performer_not_owned", **self.snapshot()}
             if any(expression not in self.packs[n].behaviors for n in names):
@@ -402,6 +430,9 @@ class ConversationEnsemble:
             if len(self._gesture_order) > 256:
                 self._gesture_ids.discard(self._gesture_order.popleft())
             for name in names:
+                if name in self._rest and self._wakes(name, expression):
+                    # Accepted wake: other gestures may queue behind it from now on.
+                    self._rest.discard(name)
                 if name in deferred:
                     continue
                 self._spawn(
@@ -487,7 +518,8 @@ class ConversationEnsemble:
         if self._tasks is None:
             return
         scope = anyio.CancelScope()
-        slot = _Slot(scope=scope, behavior="speaking", expression_active=resume)
+        slot = _Slot(scope=scope, behavior="live" if name in self._live else "speaking",
+                     expression_active=resume)
         self._slots[name] = slot
 
         async def wait_then_play() -> None:
@@ -503,6 +535,10 @@ class ConversationEnsemble:
                     await anyio.sleep(0.1)
             if scope.cancel_called:
                 slot.done.set()
+                return
+            if name in self._live:
+                now = self._state if self._state in {"idle", "listening", "speaking"} else "speaking"
+                await self._play_live(name, now, slot, action_id)
                 return
             pattern = self.packs[name].behaviors.get("speaking")
             if pattern is None:
@@ -625,6 +661,16 @@ class ConversationEnsemble:
     ):
         if name in self._blocked or name not in self._owned or self._session is None:
             return
+        if name in self._live and behavior in {"idle", "listening", "speaking"} and pattern_override is None:
+            if name in self._rest:
+                return  # lying down: stays still until woken with wake_to_neutral
+            if behavior == "speaking" and not self.startup_complete(name):
+                self._spawn_deferred_speaking(name, action_id, resume=resume)
+                return
+            slot = _Slot(scope=anyio.CancelScope(), behavior="live", expression_active=resume)
+            self._slots[name] = slot
+            self._tasks.start_soon(self._play_live, name, behavior, slot, action_id)
+            return
         pattern = pattern_override or (
             self.packs[name].startup if behavior == "startup"
             else self.packs[name].behaviors.get(behavior)
@@ -649,6 +695,121 @@ class ConversationEnsemble:
         slot = _Slot(scope=scope, behavior=behavior, expression_active=resume)
         self._slots[name] = slot
         self._tasks.start_soon(self._play, name, behavior, pattern, slot, action_id, resume)
+
+    def bind_live_presence(self, performer_id: str, presence) -> None:
+        """Run this performer's idle/listening/speaking as one live stream (SO-ARM).
+
+        ``presence`` supplies the motion (``set_behavior``, ``close``, ``asset_id``,
+        ``asset_revision``); gestures and the startup/sleep moves stay finite pinned
+        programs and run with the stream closed.
+        """
+        if performer_id not in self.packs:
+            raise ValueError("live presence requires a configured performer")
+        self._live[performer_id] = presence
+
+    def _wakes(self, name: str, expression: str) -> bool:
+        """True when this gesture is the wake-to-neutral move."""
+        pattern = self.packs[name].behaviors.get(expression)
+        return pattern is not None and any(cue.operation == "wake_to_neutral" for cue in pattern.cues)
+
+    def _end_speech(self) -> None:
+        """The voice stopped or was interrupted: drop features queued for audio never played."""
+        for presence in self._live.values():
+            end = getattr(presence, "end_speech", None)
+            if callable(end):
+                end()
+        for channel, *_rest in self._speech_channels.values():
+            flush = getattr(channel, "flush", None)
+            if callable(flush):
+                flush()
+
+    def _live_following(self, name: str) -> bool:
+        """True when this performer's running slot is a live stream that can take a new state."""
+        slot = self._slots.get(name)
+        return (name in self._live and slot is not None and slot.behavior == "live"
+                and not slot.cancel_requested and not slot.done.is_set())
+
+    async def _play_live(
+        self, name: str, behavior: str, slot: _Slot, action_id: str,
+    ) -> None:
+        """Keep the performer's live stream open until the slot is asked to finish.
+
+        The stream is one long runtime action. Presence changes only change what
+        the generator outputs; a gesture, the session ending or a STOP sets
+        ``cancel_requested``/cancels, which closes the stream at its centre pose.
+        """
+        live = self._live[name]
+        with slot.scope:
+            try:
+                live.set_behavior(behavior)
+                count = 0
+                while not slot.cancel_requested:
+                    request = ActionRequest(
+                        id=f"{action_id}:{name}:live:{count}",
+                        performer_id=name, caller_id=self.caller_id,
+                        session_id=self._session, operation="live_presence",
+                        parameters={}, cue_id=f"live:{count}",
+                        asset_id=live.asset_id, asset_revision=live.asset_revision,
+                    )
+                    slot.last_action_id = request.id
+                    async with self._dispatch_gate:
+                        if slot.cancel_requested:
+                            break
+                        await self.runtime.submit(request)
+                        slot.pending = True
+                        slot.action_done = anyio.Event()
+                    slot.status = "active"
+                    slot.evidence = "live_presence_stream"
+
+                    async def watch_for_finish() -> None:
+                        # Keep asking: a stream that is still opening resets the flag.
+                        while True:
+                            if slot.cancel_requested:
+                                live.close()
+                            await anyio.sleep(0.05)
+
+                    async with anyio.create_task_group() as watcher:
+                        watcher.start_soon(watch_for_finish)
+                        record = await self.runtime.wait(request.id)
+                        watcher.cancel_scope.cancel()
+                    slot.pending = record.state == ActionState.UNKNOWN
+                    slot.action_done.set()
+                    if record.state != ActionState.COMPLETED:
+                        slot.status = "blocked" if record.state == ActionState.UNKNOWN else "unavailable"
+                        slot.evidence = f"action_{record.state.value}"
+                        return
+                    count += 1
+                slot.status = "completed"
+                slot.evidence = "live_presence_finished"
+            except anyio.get_cancelled_exc_class():
+                slot.status = "cancelling"
+                slot.evidence = "live_presence_cancelled"
+            except ExecutionError as exc:
+                slot.status = "blocked" if (
+                    slot.pending or exc.code == "stop_unconfirmed"
+                ) else "unavailable"
+                slot.evidence = exc.code
+            except Exception:  # noqa: BLE001 - uncertain SDK outcome
+                slot.status = "blocked"
+                slot.evidence = "live_presence_unknown"
+            finally:
+                if slot.pending:
+                    with anyio.CancelScope(shield=True):
+                        try:
+                            with anyio.fail_after(self.stop_timeout_s):
+                                stopped = await self.runtime.stop(name)
+                            if not stopped.confirmed:
+                                slot.status = "blocked"
+                                slot.evidence = "device_stop_unconfirmed"
+                            else:
+                                slot.pending = False
+                        except Exception:  # noqa: BLE001 - unknown STOP
+                            slot.status = "blocked"
+                            slot.evidence = "device_stop_unknown"
+                        slot.action_done.set()
+                if slot.status == "blocked":
+                    self._blocked.add(name)
+                slot.done.set()
 
     def bind_speech_channel(
         self, performer_id: str, channel, *, amplitude: float,
@@ -790,13 +951,21 @@ class ConversationEnsemble:
         with slot.scope:
             try:
                 completed = await self._execute_pattern(name, behavior, pattern, slot, action_id)
+                if name in self._live:
+                    operations = {cue.operation for cue in pattern.cues}
+                    if completed and "play_joint_target" in operations:
+                        self._rest.add(name)
+                    elif "wake_to_neutral" in operations:
+                        # Woken: the arm is at neutral. A failed or interrupted wake
+                        # leaves it somewhere unknown, so it keeps resting.
+                        (self._rest.discard if completed else self._rest.add)(name)
                 if behavior == "startup":
                     self._startup_finished(name)
                 slot.expression_active = False
                 # An expression returns to the *latest* conversational presence
                 # only if it was not interrupted or blocked.
                 if (completed and resume and name not in self._blocked
-                        and not slot.scope.cancel_called):
+                        and name not in self._rest and not slot.scope.cancel_called):
                     background = self.packs[name].behaviors.get(self._state)
                     if background and self._session:
                         # A completed startup/gesture can resume a long-lived
@@ -816,6 +985,13 @@ class ConversationEnsemble:
                             self._spawn_deferred_speaking(
                                 name, resume_id, resume=True,
                             )
+                            return
+                        if (name in self._live and not slot.cancel_requested
+                                and self._state in {"idle", "listening", "speaking"}):
+                            # A live stream reopens at the centre pose for whatever
+                            # the conversation is doing now.
+                            await self._retire_slot(name, slot)
+                            self._spawn(name, self._state, f"{action_id}-resume")
                             return
                         if self._state == "speaking" and name in self._speech_channels:
                             # Resume speech through the same reactive channel used
@@ -897,6 +1073,7 @@ class ConversationEnsemble:
             silence_released = False
             started = anyio.current_time()
             missing_since: float | None = None
+            seen_features = False
             fallback_step: tuple[int, int] | None = None
             fallback_generation = 0
             try:
@@ -911,6 +1088,14 @@ class ConversationEnsemble:
                         slot.evidence = "speech_presence_transition"
                         return
                     values = channel.latest()
+                    if (values is None and seen_features and last_dispatched is not None
+                            and not silence_released
+                            and self._speech_release_on_silence.get(name, False)):
+                        # The audio timeline ended: release once, as silence would.
+                        values = {"active": False, "mouth": 0.0, "pitch": 0.0, "yaw": 0.0,
+                                  "roll": 0.0, "z": 0.0, "antenna": 0.0,
+                                  "stream_id": last_dispatched[0],
+                                  "sequence": (last_dispatched[1] or 0) + 1}
                     if values is None:
                         slot.status = "active"
                         slot.evidence = "awaiting_speech_envelope"
@@ -950,6 +1135,7 @@ class ConversationEnsemble:
                         continue
                     missing_since = None
                     fallback_step = None
+                    seen_features = True
                     # Later fresh PCM features replace unsent hops; neither
                     # replay a dispatched sequence nor animate VAD inactivity.
                     if values.get("active") is False and (
@@ -1191,4 +1377,5 @@ class ConversationEnsemble:
                     self._release_owners()
                     self._session = None
                     self._state = "disconnected"
+                    self._rest.clear()
                     self._expired = True

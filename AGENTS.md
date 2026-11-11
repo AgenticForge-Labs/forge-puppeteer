@@ -21,14 +21,23 @@ work. Simulation is a quick sanity check, not a qualification process.
    joint positions (read-only, no torque change) and compare them to its
    sleep pose below.
    - Every joint within tolerance (default **±5°**): proceed without asking.
-   - Otherwise: report the per-joint deltas and ask the user.
-   - The ensemble room does this itself on startup (`startup_gate.py`). A robot
-     not at sleep stays still. Relay its `message`; on "yes" call
-     `ensemble_prepare(performer_id, "move_to_sleep", action_id)`. Robots that
-     report only commanded positions (StackChan) use `"confirm_at_sleep"`.
-     `ensemble_startup_check` re-reads without moving. A SO-ARM sleep move needs
-     `sleep_target` (a `pose_targets` name) in its robot config. A held robot can
-     be answered mid-conversation (it joins at the next presence change);
+   - Otherwise: report the per-joint deltas and ask the user (when you are the one
+     working with the robot; the product asks through the command-line prompt below).
+   - The ensemble room reads the pose itself on startup (`startup_gate.py`); a robot
+     not at sleep stays still, with no motion. The question is plain code, never a
+     model: `forge-puppeteer-ensemble --config ... --preflight` (run by Conversationalist's
+     `scripts/dev.py` before it starts anything) prints a WARNING with the per-joint
+     deltas and asks `y/N` in the terminal. Yes lays the robot down at sleep (one move to
+     the pinned `sleep_target`, never retried; a leftover STOP fence is lifted once on the
+     usual evidence first); anything else, including no terminal, leaves it as it is.
+     `--yes` answers for a user who already said yes. The voice agent does not ask or
+     fix this; it just reports a held robot as unable to move. Robots that report only
+     commanded positions (StackChan) are asked whether they are parked.
+     `ensemble_prepare(performer_id, "move_to_sleep", action_id)` (or `"confirm_at_sleep"`)
+     remain for tools and scripts. `ensemble_startup_check` re-reads without moving.
+     A SO-ARM sleep move needs `sleep_target` (a `pose_targets` name) in its robot
+     config. A held robot can be answered mid-conversation (it joins at the next
+     presence change);
      `ensemble_park` while a conversation is active is refused unless the caller that owns it passes
      `settle_session` (it finishes the running behaviors without a STOP, releases the robots, then
      sleeps them; the caller disconnects afterwards).

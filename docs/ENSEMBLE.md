@@ -52,9 +52,14 @@ forge-puppeteer-ensemble --config /absolute/path/ensemble.json                  
 
 At startup the ensemble reads each real robot's pose and compares it with its standard
 sleep pose (`src/forge_puppeteer/poses/`, ±5° by default). A robot not at sleep stays
-still; the caller relays the per-joint deltas and asks. A held robot can be answered
-while the conversation carries on with the other robots (it joins at the next presence
-change). `ensemble_state` reports `startup_complete` (per robot and overall) once the
+still. The question about it is plain code, asked before anything else starts:
+`forge-puppeteer-ensemble --config ensemble.json --preflight` prints a warning with the
+per-joint deltas and asks `y/N` in the terminal (`--yes` answers for you); yes lays the
+robot down at sleep (one move to its `sleep_target`, never retried, a leftover STOP fence
+lifted once on the usual evidence), anything else leaves it as it is. Conversationalist's
+`scripts/dev.py` runs this first (`--yes-sleep` to answer yes). A held robot can be
+answered by tools while the conversation carries on with the other robots (it joins at the
+next presence change). `ensemble_state` reports `startup_complete` (per robot and overall) once the
 wake-up motion has finished and settled; a caller should not speak before then. MCP tools:
 `ensemble_startup_check` (re-read, no motion), `ensemble_prepare` (`move_to_sleep` /
 `confirm_at_sleep`), `ensemble_park` (end of session: sleep move, re-check, report; refused
@@ -87,9 +92,52 @@ to 30 seconds). Named taught poses are exposed with `pose_targets`;
 `ensemble_park`. `sleep_check: false` turns the startup check off, for a simulated
 broker only. Examples: `examples/robots/soarm101/v4-*.json`.
 
+### Live presence (breathing, listening, audio-synced talking)
+
+Pinned programs each start and end at rest, so presence built from them pauses between
+motions and cannot follow the voice. With a `live_presence` block in the provider, the
+idle, listening and speaking states instead run as one SDK live stream
+(`/v1/trusted/stream/*`): Puppeteer sends small joint *offsets* about 20 times a second and
+the SDK clamps them to an operator-pinned `JointEnvelope` (centre pose plus at most 15° per
+joint, listed under `envelopes` in the trusted catalog), slews them under the pinned speed and
+acceleration limits and writes every sample through its guarded stream. If offsets stop the arm
+returns to the centre; a STOP or watchdog trip ends the stream. Talking nods follow the
+synthesized speech level (`speech_driven: true`; the same generated-audio features Reachy
+uses) and fall back to a gentle rhythm when none arrive. Gestures (`yes`, `no`, `curious`),
+the wake move and the sleep move stay pinned programs: the ensemble closes the stream
+(back to the centre pose), runs the program, and reopens it.
+
+```json
+"live_presence": {
+  "envelope": "presence", "envelope_revision": "sha256:…",
+  "breath_delta_deg": [0, -0.8, 4, -2.1, 0], "max_offset_deg": [0, 6, 6, 6, 6],
+  "breath_period_s": 4.0, "talk_amplitude_deg": 5.0, "speech_driven": true
+}
+```
+
+`scripts/author-soarm-live.py CONFIG_DIR` pins the envelope and adds the block (it needs the
+SDK's Python environment). The old `idle`/`speaking` programs may stay pinned; they are unused.
+
 With `operator_choreography_only: true` in the private daemon config, no agent lease is
 created, agent state changes are denied by the SDK, and only the exact pinned
 choreography runs, through the authenticated trusted-host route.
+
+## Speech timing (every robot)
+
+The speech envelope carries 50 ms hops that describe the *generated* audio. Voice engines
+generate faster than the audio plays, so a reply can arrive within a fraction of its length.
+`SpeechEnvelopeWindow` therefore queues each hop on the audio timeline (back to back from the
+first one, after anything still queued) and `playing()` returns the hop for this moment of
+playback; motion follows the audio, not the arrival of the features, and ends with it. The
+ensemble drops what is still queued when the voice stops or is interrupted (`flush`).
+A robot whose slot releases on silence (StackChan's mouth) is released once when the timeline
+ends. `latest()` still returns the newest arrival (a 0.5 s preview). The playback clock
+starts at arrival and does not know the voice engine's playout latency, so motion tends to
+end slightly before the sound does.
+
+Each gesture reports its length in `expression_durations_s` (a recording's real duration for
+Reachy, the last cue plus a short tail for authored ones, the exact program length for the
+SO-ARM) so a caller can start the reply partway through the move.
 
 ## Reachy and StackChan options
 
@@ -112,4 +160,4 @@ Reachy, defaults first:
 | `legacy_speech_fallback` | rhythmic head motion when features go stale (needs `smooth_v2`, classic style) |
 
 StackChan: `speaking_mode` is `legacy_size` or `native_weight`; `speech_driven` is a
-boolean. SO-ARM101 takes no options.
+boolean. SO-ARM101 takes no `options`; its live presence is configured in the provider.

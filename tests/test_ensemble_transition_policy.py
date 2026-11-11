@@ -396,3 +396,90 @@ async def test_deferred_transition_coalesces_and_interrupts_promptly():
         count = len(provider.commands)
         await anyio.sleep(.05)
         assert len(provider.commands) == count
+
+
+class QuickProvider:
+    def __init__(self):
+        self.calls = []
+
+    async def validate(self, _request):
+        pass
+
+    def resources_for(self, _request):
+        return ("head.pose",)
+
+    async def execute(self, request):
+        self.calls.append(request.operation)
+        return Completion("fake head motion completed")
+
+    async def stop(self):
+        return StopResult(True, "fake stop")
+
+
+@pytest.mark.anyio
+async def test_the_voice_ending_or_being_interrupted_drops_the_features_queued_for_it():
+    class Channel:
+        flushed = 0
+
+        def latest(self):
+            return None
+
+        def flush(self):
+            self.flushed += 1
+
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("arm", QuickProvider())
+    ensemble = ConversationEnsemble(runtime, [pack()])
+    channel = Channel()
+    identity = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+    ensemble.bind_speech_channel("arm", channel, amplitude=0.08, neutral_head=identity,
+                                 interval_s=0.02)
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(event(0, "speaking"))
+        assert channel.flushed == 0
+        await ensemble.observe(event(1, "listening", interrupted=True))
+        assert channel.flushed == 1
+        await ensemble.observe(event(2, "speaking"))
+        await ensemble.observe(event(3, "idle"))
+        assert channel.flushed == 2
+        await ensemble.observe(event(4, "disconnected", interrupted=True))
+
+
+@pytest.mark.anyio
+async def test_a_mouth_that_releases_on_silence_is_released_when_the_audio_timeline_ends():
+    released = []
+
+    class Channel:
+        playing = True
+        n = 0
+
+        def latest(self):
+            if self.playing:
+                self.n += 1
+                return {"pitch": 0.1, "yaw": 0.1, "roll": 0.0, "z": 0.0, "antenna": 0.0,
+                        "active": True, "mouth": 0.7, "stream_id": "s", "sequence": self.n}
+            return None
+
+    def warp(values, _amplitude):
+        if values.get("active") is False:
+            released.append(values["sequence"])
+        return BehaviorCue(at_s=0, operation="head_pose")
+
+    provider, channel = QuickProvider(), Channel()
+    runtime = ExecutionRuntime(PerformanceStage())
+    runtime.register("arm", provider)
+    ensemble = ConversationEnsemble(runtime, [pack()])
+    ensemble.bind_speech_channel("arm", channel, amplitude=0.08, warp=warp,
+                                 release_on_silence=True, interval_s=0.02)
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(event(0, "speaking"))
+        with anyio.fail_after(2):
+            while len(provider.calls) < 3:
+                await anyio.sleep(0.01)
+        channel.playing = False  # the audio ended
+        with anyio.fail_after(2):
+            while not released:
+                await anyio.sleep(0.01)
+        await anyio.sleep(0.15)
+        assert len(released) == 1, "released once, not repeatedly"
+        await ensemble.observe(event(1, "disconnected", interrupted=True))

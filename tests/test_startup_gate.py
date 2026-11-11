@@ -391,3 +391,137 @@ async def test_park_can_settle_the_session_it_is_ending_then_sleep_then_disconne
             session_id="s1", event_id="e2", sequence=2, state="disconnected", source="agent_state"))
         assert ensemble.snapshot()["session_id"] is None and ensemble.is_settled()
         assert arm.stops == 0
+
+
+async def test_sleep_on_start_lays_a_robot_that_is_elsewhere_down_once_and_opens_the_gate():
+    arms = {"arm": FakeArm(70.0), "other": FakeArm(0.5)}
+    runtime = ExecutionRuntime(PerformanceStage())
+    for name, arm in arms.items():
+        runtime.register(name, arm)
+    ensemble = ConversationEnsemble(runtime, [_pack(n) for n in arms])
+    poses = {n: load_standard_poses("soarm101", override_dir=None) for n in arms}
+    gate = StartupGate(runtime, ensemble, arms, poses, {n: SLEEP_CUE for n in arms},
+                       settle_s=0.01, sleep_on_start=True)
+    async with runtime.run(), ensemble.run():
+        result = await gate.prepare_for_start()
+        assert result["ready"] and all(p["status"] == "at_sleep" for p in result["performers"].values())
+        assert arms["arm"].executed == ["go_sleep"] and arms["other"].executed == []
+        assert ensemble.snapshot()["performers"]["arm"]["status"] == "idle"
+    runtime.close()
+
+
+async def test_sleep_on_start_does_not_retry_and_leaves_a_failed_robot_held():
+    arm = FakeArm(70.0, reaches_sleep=False)
+    async with room({"arm": arm}) as (gate, ensemble):
+        gate.sleep_on_start = True
+        result = await gate.prepare_for_start()
+        assert arm.executed == ["go_sleep"], "exactly one move"
+        assert not result["ready"] and ensemble.snapshot()["performers"]["arm"]["status"] == "unavailable"
+
+
+async def test_sleep_on_start_needs_a_configured_sleep_move_and_otherwise_asks_as_before():
+    arm = FakeArm(70.0)
+    async with room({"arm": arm}, cues={}) as (gate, _):
+        gate.sleep_on_start = True
+        result = await gate.prepare_for_start()
+        assert arm.executed == [] and not result["ready"]
+
+
+async def test_sleep_on_start_clears_a_leftover_fence_once_then_lays_the_robot_down():
+    arm = FakeArm(pose=NEUTRAL)  # settled at neutral, as after a session that ended without a park
+    async with room({"arm": arm}) as (gate, ensemble):
+        await _quarantine(gate.runtime, ensemble, arm)
+        arm.executed.clear()
+        gate.sleep_on_start = True
+        result = await gate.prepare_for_start()
+        assert arm.executed == ["go_sleep"], "one sleep move after the recovery"
+        assert result["ready"] and result["performers"]["arm"]["status"] == "at_sleep"
+        assert not gate.runtime.is_inhibited("arm")
+
+
+async def test_sleep_on_start_leaves_a_fence_it_cannot_justify_lifting():
+    arm = FakeArm(offset_deg=30.0, drift_deg=1.5)  # still moving: no settled evidence
+    async with room({"arm": arm}) as (gate, ensemble):
+        await _quarantine(gate.runtime, ensemble, arm)
+        arm.executed.clear()
+        gate.sleep_on_start = True
+        result = await gate.prepare_for_start()
+        assert arm.executed == [] and not result["ready"] and gate.runtime.is_inhibited("arm")
+
+
+class _Answers:
+    """A scripted terminal: records the questions it was asked and answers in order."""
+
+    def __init__(self, *answers):
+        self.answers, self.asked = list(answers), []
+
+    def __call__(self, question):
+        self.asked.append(question)
+        if not self.answers:
+            raise EOFError
+        return self.answers.pop(0)
+
+
+async def test_cli_prompt_warns_with_the_degrees_and_moves_only_on_yes():
+    from io import StringIO
+
+    from forge_puppeteer.ensemble.launcher import prompt_for_sleep
+
+    arm = FakeArm(12.0)
+    async with room({"arm": arm}) as (gate, _):
+        out, terminal = StringIO(), _Answers("y")
+        assert await prompt_for_sleep(gate, read_line=terminal, out=out) == 0
+        text = out.getvalue()
+        assert "WARNING" in text and "12.0" in text, "the warning carries the per-joint deltas"
+        assert terminal.asked == ["Move arm to its sleep position now? [y/N] "]
+        assert arm.executed == ["go_sleep"] and "arm: at_sleep" in text
+
+
+@pytest.mark.parametrize("answers", [("n",), ("",), ("maybe",), ()])
+async def test_cli_prompt_leaves_the_robot_alone_unless_the_answer_is_yes(answers):
+    from io import StringIO
+
+    from forge_puppeteer.ensemble.launcher import prompt_for_sleep
+
+    arm = FakeArm(12.0)
+    async with room({"arm": arm}) as (gate, _):
+        out = StringIO()
+        assert await prompt_for_sleep(gate, read_line=_Answers(*answers), out=out) == 1
+        assert arm.executed == [] and "Left arm as it is" in out.getvalue()
+
+
+async def test_cli_prompt_with_yes_flag_asks_nothing_and_a_robot_at_sleep_is_not_asked():
+    from io import StringIO
+
+    from forge_puppeteer.ensemble.launcher import prompt_for_sleep
+
+    arms = {"away": FakeArm(30.0), "home": FakeArm(1.0)}
+    async with room(arms) as (gate, _):
+        out, terminal = StringIO(), _Answers()
+        assert await prompt_for_sleep(gate, assume_yes=True, read_line=terminal, out=out) == 0
+        assert terminal.asked == [] and arms["away"].executed == ["go_sleep"] and arms["home"].executed == []
+        assert "home is at its sleep position" in out.getvalue()
+
+
+async def test_cli_prompt_asks_a_commanded_only_robot_whether_it_is_parked():
+    from io import StringIO
+
+    from forge_puppeteer.ensemble.launcher import prompt_for_sleep
+
+    arm = FakeArm(commanded=True)
+    async with room({"arm": arm}) as (gate, _):
+        terminal = _Answers("yes")
+        assert await prompt_for_sleep(gate, read_line=terminal, out=StringIO()) == 0
+        assert terminal.asked == ["Is arm parked at its sleep position? [y/N] "] and arm.executed == []
+
+
+async def test_cli_prompt_reports_a_robot_with_no_sleep_move_without_asking():
+    from io import StringIO
+
+    from forge_puppeteer.ensemble.launcher import prompt_for_sleep
+
+    arm = FakeArm(30.0)
+    async with room({"arm": arm}, cues={}) as (gate, _):
+        out, terminal = StringIO(), _Answers("y")
+        assert await prompt_for_sleep(gate, read_line=terminal, out=out) == 1
+        assert terminal.asked == [] and "cannot be moved to sleep automatically" in out.getvalue()

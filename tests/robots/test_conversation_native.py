@@ -1039,3 +1039,20 @@ async def test_invalid_speech_axis_is_pre_dispatch_denial_without_stop():
         assert provider.execute_calls == 0
         assert provider.stop_calls == 0
         assert "reachy" not in ensemble._blocked
+
+
+def test_gestures_report_their_real_length_so_speech_can_be_timed_around_them():
+    pack = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV,
+        available_recordings=("yes1", "no1", "curious1"),
+        recording_durations_s={"yes1": 2.4, "no1": 1.8, "curious1": 3.1},
+    )
+    assert [pack.behaviors[n].max_duration_s for n in ("yes", "no", "curious")] == [2.4, 1.8, 3.1]
+    unknown = reachy_conversation_pack(
+        "reachy", neutral_head=NEUTRAL, recording_revision=REV, available_recordings=("yes1",))
+    assert unknown.behaviors["yes"].max_duration_s == 0.6  # last cue (0 s) + the default tail
+    stack = stackchan_conversation_pack("stackchan")
+    for name, pattern in stack.behaviors.items():
+        if pattern.mode == "once":
+            last = pattern.cues[-1].at_s
+            assert last < pattern.max_duration_s < 5, name

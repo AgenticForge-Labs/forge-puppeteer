@@ -19,6 +19,7 @@ hand and re-checks.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
@@ -42,6 +43,7 @@ NOT_AT_SLEEP = "not_at_sleep"
 NEEDS_CONFIRMATION = "needs_confirmation"
 CONFIRMED = "confirmed_by_user"
 UNREADABLE = "unreadable"
+logger = logging.getLogger(__name__)
 OPEN_STATUSES = frozenset({AT_SLEEP, CONFIRMED})
 
 
@@ -57,6 +59,7 @@ class StartupGate:
         caller_id: str = "startup-gate",
         settle_s: float = 0.5,
         settled_motion_deg: float = 1.0,
+        sleep_on_start: bool = False,
     ):
         if set(readers) != set(poses) or not set(readers) <= set(ensemble.packs):
             raise ValueError("readers and standard poses must cover the same configured performers")
@@ -67,6 +70,7 @@ class StartupGate:
         self.readers, self.poses, self.sleep_cues = dict(readers), dict(poses), sleep_cues
         self.caller_id = caller_id
         self.settle_s, self.settled_motion_deg = settle_s, settled_motion_deg
+        self.sleep_on_start = sleep_on_start
         self._session_id = f"startup-gate-{uuid.uuid4().hex[:12]}"
         self._status: dict[str, dict[str, object]] = {}
 
@@ -119,6 +123,44 @@ class StartupGate:
         for name in self.readers:
             await self._read(name)
         return {"outcome": "observed", **self.snapshot()}
+
+    async def prepare_for_start(self) -> dict[str, object]:
+        """Read every pose; with ``sleep_on_start`` first lay each held robot down at sleep.
+
+        Every conversation then starts the same way: at the standard sleep pose, then the
+        normal wake-up. One sleep move per robot, never retried: a robot that cannot get
+        there (no sleep move configured, a fault, still off after the move) stays held and
+        is reported to the user as before.
+        """
+        result = await self.check()
+        if not self.sleep_on_start:
+            return result
+        for name in list(self.readers):
+            entry = self._status.get(name, {})
+            if entry.get("status") in OPEN_STATUSES or not entry.get("can_move_to_sleep"):
+                continue
+            outcome = await self.sleep_robot(name)
+            if outcome.get("outcome") == "failed":
+                break  # a fault stops the run; the rest stay as they are
+        return {"outcome": "observed", **self.snapshot()}
+
+    async def sleep_robot(self, name: str) -> dict[str, object]:
+        """One sleep move for one held robot, lifting a leftover STOP fence first if needed.
+
+        A fence left by an earlier session that ended without a confirmed STOP is lifted once
+        on the usual evidence (a measured pose that has settled, or a confirmed STOP);
+        recovering moves nothing. Then exactly one sleep move is made; it is never retried.
+        """
+        outcome = await self._sleep_move(name, f"start-sleep-{uuid.uuid4().hex[:12]}")
+        if outcome.get("reason") == "stop_unconfirmed":
+            recovered = await self.recover(name)
+            logger.info("recover before sleep: %s -> %s %s", name, recovered.get("outcome"),
+                        recovered.get("reason") or "")
+            if recovered.get("outcome") == "recovered":
+                outcome = await self._sleep_move(name, f"start-sleep-{uuid.uuid4().hex[:12]}")
+        logger.info("sleep move: %s -> %s %s", name, outcome.get("outcome"),
+                    outcome.get("reason") or outcome.get("error") or "")
+        return outcome
 
     def snapshot(self) -> dict[str, object]:
         return {

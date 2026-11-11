@@ -37,6 +37,7 @@ def create_ensemble_server(
     speech_seeds: Mapping[str, int] | None = None,
     speech_dynamics: Mapping[str, str] | None = None,
     speech_fallbacks: Mapping[str, BehaviorPattern] | None = None,
+    live_presences: Mapping[str, object] | None = None,
     stackchan_performer_id: str | None = "stackchan",
     startup_settle_s: float = 0.0,
     startup_gate: StartupGate | None = None,
@@ -66,13 +67,19 @@ def create_ensemble_server(
         raise ValueError("speech fallbacks require speech-driven performers")
 
     class _WindowChannel:
-        """Adapter exposing only the latest unitless channels to the ensemble."""
+        """Adapter exposing the unitless channels for the audio being played to the ensemble."""
 
         def __init__(self, performer_id: str) -> None:
             self._performer_id = performer_id
 
+        def flush(self) -> None:
+            speech_window.flush(self._performer_id)
+
+        def stats(self) -> dict[str, float]:
+            return speech_window.playout_stats(self._performer_id)
+
         def latest(self) -> dict[str, float] | None:
-            latest = speech_window.latest(self._performer_id)
+            latest = speech_window.playing(self._performer_id)
             if latest is None:
                 return None
             return {
@@ -82,7 +89,15 @@ def create_ensemble_server(
                 "sequence": latest.sequence, "mouth": latest.mouth,
             }
 
-    for performer in sorted(speech_driven):
+    live_presences = dict(live_presences or {})
+    if not set(live_presences) <= set(ensemble.packs):
+        raise ValueError("live presences must be configured performers")
+    for performer, presence in sorted(live_presences.items()):
+        ensemble.bind_live_presence(performer, presence)
+        if performer in speech_driven:
+            # The live generator reads the same unitless speech window directly.
+            presence.speech = _WindowChannel(performer)
+    for performer in sorted(speech_driven - set(live_presences)):
         if performer == stackchan_performer_id and (
             (speech_dynamics or {}).get(performer) == "smoothed_v1"
         ):
@@ -131,9 +146,11 @@ def create_ensemble_server(
                 await stack.enter_async_context(runtime.run())
                 await stack.enter_async_context(ensemble.run())
                 if startup_gate is not None:
-                    # Read-only: compares each robot's pose with its sleep pose
-                    # and holds any that are not there still until the user decides.
-                    await startup_gate.check()
+                    # Compares each robot's pose with its sleep pose. With sleep_on_start a robot
+                    # that is off is laid down at sleep first (one move, no retry), so every
+                    # conversation starts the same way; any that still is not there stays
+                    # held still until the user decides.
+                    await startup_gate.prepare_for_start()
                 yield {}
         finally:
             runtime.close()

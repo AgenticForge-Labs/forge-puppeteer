@@ -93,12 +93,22 @@ def _cue(at_s: float, operation: str, **parameters: object) -> BehaviorCue:
     return BehaviorCue(at_s=at_s, operation=operation, parameters=parameters)
 
 
+#: A finite gesture is assumed to end this long after its last cue starts, unless its real
+#: duration is known (a recording). Callers use it to time speech around the gesture.
+ONCE_TAIL_S = 0.6
+
+
 def _pattern(
     cues: Sequence[BehaviorCue], *, period_s: float | None = None,
-    source: str = "procedural",
+    source: str = "procedural", duration_s: float | None = None,
 ) -> BehaviorPattern:
     if period_s is None:
-        return BehaviorPattern(source=source, mode="once", cues=tuple(cues))
+        last = max((cue.at_s for cue in cues), default=0.0)
+        bound = duration_s if duration_s and duration_s > 0 else last + ONCE_TAIL_S
+        return BehaviorPattern(
+            source=source, mode="once", cues=tuple(cues),
+            max_duration_s=min(3600.0, max(0.2, round(bound, 3), last + 0.05)),
+        )
     return BehaviorPattern(
         source=source, mode="loop", cues=tuple(cues), period_s=period_s,
         max_cycles=3600, max_duration_s=3600,
@@ -214,6 +224,7 @@ def reachy_conversation_pack(
     antenna_sway_rad: float = 0.18,
     wake_up_if_sleeping: bool = False,
     idle_gain: float = 1.0,
+    recording_durations_s: dict[str, float] | None = None,
 ) -> PerformerBehaviors:
     """Author Reachy motion using its existing native SDK adapter operations.
 
@@ -272,6 +283,7 @@ def reachy_conversation_pack(
         parameters={"pose": neutral, "duration_s": 0.5},
     ))
     available = frozenset(available_recordings)
+    durations = recording_durations_s or {}
     if "yes1" not in available:
         raise ValueError("pinned Reachy catalog lacks the yes1 recording")
 
@@ -329,19 +341,22 @@ def reachy_conversation_pack(
             head_cue(1.1),
         ), period_s=1.5),
         "neutral": _pattern((head_cue(0.0),)),
-        "yes": _pattern((_reachy_move(0.0, "yes1", recording_revision),), source="recorded"),
+        "yes": _pattern((_reachy_move(0.0, "yes1", recording_revision),), source="recorded",
+                        duration_s=durations.get("yes1")),
         # The pinned no1 recording shakes the head at nearly 200 deg/s while
         # pitched down, which brings the underside of the head into the body on
         # this robot. When it is filtered by the replay envelope, keep the
         # semantic refusal as a bounded authored shake instead.
-        "no": _pattern((_reachy_move(0.0, "no1", recording_revision),), source="recorded")
+        "no": _pattern((_reachy_move(0.0, "no1", recording_revision),), source="recorded",
+                       duration_s=durations.get("no1"))
         if "no1" in available else _pattern((
             head_cue(0.0, yaw=0.12, duration=0.3),
             head_cue(0.35, yaw=-0.12, duration=0.3),
             head_cue(0.7, yaw=0.08, duration=0.3),
             head_cue(1.05, yaw=0.0, duration=0.3),
         )),
-        "acknowledge": _pattern((_reachy_move(0.0, "yes1", recording_revision),), source="recorded"),
+        "acknowledge": _pattern((_reachy_move(0.0, "yes1", recording_revision),), source="recorded",
+                                duration_s=durations.get("yes1")),
     }
     if expression_style == "expressive":
         # One SDK goto per sample synchronously interpolates head and antennas.
@@ -425,7 +440,7 @@ def reachy_conversation_pack(
         if recording in available:
             patterns[name] = _pattern(
                 (_reachy_move(0.0, recording, recording_revision),),
-                source="recorded",
+                source="recorded", duration_s=durations.get(recording),
             )
     startup = (
         BehaviorPattern(
@@ -499,6 +514,9 @@ async def reachy_pack_from_catalog(
         antenna_sway_rad=antenna_sway_rad,
         wake_up_if_sleeping=wake_up_if_sleeping,
         idle_gain=idle_gain,
+        recording_durations_s={
+            item.id[7:]: float(item.duration_s) for item in assets
+            if isinstance(item.duration_s, (int, float)) and item.duration_s > 0},
     )
 
 

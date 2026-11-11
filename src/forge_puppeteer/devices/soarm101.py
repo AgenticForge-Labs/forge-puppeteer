@@ -79,6 +79,10 @@ class ReplayArgs(_Args):
     speed_scale: float = Field(gt=0, le=1)
 
 
+_TRUSTED_OPERATIONS = frozenset(
+    {"play_choreography", "wake_to_neutral", "play_joint_target", "live_presence"})
+
+
 class SOARM101Provider:
     """Broker-backed discovery and bounded controls; broker permission is live."""
 
@@ -93,11 +97,18 @@ class SOARM101Provider:
                     getattr(self.trusted_choreography, "defer_normal_transition", False))
 
     def execution_timeout_for(self, request: ActionRequest) -> float | None:
-        if request.operation in {"play_choreography", "wake_to_neutral", "play_joint_target"} and self.trusted_choreography:
+        if request.operation in _TRUSTED_OPERATIONS and self.trusted_choreography:
             timeout_for = getattr(self.trusted_choreography, "execution_timeout_for", None)
             if timeout_for is not None:
                 return timeout_for(request)
         return None
+
+    @property
+    def finish_on_interrupt_s(self) -> float:
+        """Let a pinned finite gesture finish when the user interrupts, instead of a STOP."""
+        if self.trusted_choreography is None:
+            return 0.0
+        return float(getattr(self.trusted_choreography, "finish_on_interrupt_s", 0.0))
 
     @property
     def finish_before_interrupt_s(self) -> float:
@@ -323,7 +334,7 @@ class SOARM101Provider:
     # ExecutionRuntime adapter surface. Every validation and dispatch refreshes
     # broker tool visibility; the configured grant is only an upper bound.
     async def validate(self, request: ActionRequest) -> None:
-        if request.operation in {"play_choreography", "wake_to_neutral", "play_joint_target"}:
+        if request.operation in _TRUSTED_OPERATIONS:
             if self.trusted_choreography is None:
                 raise PermissionError("trusted choreography transport is not configured")
             if request.performer_id != self.instance_id:
@@ -373,7 +384,7 @@ class SOARM101Provider:
             raise PermissionError("broker_tool_unavailable")
 
     def resources_for(self, request: ActionRequest) -> tuple[str, ...]:
-        if request.operation in {"play_choreography", "wake_to_neutral", "play_joint_target"}:
+        if request.operation in _TRUSTED_OPERATIONS:
             if self.trusted_choreography is None:
                 raise PermissionError("trusted choreography transport is not configured")
             return self.trusted_choreography.resources_for(request)
@@ -385,7 +396,7 @@ class SOARM101Provider:
         return ("arm.motion",)
 
     async def execute(self, request: ActionRequest) -> Completion:
-        if request.operation in {"play_choreography", "wake_to_neutral", "play_joint_target"}:
+        if request.operation in _TRUSTED_OPERATIONS:
             if self.trusted_choreography is None:
                 raise PermissionError("trusted choreography transport is not configured")
             return await self.trusted_choreography.execute(request)
