@@ -75,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     catalog_path.write_text(json.dumps(catalog, indent=2) + "\n")
     provider = robot["provider"]
     provider["choreography_revisions"][args.name] = program.revision
-    provider["choreography_durations_s"][args.name] = round(program.frames[-1].at_s, 3)
+    provider["choreography_durations_s"][args.name] = program.frames[-1].at_s  # exact: the catalog check compares it
     robot_path.write_text(json.dumps(robot, indent=2) + "\n")
     print(f"updated {catalog_path.name} and {robot_path.name}; restart the ensemble")
     return 0
