@@ -22,8 +22,13 @@ work. Simulation is a quick sanity check, not a qualification process.
    sleep pose below.
    - Every joint within tolerance (default **±5°**): proceed without asking.
    - Otherwise: report the per-joint deltas and ask the user.
-   - The ensemble room does this itself on startup (`startup_gate.py`). A robot
-     not at sleep stays still. Relay its `message`; on "yes" call
+   - The ensemble room does this itself on startup (`startup_gate.py`), and it
+     starts every session the same way: a robot found off its sleep pose is first
+     laid down at sleep (one move to the pinned `sleep_target`, never retried, only
+     for robots with a configured sleep move), then the normal wake-up runs. The
+     user asked for this as a standing rule, so it needs no per-session question.
+     A robot that cannot get there (no sleep move, a fault, still off afterwards)
+     stays still. Relay its `message`; on "yes" call
      `ensemble_prepare(performer_id, "move_to_sleep", action_id)`. Robots that
      report only commanded positions (StackChan) use `"confirm_at_sleep"`.
      `ensemble_startup_check` re-reads without moving. A SO-ARM sleep move needs

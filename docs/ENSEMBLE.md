@@ -51,8 +51,10 @@ forge-puppeteer-ensemble --config /absolute/path/ensemble.json                  
 ```
 
 At startup the ensemble reads each real robot's pose and compares it with its standard
-sleep pose (`src/forge_puppeteer/poses/`, ±5° by default). A robot not at sleep stays
-still; the caller relays the per-joint deltas and asks. A held robot can be answered
+sleep pose (`src/forge_puppeteer/poses/`, ±5° by default). A robot that is not at sleep
+and has a `sleep_target` is laid down at sleep first (one move, never retried), so every
+conversation starts at sleep and then wakes the same way. A robot that cannot get there
+stays still; the caller relays the per-joint deltas and asks. A held robot can be answered
 while the conversation carries on with the other robots (it joins at the next presence
 change). `ensemble_state` reports `startup_complete` (per robot and overall) once the
 wake-up motion has finished and settled; a caller should not speak before then. MCP tools:

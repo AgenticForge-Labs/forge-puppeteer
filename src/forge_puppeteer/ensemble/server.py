@@ -140,9 +140,11 @@ def create_ensemble_server(
                 await stack.enter_async_context(runtime.run())
                 await stack.enter_async_context(ensemble.run())
                 if startup_gate is not None:
-                    # Read-only: compares each robot's pose with its sleep pose
-                    # and holds any that are not there still until the user decides.
-                    await startup_gate.check()
+                    # Compares each robot's pose with its sleep pose. With sleep_on_start a robot
+                    # that is off is laid down at sleep first (one move, no retry), so every
+                    # conversation starts the same way; any that still is not there stays
+                    # held still until the user decides.
+                    await startup_gate.prepare_for_start()
                 yield {}
         finally:
             runtime.close()

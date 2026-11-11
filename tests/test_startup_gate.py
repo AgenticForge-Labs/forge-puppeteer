@@ -391,3 +391,59 @@ async def test_park_can_settle_the_session_it_is_ending_then_sleep_then_disconne
             session_id="s1", event_id="e2", sequence=2, state="disconnected", source="agent_state"))
         assert ensemble.snapshot()["session_id"] is None and ensemble.is_settled()
         assert arm.stops == 0
+
+
+async def test_sleep_on_start_lays_a_robot_that_is_elsewhere_down_once_and_opens_the_gate():
+    arms = {"arm": FakeArm(70.0), "other": FakeArm(0.5)}
+    runtime = ExecutionRuntime(PerformanceStage())
+    for name, arm in arms.items():
+        runtime.register(name, arm)
+    ensemble = ConversationEnsemble(runtime, [_pack(n) for n in arms])
+    poses = {n: load_standard_poses("soarm101", override_dir=None) for n in arms}
+    gate = StartupGate(runtime, ensemble, arms, poses, {n: SLEEP_CUE for n in arms},
+                       settle_s=0.01, sleep_on_start=True)
+    async with runtime.run(), ensemble.run():
+        result = await gate.prepare_for_start()
+        assert result["ready"] and all(p["status"] == "at_sleep" for p in result["performers"].values())
+        assert arms["arm"].executed == ["go_sleep"] and arms["other"].executed == []
+        assert ensemble.snapshot()["performers"]["arm"]["status"] == "idle"
+    runtime.close()
+
+
+async def test_sleep_on_start_does_not_retry_and_leaves_a_failed_robot_held():
+    arm = FakeArm(70.0, reaches_sleep=False)
+    async with room({"arm": arm}) as (gate, ensemble):
+        gate.sleep_on_start = True
+        result = await gate.prepare_for_start()
+        assert arm.executed == ["go_sleep"], "exactly one move"
+        assert not result["ready"] and ensemble.snapshot()["performers"]["arm"]["status"] == "unavailable"
+
+
+async def test_sleep_on_start_needs_a_configured_sleep_move_and_otherwise_asks_as_before():
+    arm = FakeArm(70.0)
+    async with room({"arm": arm}, cues={}) as (gate, _):
+        gate.sleep_on_start = True
+        result = await gate.prepare_for_start()
+        assert arm.executed == [] and not result["ready"]
+
+
+async def test_sleep_on_start_clears_a_leftover_fence_once_then_lays_the_robot_down():
+    arm = FakeArm(pose=NEUTRAL)  # settled at neutral, as after a session that ended without a park
+    async with room({"arm": arm}) as (gate, ensemble):
+        await _quarantine(gate.runtime, ensemble, arm)
+        arm.executed.clear()
+        gate.sleep_on_start = True
+        result = await gate.prepare_for_start()
+        assert arm.executed == ["go_sleep"], "one sleep move after the recovery"
+        assert result["ready"] and result["performers"]["arm"]["status"] == "at_sleep"
+        assert not gate.runtime.is_inhibited("arm")
+
+
+async def test_sleep_on_start_leaves_a_fence_it_cannot_justify_lifting():
+    arm = FakeArm(offset_deg=30.0, drift_deg=1.5)  # still moving: no settled evidence
+    async with room({"arm": arm}) as (gate, ensemble):
+        await _quarantine(gate.runtime, ensemble, arm)
+        arm.executed.clear()
+        gate.sleep_on_start = True
+        result = await gate.prepare_for_start()
+        assert arm.executed == [] and not result["ready"] and gate.runtime.is_inhibited("arm")
