@@ -207,6 +207,14 @@ class ConversationEnsemble:
                         if pattern.mode == "once"
                         and behavior not in {"idle", "listening", "speaking", "disconnected"}
                     ),
+                    # Approximate run time of each gesture, so a caller can start its
+                    # speech partway through instead of talking over the whole move.
+                    "expression_durations_s": {
+                        behavior: round(float(pattern.max_duration_s), 3)
+                        for behavior, pattern in sorted(self.packs[name].behaviors.items())
+                        if pattern.mode == "once"
+                        and behavior not in {"idle", "listening", "speaking", "disconnected"}
+                    },
                     # Recorded expressions replay an exact pinned asset; authored
                     # ones are procedural gestures. Callers may group or filter
                     # by this without inferring intent from device type.

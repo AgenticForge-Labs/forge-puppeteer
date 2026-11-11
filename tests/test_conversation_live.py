@@ -235,3 +235,9 @@ async def test_a_gesture_asked_right_after_the_wake_queues_behind_it():
         queued = await ensemble.express("yes", action_id="yes-1")
         assert queued["outcome"] == "accepted", queued.get("reason")
         await until(lambda: arm.events[-3:] == ["wake_to_neutral", "yes", "open"])
+
+
+def test_status_reports_how_long_each_gesture_runs():
+    _arm, _runtime, ensemble = build()
+    durations = ensemble.snapshot()["performers"]["arm"]["expression_durations_s"]
+    assert durations["yes"] == 5.0 and set(durations) == {"yes", "sleep2", "neutral"}
