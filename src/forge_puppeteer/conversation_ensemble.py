@@ -237,6 +237,8 @@ class ConversationEnsemble:
                         if pattern.mode == "once"
                         and behavior not in {"idle", "listening", "speaking", "disconnected"}
                     ),
+                    # Lying down after a pose gesture such as sleep: only a wake move is accepted.
+                    "resting": name in self._rest,
                     "startup_behavior": self.packs[name].startup is not None,
                     "startup_configured": self.packs[name].startup is not None,
                     "startup_pending": name in self._startup_pending,

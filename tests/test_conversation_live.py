@@ -241,3 +241,16 @@ def test_status_reports_how_long_each_gesture_runs():
     _arm, _runtime, ensemble = build()
     durations = ensemble.snapshot()["performers"]["arm"]["expression_durations_s"]
     assert durations["yes"] == 5.0 and set(durations) == {"yes", "sleep2", "neutral"}
+
+
+@pytest.mark.anyio
+async def test_status_says_when_a_performer_is_resting():
+    arm, runtime, ensemble = build()
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(event(0, "listening"))
+        await until(lambda: arm.open)
+        assert ensemble.snapshot()["performers"]["arm"]["resting"] is False
+        await ensemble.express("sleep2", action_id="sleep-1")
+        await until(lambda: "play_joint_target" in arm.events)
+        await anyio.sleep(0.05)
+        assert ensemble.snapshot()["performers"]["arm"]["resting"] is True
