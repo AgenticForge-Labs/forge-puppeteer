@@ -283,3 +283,100 @@ def test_features_that_stop_advancing_end_the_talking_quickly_without_waiting_fo
     assert presence.source == "ended"
     assert max(abs(v) for v in column(held[-4:], 3)) < 0.5 * DEG
     assert max(abs(v) for v in column(held[:5], 3)) > 1 * DEG, "it did not cut off at once either"
+
+
+class SettlingSDK:
+    """Refuses a program with the 'not settled yet' text a few times, then runs it."""
+
+    def __init__(self, refusals, text="healthy, connected and stationary SDK state required"):
+        self.remaining, self.text, self.calls = refusals, text, 0
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                outer.calls += 1
+                if outer.remaining > 0:
+                    outer.remaining -= 1
+                    status, payload = 409, {"ok": False, "error": outer.text}
+                else:
+                    status, payload = 200, {"ok": True, "result": {"revision": PIN}}
+                data = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    @property
+    def url(self):
+        return f"http://127.0.0.1:{self.server.server_port}"
+
+
+PIN = "sha256:" + "e" * 64
+
+
+def gesture_request():
+    return ActionRequest(
+        id="a:0:0", performer_id="arm", caller_id="c", session_id="s", operation="play_choreography",
+        parameters={}, cue_id="yes:0:0", asset_id="soarm101/choreography/yes", asset_revision=PIN)
+
+
+@pytest.mark.anyio
+async def test_a_gesture_refused_only_because_the_arm_has_not_settled_is_retried_briefly(monkeypatch):
+    import forge_puppeteer.devices.soarm101_trusted_http as module
+
+    monkeypatch.setattr(module, "SETTLING_RETRY_S", 0.01)
+    sdk = SettlingSDK(2)
+    link = SOARM101TrustedChoreographyHTTP(sdk.url, "tok", {"yes": PIN}, durations_s={"yes": 3.0})
+    completion = await link.execute(gesture_request())
+    assert sdk.calls == 3 and "completed" in completion.evidence
+
+
+@pytest.mark.anyio
+async def test_other_refusals_are_not_retried_and_the_retry_is_bounded(monkeypatch):
+    import forge_puppeteer.devices.soarm101_trusted_http as module
+
+    monkeypatch.setattr(module, "SETTLING_RETRY_S", 0.01)
+    other = SettlingSDK(5, text="active bound host watchdog required")
+    link = SOARM101TrustedChoreographyHTTP(other.url, "tok", {"yes": PIN}, durations_s={"yes": 3.0})
+    with pytest.raises(ActionRefused):
+        await link.execute(gesture_request())
+    assert other.calls == 1
+    stuck = SettlingSDK(99)
+    link = SOARM101TrustedChoreographyHTTP(stuck.url, "tok", {"yes": PIN}, durations_s={"yes": 3.0})
+    with pytest.raises(ActionRefused):
+        await link.execute(gesture_request())
+    assert stuck.calls == module.SETTLING_RETRIES + 1
+
+
+def test_each_turn_of_talking_leaves_a_summary_for_diagnosis():
+    presence, clock = make()
+    turns = []
+    presence.turn_log = turns.append
+    speech = Speech({"active": True, "mouth": 0.6, "stream_id": "s", "sequence": 0})
+    presence.speech = speech
+    presence.set_behavior("speaking")
+    for _ in range(40):
+        speech.advance()
+        clock.now += 0.05
+        presence.offsets()
+    presence.set_behavior("listening")
+    assert len(turns) == 1
+    turn = turns[0]
+    assert turn["ticks"]["speech"] > 30 and turn["max_flex_deg"] > 1.0
+    assert turn["first_feature_s"] is not None and turn["first_motion_s"] is not None
+    assert turn["feature_changes"] == 40 and turn["duration_s"] == pytest.approx(2.0, abs=0.1)
+    # A turn with no motion at all is visible as such.
+    silent, silent_clock = make()
+    silent.turn_log = turns.append
+    silent.speech = Speech({"active": False, "mouth": 0.0, "stream_id": "s", "sequence": 1})
+    silent.set_behavior("speaking")
+    silent_clock.run(silent, 1.0)
+    silent.set_behavior("idle")
+    assert turns[-1]["max_flex_deg"] < 0.5 and turns[-1]["first_motion_s"] is None

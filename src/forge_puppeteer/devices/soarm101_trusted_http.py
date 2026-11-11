@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -33,6 +35,20 @@ LIVE_OPERATION = "live_presence"
 TRUSTED_OPERATIONS = frozenset({"play_choreography", "wake_to_neutral", "play_joint_target", LIVE_OPERATION})
 
 
+def _write_turn_log(turn: dict[str, object]) -> None:
+    """Append one line per turn of talking: what the arm was driven by (for diagnosis)."""
+    from pathlib import Path
+
+    state = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    path = Path(os.environ.get("FORGE_PUPPETEER_LIVE_LOG") or Path(state) / "forge-puppeteer" / "live-presence.jsonl")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"at": round(time.time(), 3), **turn}) + "\n")
+    except OSError:
+        pass
+
+
 class LiveStreamEnded(RuntimeError):
     """The SDK says the live stream is no longer active (expired, STOP, watchdog)."""
 # The SDK validates the whole path against its joint limits before it moves.
@@ -44,13 +60,24 @@ class _NoRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
+#: A pre-dispatch refusal that only means "the arm has not settled yet" (for example 40 ms
+#: after the live stream closed). Nothing moved, so one short bounded retry is safe.
+SETTLING_REFUSAL = "healthy, connected and stationary SDK state required"
+SETTLING_RETRIES = 4
+SETTLING_RETRY_S = 0.25
+
+
 class SOARM101TrustedChoreographyHTTP:
     defer_normal_transition = True
+    #: A finite gesture is allowed to finish when the user talks over the robot. A STOP here
+    #: would end the SDK session, and with it every later movement of the conversation.
+    finish_on_interrupt_s = 5.0
 
     def __init__(self, broker_url: str, token: str, revisions: dict[str, str], *,
                  finish_before_interrupt_s: float = 3.5, durations_s: dict[str, float] | None = None,
                  startup_target_revision: str | None = None,
-                 pose_targets: dict[str, str] | None = None, live_presence=None):
+                 pose_targets: dict[str, str] | None = None, live_presence=None,
+                 finish_on_interrupt_s: float | None = None):
         if not token or not (revisions or pose_targets or live_presence):
             raise ValueError("trusted-host token and exact choreography pins required")
         parsed = urlsplit(broker_url)
@@ -61,6 +88,10 @@ class SOARM101TrustedChoreographyHTTP:
         if not 0 < finish_before_interrupt_s <= 5:
             raise ValueError("transition grace must be within 5 seconds")
         self.finish_before_interrupt_s = finish_before_interrupt_s
+        if finish_on_interrupt_s is not None:
+            if not 0 <= finish_on_interrupt_s <= 5:
+                raise ValueError("finish-on-interrupt grace must be within 5 seconds")
+            self.finish_on_interrupt_s = finish_on_interrupt_s
         self.url = broker_url.rstrip("/") + "/v1/trusted/choreography"
         self.stop_url = broker_url.rstrip("/") + "/v1/trusted/stop"
         self.target_url = broker_url.rstrip("/") + "/v1/trusted/target"
@@ -219,6 +250,7 @@ class SOARM101TrustedChoreographyHTTP:
             "request_id": uuid.uuid4().hex, "name": live.settings.envelope,
             "revision": live.asset_revision}), abandon_on_cancel=True)
         live.reset()
+        live.turn_log = _write_turn_log
         ended = False
         start = anyio.current_time()
         next_at = start
@@ -248,10 +280,17 @@ class SOARM101TrustedChoreographyHTTP:
             return await self._run_live(request)
         startup = request.operation in {"wake_to_neutral", "play_joint_target"}
         name = request.asset_id.removeprefix("soarm101/target/" if startup else "soarm101/choreography/")
-        result = await anyio.to_thread.run_sync(lambda: self._post(self.target_url if startup else self.url, {
-            "request_id": uuid.uuid4().hex, "name": name,
-            "revision": request.asset_revision,
-        }), abandon_on_cancel=True)
+        for attempt in range(SETTLING_RETRIES + 1):
+            try:
+                result = await anyio.to_thread.run_sync(lambda: self._post(self.target_url if startup else self.url, {
+                    "request_id": uuid.uuid4().hex, "name": name,
+                    "revision": request.asset_revision,
+                }), abandon_on_cancel=True)
+                break
+            except ActionRefused as refusal:
+                if SETTLING_REFUSAL not in str(refusal) or attempt == SETTLING_RETRIES:
+                    raise
+                await anyio.sleep(SETTLING_RETRY_S)
         evidence = result.get("result")
         if not isinstance(evidence, dict) or evidence.get("revision") != request.asset_revision:
             raise RuntimeError("SDK broker completion did not match pinned choreography revision")

@@ -90,7 +90,8 @@ def build_ensemble(room: EnsembleConfig, robots: dict[str, object],
                     config.broker_url, trusted_token, config.choreography_revisions,
                     durations_s=config.choreography_durations_s,
                     startup_target_revision=config.startup_target_revision,
-                    pose_targets=config.pose_targets, live_presence=live_presence)
+                    pose_targets=config.pose_targets, live_presence=live_presence,
+                    finish_on_interrupt_s=config.finish_on_interrupt_s)
             provider = SOARM101Provider(config.instance_id, session,
                                         allowed_tools=frozenset(config.allowed_tools),
                                         trusted_choreography=trusted)

@@ -743,3 +743,15 @@ def test_live_presence_must_fit_its_pinned_envelope_and_be_trusted(tmp_path, cha
 
     with pytest.raises(ValueError, match=message):
         SOARMBrokerConfig.model_validate(_live_presence_config(tmp_path, **change))
+
+
+def test_finish_on_interrupt_defaults_to_the_full_grace_and_is_bounded(tmp_path):
+    from forge_puppeteer.ensemble.config import SOARMBrokerConfig
+
+    config = SOARMBrokerConfig.model_validate(_live_presence_config(tmp_path))
+    assert config.finish_on_interrupt_s == 5.0
+    assert SOARMBrokerConfig.model_validate(
+        _live_presence_config(tmp_path, finish_on_interrupt_s=0)).finish_on_interrupt_s == 0
+    for bad in (-1, 5.5):
+        with pytest.raises(ValueError):
+            SOARMBrokerConfig.model_validate(_live_presence_config(tmp_path, finish_on_interrupt_s=bad))

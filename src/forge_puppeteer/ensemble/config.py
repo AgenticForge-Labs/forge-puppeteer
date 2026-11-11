@@ -99,6 +99,10 @@ class SOARMBrokerConfig(BaseModel):
     # Turn off only for a simulated broker, which has no physical sleep position.
     sleep_check: bool = True
     live_presence: LivePresenceConfig | None = None
+    # How long a pinned gesture may keep running when the user talks over the robot, instead
+    # of an immediate STOP (a STOP ends the SDK session and with it all later movement).
+    # 0 restores the immediate STOP.
+    finish_on_interrupt_s: float = Field(default=5.0, ge=0, le=5)
 
     @field_validator("choreography_durations_s", mode="before")
     @classmethod

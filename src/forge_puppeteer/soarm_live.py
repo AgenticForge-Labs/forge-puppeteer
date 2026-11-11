@@ -10,11 +10,15 @@ It has no I/O, clock dependency beyond the injected one, and no robot access.
 
 from __future__ import annotations
 
+import logging
 import math
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 #: Canonical SDK joint order: pan, lift, elbow, wrist flex, wrist roll.
 JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
@@ -81,6 +85,9 @@ class LivePresence:
         self.asset_revision = settings.envelope_revision
         #: Optional object with ``latest() -> dict | None`` (the speech envelope window).
         self.speech = None
+        #: Optional callback given one summary dict per turn of talking (for diagnosis).
+        self.turn_log: Callable[[dict[str, object]], None] | None = None
+        self._turn: dict[str, object] | None = None
         self._clock = clock
         self._lock = threading.Lock()
         self._behavior = "idle"
@@ -93,14 +100,33 @@ class LivePresence:
         with self._lock:
             return self._behavior
 
+    def _begin_turn(self) -> None:
+        self._turn = {"started": self._clock(), "ticks": Counter(), "max_flex_deg": 0.0,
+                      "first_feature_s": None, "first_motion_s": None, "feature_changes": 0}
+
+    def _end_turn(self) -> None:
+        turn, self._turn = self._turn, None
+        if turn is None or self.turn_log is None:
+            return
+        now = self._clock()
+        turn.update(duration_s=round(now - turn.pop("started"), 3),
+                    ticks=dict(turn["ticks"]), max_flex_deg=round(turn["max_flex_deg"], 2))
+        try:
+            self.turn_log(turn)
+        except Exception:
+            logger.debug("live presence turn log failed", exc_info=True)
+
     def set_behavior(self, behavior: str) -> None:
         if behavior not in PRESENCE:
             raise ValueError("unknown presence behavior")
         with self._lock:
+            if self._behavior == "speaking" and behavior != "speaking":
+                self._end_turn()
             if behavior == "speaking" and self._behavior != "speaking":
                 self._turn_started = self._clock()  # a new turn of talking: features not seen yet
                 self._features_seen = False
                 self._feature_id = None
+                self._begin_turn()
             self._behavior = behavior
 
     @property
@@ -113,6 +139,7 @@ class LivePresence:
 
     def reset(self) -> None:
         """Fresh stream: breathing starts at the bottom of its swell."""
+        self._end_turn()
         self._closing.clear()
         self._t0 = self._clock()
         self._last = self._t0
@@ -162,8 +189,18 @@ class LivePresence:
             out[4] += amplitude * TILT_SCALE * math.sin(math.tau * TILT_HZ * t + 1.0)
         self._source = behavior if behavior != "speaking" else self._source
 
-        return [max(-limit, min(limit, value)) for value, limit in
-                zip(out, settings.max_offset_rad, strict=True)]
+        limited = [max(-limit, min(limit, value)) for value, limit in
+                   zip(out, settings.max_offset_rad, strict=True)]
+        turn = self._turn
+        if turn is not None and behavior == "speaking":
+            started = turn["started"]
+            turn["ticks"][self._source] += 1
+            turn["max_flex_deg"] = max(turn["max_flex_deg"], abs(math.degrees(limited[3])))
+            if turn["first_motion_s"] is None and abs(math.degrees(limited[3])) > 0.5:
+                turn["first_motion_s"] = round(now - started, 3)
+            if turn["first_feature_s"] is None and self._features_seen:
+                turn["first_feature_s"] = round(now - started, 3)
+        return limited
 
     def _speech_level(self) -> float:
         """0..1 talking strength: follows the speech level when features are fresh."""
@@ -184,6 +221,8 @@ class LivePresence:
         now = self._clock()
         if identity != self._feature_id:
             self._feature_id, self._feature_changed = identity, now
+            if self._turn is not None:
+                self._turn["feature_changes"] += 1
         elif identity[1] is not None and now - self._feature_changed > FEATURES_STILL_S:
             # The hops stopped advancing: the audio they describe has ended.
             self._features_seen = True

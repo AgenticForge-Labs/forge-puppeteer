@@ -25,6 +25,9 @@ class FakeArm:
 
     defer_normal_transition = True
     finish_before_interrupt_s = 3.5
+    finish_on_interrupt_s = 5.0
+    program_s = 0.02
+    program_done = False
 
     def __init__(self, presence):
         self.presence = presence
@@ -57,7 +60,8 @@ class FakeArm:
         assert not self.open, "a finite program ran while the stream was open"
         self.events.append(request.operation if request.operation != "play_choreography"
                            else request.asset_id.rsplit("/", 1)[-1])
-        await anyio.sleep(0.02)
+        await anyio.sleep(self.program_s)
+        self.program_done = True
         return Completion("program done")
 
     async def stop(self):
@@ -162,13 +166,32 @@ async def test_settling_a_session_closes_the_stream_without_a_stop():
 
 
 @pytest.mark.anyio
-async def test_a_disconnect_is_an_urgent_stop():
+async def test_a_disconnect_closes_the_stream_at_neutral_before_it_ends_the_session():
     arm, runtime, ensemble = build()
     async with runtime.run(), ensemble.run():
         await ensemble.observe(event(0, "listening"))
         await until(lambda: arm.open)
         await ensemble.observe(event(1, "disconnected"))
-        assert arm.stop_calls == 1 and not arm.open
+        assert not arm.open and arm.events == ["open", "close"], "the stream came back to neutral"
+        assert arm.stop_calls == 0
+
+
+@pytest.mark.anyio
+async def test_a_disconnect_still_stops_an_arm_that_does_not_come_back():
+    arm, runtime, ensemble = build()
+    arm.finish_on_interrupt_s = 0.2  # a short grace so the test is quick
+
+    async def stuck(request):
+        arm.events.append("open")
+        arm.open = True
+        await anyio.sleep(30)  # ignores the request to close
+
+    arm.execute = stuck
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(event(0, "listening"))
+        await until(lambda: arm.open)
+        await ensemble.observe(event(1, "disconnected"))
+        assert arm.stop_calls == 1
 
 
 @pytest.mark.anyio
@@ -254,3 +277,21 @@ async def test_status_says_when_a_performer_is_resting():
         await until(lambda: "play_joint_target" in arm.events)
         await anyio.sleep(0.05)
         assert ensemble.snapshot()["performers"]["arm"]["resting"] is True
+
+
+@pytest.mark.anyio
+async def test_talking_over_a_gesture_lets_it_finish_instead_of_stopping_the_arm():
+    arm, runtime, ensemble = build()
+    arm.program_s = 0.3
+    async with runtime.run(), ensemble.run():
+        await ensemble.observe(event(0, "speaking"))
+        await until(lambda: arm.open)
+        await ensemble.express("yes", action_id="yes-1")
+        await until(lambda: "yes" in arm.events)
+        # The user talks over the robot in the middle of the nod.
+        await ensemble.observe(event(1, "listening", interrupted=True))
+        await until(lambda: "yes" in arm.events and not arm.open and arm.program_done)
+        await ensemble.observe(event(2, "speaking"))  # the conversation carries on
+        await until(lambda: arm.events[-2:] == ["yes", "open"])
+        assert arm.stop_calls == 0, "an interruption is not a reason to end the arm's session"
+        assert not [b for b in ensemble.snapshot()["performers"].values() if b["status"] == "blocked"]

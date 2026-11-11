@@ -356,6 +356,8 @@ async def test_soarm_only_v4_stdio_runs_pinned_programs_through_real_sdk_broker(
             "provider": {
                 "instance_id": "arm", "mode": "existing_broker", "broker_url": f"http://127.0.0.1:{port}",
                 "sleep_check": False,  # simulated broker: no physical sleep pose
+                # These cases exercise the urgent STOP path, so no grace to finish a gesture.
+                "finish_on_interrupt_s": 0,
                 "token_env": "SOARM101_BROKER_TOKEN",
                 "trusted_host_token_env": "SOARM101_TRUSTED_HOST_TOKEN",
                 "choreography_revisions": revisions,

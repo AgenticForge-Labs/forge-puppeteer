@@ -104,6 +104,13 @@ class SOARM101Provider:
         return None
 
     @property
+    def finish_on_interrupt_s(self) -> float:
+        """Let a pinned finite gesture finish when the user interrupts, instead of a STOP."""
+        if self.trusted_choreography is None:
+            return 0.0
+        return float(getattr(self.trusted_choreography, "finish_on_interrupt_s", 0.0))
+
+    @property
     def finish_before_interrupt_s(self) -> float:
         """Allow only trusted finite choreography its authored transition grace.
 
