@@ -122,6 +122,23 @@ With `operator_choreography_only: true` in the private daemon config, no agent l
 created, agent state changes are denied by the SDK, and only the exact pinned
 choreography runs, through the authenticated trusted-host route.
 
+## Speech timing (every robot)
+
+The speech envelope carries 50 ms hops that describe the *generated* audio. Voice engines
+generate faster than the audio plays, so a reply can arrive within a fraction of its length.
+`SpeechEnvelopeWindow` therefore queues each hop on the audio timeline (back to back from the
+first one, after anything still queued) and `playing()` returns the hop for this moment of
+playback; motion follows the audio, not the arrival of the features, and ends with it. The
+ensemble drops what is still queued when the voice stops or is interrupted (`flush`).
+A robot whose slot releases on silence (StackChan's mouth) is released once when the timeline
+ends. `latest()` still returns the newest arrival (a 0.5 s preview). The playback clock
+starts at arrival and does not know the voice engine's playout latency, so motion tends to
+end slightly before the sound does.
+
+Each gesture reports its length in `expression_durations_s` (a recording's real duration for
+Reachy, the last cue plus a short tail for authored ones, the exact program length for the
+SO-ARM) so a caller can start the reply partway through the move.
+
 ## Reachy and StackChan options
 
 `options` chooses how the standard behaviors are authored and which opt-in variants

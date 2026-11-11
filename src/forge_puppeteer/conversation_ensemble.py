@@ -294,6 +294,8 @@ class ConversationEnsemble:
                     for n in following:
                         self._live[n].set_behavior(event.state)
                     candidates = tuple(n for n in candidates if n not in following)
+                if previous == "speaking" and (event.state != "speaking" or event.interrupted):
+                    self._end_speech()
                 normal = event.state != "disconnected" and not event.interrupted
                 immediate = []
                 for name in candidates:
@@ -710,6 +712,17 @@ class ConversationEnsemble:
         pattern = self.packs[name].behaviors.get(expression)
         return pattern is not None and any(cue.operation == "wake_to_neutral" for cue in pattern.cues)
 
+    def _end_speech(self) -> None:
+        """The voice stopped or was interrupted: drop features queued for audio never played."""
+        for presence in self._live.values():
+            end = getattr(presence, "end_speech", None)
+            if callable(end):
+                end()
+        for channel, *_rest in self._speech_channels.values():
+            flush = getattr(channel, "flush", None)
+            if callable(flush):
+                flush()
+
     def _live_following(self, name: str) -> bool:
         """True when this performer's running slot is a live stream that can take a new state."""
         slot = self._slots.get(name)
@@ -1060,6 +1073,7 @@ class ConversationEnsemble:
             silence_released = False
             started = anyio.current_time()
             missing_since: float | None = None
+            seen_features = False
             fallback_step: tuple[int, int] | None = None
             fallback_generation = 0
             try:
@@ -1074,6 +1088,14 @@ class ConversationEnsemble:
                         slot.evidence = "speech_presence_transition"
                         return
                     values = channel.latest()
+                    if (values is None and seen_features and last_dispatched is not None
+                            and not silence_released
+                            and self._speech_release_on_silence.get(name, False)):
+                        # The audio timeline ended: release once, as silence would.
+                        values = {"active": False, "mouth": 0.0, "pitch": 0.0, "yaw": 0.0,
+                                  "roll": 0.0, "z": 0.0, "antenna": 0.0,
+                                  "stream_id": last_dispatched[0],
+                                  "sequence": (last_dispatched[1] or 0) + 1}
                     if values is None:
                         slot.status = "active"
                         slot.evidence = "awaiting_speech_envelope"
@@ -1113,6 +1135,7 @@ class ConversationEnsemble:
                         continue
                     missing_since = None
                     fallback_step = None
+                    seen_features = True
                     # Later fresh PCM features replace unsent hops; neither
                     # replay a dispatched sequence nor animate VAD inactivity.
                     if values.get("active") is False and (

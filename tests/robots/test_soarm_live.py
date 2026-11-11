@@ -269,20 +269,90 @@ def test_leaving_speaking_fades_the_talking_out_quickly():
     assert max(abs(v) for v in column(after[-3:], 3)) < 0.5 * DEG
 
 
-def test_features_that_stop_advancing_end_the_talking_quickly_without_waiting_for_staleness():
+class WindowChannel:
+    """What the ensemble server hands the generator: the window's playback-timed view."""
+
+    def __init__(self, window, performer="soarm101"):
+        self.window, self.performer = window, performer
+
+    def latest(self):
+        item = self.window.playing(self.performer)
+        if item is None:
+            return None
+        return {"active": item.active, "mouth": item.mouth, "stream_id": item.stream_id,
+                "sequence": item.sequence}
+
+    def flush(self):
+        self.window.flush(self.performer)
+
+    def stats(self):
+        return self.window.playout_stats(self.performer)
+
+
+def hops(first, count, *, stream="utterance", intensity=0.6):
+    return [{"schema": "forge.speech_envelope.v1", "stream_id": stream, "sequence": n,
+             "offset_ms": n * 50, "duration_ms": 50, "active": True, "intensity": intensity,
+             "rms_dbfs": -20.0, "timing_source": "generated_pcm",
+             "acoustic_playout_measured": False} for n in range(first, first + count)]
+
+
+def test_a_burst_of_features_drives_the_talking_for_as_long_as_the_audio_lasts(monkeypatch):
+    """The first greeting: features for 4 s of audio arrive within the first fraction of a second."""
+    import forge_puppeteer.speech_expression as speech_module
+    from forge_puppeteer.speech_expression import SpeechEnvelopeWindow
+
     presence, clock = make()
-    speech = Speech({"active": True, "mouth": 0.6, "stream_id": "s", "sequence": 0})
-    presence.speech = speech
+    monkeypatch.setattr(speech_module.time, "monotonic", clock)
+    window = SpeechEnvelopeWindow()
+    presence.speech = WindowChannel(window)
     presence.set_behavior("speaking")
-    for _ in range(60):  # three seconds of hops arriving every tick
-        speech.advance()
-        clock.now += 0.05
-        presence.offsets()
-    assert presence.source == "speech"
-    held = clock.run(presence, 0.8)  # the last hop stays "latest" but never advances
+    for first in range(0, 80, 4):  # 80 hops = 4 s of audio, sent in batches of four
+        window.accept(hops(first, 4), performer_ids=("soarm101",))
+    flex = column(clock.run(presence, 4.0), 3)
+    third = len(flex) // 4
+    for quarter in range(4):  # still nodding at the end, not only at the start
+        part = flex[quarter * third:(quarter + 1) * third]
+        assert max(abs(v) for v in part) > 1 * DEG, f"quarter {quarter} was still"
+    ending = column(clock.run(presence, 0.6), 3)
+    assert max(abs(v) for v in ending[-4:]) < 0.5 * DEG, "it kept nodding after the audio ended"
     assert presence.source == "ended"
-    assert max(abs(v) for v in column(held[-4:], 3)) < 0.5 * DEG
-    assert max(abs(v) for v in column(held[:5], 3)) > 1 * DEG, "it did not cut off at once either"
+
+
+def test_the_talking_ends_with_the_audio_even_when_hops_keep_arriving_slowly(monkeypatch):
+    import forge_puppeteer.speech_expression as speech_module
+    from forge_puppeteer.speech_expression import SpeechEnvelopeWindow
+
+    presence, clock = make()
+    monkeypatch.setattr(speech_module.time, "monotonic", clock)
+    window = SpeechEnvelopeWindow()
+    presence.speech = WindowChannel(window)
+    presence.set_behavior("speaking")
+    window.accept(hops(0, 4), performer_ids=("soarm101",))  # 0.2 s of audio
+    clock.run(presence, 0.5)
+    assert presence.source == "ended"
+    window.accept(hops(4, 4), performer_ids=("soarm101",))  # generation caught up again
+    clock.run(presence, 0.1)
+    assert presence.source == "speech"
+
+
+def test_leaving_speaking_drops_features_for_audio_that_was_never_played(monkeypatch):
+    import forge_puppeteer.speech_expression as speech_module
+    from forge_puppeteer.speech_expression import SpeechEnvelopeWindow
+
+    presence, clock = make()
+    monkeypatch.setattr(speech_module.time, "monotonic", clock)
+    window = SpeechEnvelopeWindow()
+    presence.speech = WindowChannel(window)
+    presence.set_behavior("speaking")
+    for first in range(0, 80, 4):
+        window.accept(hops(first, 4), performer_ids=("soarm101",))
+    clock.run(presence, 0.5)
+    presence.set_behavior("listening")  # the user interrupted
+    presence.end_speech()
+    assert window.playing("soarm101") is None
+    presence.set_behavior("speaking")  # the next reply starts clean
+    clock.run(presence, 0.2)
+    assert presence.source in {"waiting", "fallback"}
 
 
 class SettlingSDK:

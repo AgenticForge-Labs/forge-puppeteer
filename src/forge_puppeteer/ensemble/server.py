@@ -67,13 +67,19 @@ def create_ensemble_server(
         raise ValueError("speech fallbacks require speech-driven performers")
 
     class _WindowChannel:
-        """Adapter exposing only the latest unitless channels to the ensemble."""
+        """Adapter exposing the unitless channels for the audio being played to the ensemble."""
 
         def __init__(self, performer_id: str) -> None:
             self._performer_id = performer_id
 
+        def flush(self) -> None:
+            speech_window.flush(self._performer_id)
+
+        def stats(self) -> dict[str, float]:
+            return speech_window.playout_stats(self._performer_id)
+
         def latest(self) -> dict[str, float] | None:
-            latest = speech_window.latest(self._performer_id)
+            latest = speech_window.playing(self._performer_id)
             if latest is None:
                 return None
             return {

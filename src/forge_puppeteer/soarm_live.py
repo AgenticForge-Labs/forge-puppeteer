@@ -37,8 +37,6 @@ TILT_SCALE = 0.6
 #: this wait. Once features have been seen in a turn, their end means the voice has ended.
 FALLBACK_LEVEL = 0.5
 FALLBACK_AFTER_S = 0.5
-#: Features that stop advancing this long mean the generated audio has ended.
-FEATURES_STILL_S = 0.25
 
 
 @dataclass(frozen=True)
@@ -111,6 +109,12 @@ class LivePresence:
         now = self._clock()
         turn.update(duration_s=round(now - turn.pop("started"), 3),
                     ticks=dict(turn["ticks"]), max_flex_deg=round(turn["max_flex_deg"], 2))
+        stats = getattr(self.speech, "stats", None)
+        if callable(stats):
+            try:
+                turn.update(stats())  # hops received and audio still queued
+            except Exception:
+                logger.debug("speech stats unavailable", exc_info=True)
         try:
             self.turn_log(turn)
         except Exception:
@@ -128,6 +132,12 @@ class LivePresence:
                 self._feature_id = None
                 self._begin_turn()
             self._behavior = behavior
+
+    def end_speech(self) -> None:
+        """The voice stopped or was interrupted: forget features queued for audio not played."""
+        flush = getattr(self.speech, "flush", None)
+        if callable(flush):
+            flush()
 
     @property
     def closing(self) -> bool:
@@ -149,7 +159,6 @@ class LivePresence:
         self._turn_started = self._t0
         self._features_seen = False
         self._feature_id = None
-        self._feature_changed = self._t0
 
     @property
     def source(self) -> str:
@@ -218,16 +227,10 @@ class LivePresence:
             self._source = "waiting"
             return 0.0
         identity = (values.get("stream_id"), values.get("sequence"))
-        now = self._clock()
         if identity != self._feature_id:
-            self._feature_id, self._feature_changed = identity, now
+            self._feature_id = identity
             if self._turn is not None:
                 self._turn["feature_changes"] += 1
-        elif identity[1] is not None and now - self._feature_changed > FEATURES_STILL_S:
-            # The hops stopped advancing: the audio they describe has ended.
-            self._features_seen = True
-            self._source = "ended"
-            return 0.0
         self._features_seen = True
         self._source = "speech"
         if values.get("active") is False:

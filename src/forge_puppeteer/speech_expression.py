@@ -12,6 +12,7 @@ import copy
 import hashlib
 import math
 import time
+from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
@@ -24,6 +25,8 @@ SCHEMA = "forge.speech_envelope.v1"
 # An envelope older than this must not drive motion.
 _STALE_NS = 500_000_000
 HOP_MS = 50
+# At most this much audio is queued per performer (ten minutes of 50 ms hops).
+_PLAYOUT_MAX_HOPS = 12_000
 
 # Frequencies are an expressive texture, not joint-space or actuator rates.
 FREQUENCIES_HZ = {
@@ -202,6 +205,9 @@ class SpeechEnvelopeWindow:
         self._shapers: dict[str, SpeechExpressionShaper] = {}
         self._performer_sequences: dict[str, tuple[str, int]] = {}
         self._latest: dict[str, ExpressionChannels] = {}
+        # Per performer, the hops queued for playback: (monotonic start s, channels).
+        self._playout: dict[str, deque[tuple[float, ExpressionChannels]]] = {}
+        self._playout_stats: dict[str, dict[str, float]] = {}
         self._latest_hop: SpeechEnvelopeHop | None = None
         self._received_at_ns: int | None = None
         self._performer_received_at_ns: dict[str, int] = {}
@@ -248,9 +254,13 @@ class SpeechEnvelopeWindow:
             else:
                 shapers[name] = copy.deepcopy(existing)
         latest = {}
+        rendered: dict[str, list[ExpressionChannels]] = {name: [] for name in shapers}
         for hop in parsed:
             latest = {name: shaper.render(hop) for name, shaper in shapers.items()}
+            for name, channels in latest.items():
+                rendered[name].append(channels)
         expected = parsed[-1].sequence + 1
+        self._queue_playout(rendered)
         self._shapers.update(shapers)
         self._latest.update(latest)
         for name in performer_ids:
@@ -281,6 +291,66 @@ class SpeechEnvelopeWindow:
         if received_at is None or time.monotonic_ns() - received_at > _STALE_NS:
             return None
         return self._latest.get(performer_id)
+
+    def _queue_playout(self, rendered: dict[str, list[ExpressionChannels]]) -> None:
+        """Schedule hops back to back from now, or after what is still queued.
+
+        The producer sends features as fast as the voice engine generates audio, which
+        can be far faster than the audio plays. Each hop is therefore played at its own
+        place on the audio timeline: right after the previous hop, never earlier than
+        now. A gap in generation re-anchors at the first hop that arrives after it.
+        """
+        now = time.monotonic()
+        hop_s = HOP_MS / 1000.0
+        for name, items in rendered.items():
+            queue = self._playout.setdefault(name, deque())
+            stats = self._playout_stats.setdefault(name, {"hops": 0.0, "first_at": now})
+            if not queue and stats["hops"] == 0.0:
+                stats["first_at"] = now
+            start = max(now, queue[-1][0] + hop_s) if queue else now
+            for channels in items:
+                queue.append((start, channels))
+                start += hop_s
+            stats["hops"] += len(items)
+            while len(queue) > _PLAYOUT_MAX_HOPS:
+                queue.popleft()
+
+    def playing(self, performer_id: str) -> ExpressionChannels | None:
+        """The channels for this moment of the audio timeline, or None once it has ended.
+
+        Unlike :meth:`latest`, this follows playback, not arrival: a burst of features for
+        several seconds of audio drives motion for those seconds, and the motion ends with
+        the audio. Nothing is returned between utterances or after :meth:`flush`.
+        """
+        queue = self._playout.get(performer_id)
+        if not queue:
+            return None
+        now = time.monotonic()
+        hop_s = HOP_MS / 1000.0
+        while len(queue) > 1 and queue[1][0] <= now:
+            queue.popleft()
+        start, channels = queue[0]
+        if now >= start + hop_s:
+            queue.clear()
+            return None
+        return channels if now >= start else None
+
+    def flush(self, performer_id: str | None = None) -> None:
+        """Drop queued features (the voice was interrupted or ended); keep sequences."""
+        for name in ([performer_id] if performer_id is not None else list(self._playout)):
+            queue = self._playout.get(name)
+            if queue:
+                queue.clear()
+            self._playout_stats.pop(name, None)
+
+    def playout_stats(self, performer_id: str) -> dict[str, float]:
+        """Hops received since the last flush and seconds of audio still queued."""
+        stats = self._playout_stats.get(performer_id, {})
+        queue = self._playout.get(performer_id)
+        queued = 0.0
+        if queue:
+            queued = max(0.0, queue[-1][0] + HOP_MS / 1000.0 - time.monotonic())
+        return {"hops": stats.get("hops", 0.0), "queued_s": round(queued, 3)}
 
     def snapshot(self) -> dict[str, object]:
         if self._latest_hop is None or self._received_at_ns is None:

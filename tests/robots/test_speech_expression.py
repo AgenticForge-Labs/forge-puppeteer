@@ -405,3 +405,73 @@ def test_pinned_reachy_sway_frequencies_are_present_but_not_pcm_parity():
         "pitch": 2.2, "yaw": 0.6, "roll": 1.3,
         "x": 0.35, "y": 0.45, "z": 0.25,
     }
+
+
+def _clocked(monkeypatch, start=50.0):
+    import forge_puppeteer.speech_expression as speech
+
+    now = [start]
+    monkeypatch.setattr(speech.time, "monotonic", lambda: now[0])
+    return now
+
+
+def test_playing_follows_the_audio_timeline_not_the_arrival_of_the_features(monkeypatch):
+    now = _clocked(monkeypatch)
+    window = SpeechEnvelopeWindow()
+    window.accept([sample(n) for n in range(4)], performer_ids=("reachy",))
+    window.accept([sample(n) for n in range(4, 8)], performer_ids=("reachy",))
+    assert window.latest("reachy").sequence == 7, "latest is still the newest arrival"
+    seen = []
+    for _ in range(8):
+        seen.append(window.playing("reachy").sequence)
+        now[0] += 0.05
+    assert seen == list(range(8))
+    now[0] += 0.001
+    assert window.playing("reachy") is None, "the timeline ended with the audio"
+
+
+def test_features_that_arrive_after_a_gap_play_when_they_arrive(monkeypatch):
+    now = _clocked(monkeypatch)
+    window = SpeechEnvelopeWindow()
+    window.accept([sample(0), sample(1)], performer_ids=("reachy",))
+    now[0] += 1.0
+    assert window.playing("reachy") is None
+    window.accept([sample(2)], performer_ids=("reachy",))
+    assert window.playing("reachy").sequence == 2
+
+
+def test_a_second_stream_plays_after_the_first_has_finished_playing(monkeypatch):
+    now = _clocked(monkeypatch)
+    window = SpeechEnvelopeWindow()
+    for first in (0, 8, 16):  # 1 s of audio (the last batch is 4 hops)
+        window.accept([sample(n) for n in range(first, min(first + 8, 20))], performer_ids=("reachy",))
+    window.accept([sample(0, stream_id="next")], performer_ids=("reachy",))
+    now[0] += 0.5
+    assert window.playing("reachy").stream_id == "utterance-1"
+    now[0] += 0.52
+    assert window.playing("reachy").stream_id == "next"
+
+
+def test_flush_drops_what_was_queued_and_reports_the_stats(monkeypatch):
+    now = _clocked(monkeypatch)
+    window = SpeechEnvelopeWindow()
+    window.accept([sample(n) for n in range(8)], performer_ids=("reachy", "stackchan"))
+    assert window.playout_stats("reachy") == {"hops": 8.0, "queued_s": 0.4}
+    window.flush("reachy")
+    assert window.playing("reachy") is None
+    assert window.playout_stats("reachy") == {"hops": 0.0, "queued_s": 0.0}
+    assert window.playing("stackchan") is not None, "another robot's audio is untouched"
+    now[0] += 0.01
+    window.accept([sample(8)], performer_ids=("reachy",))
+    assert window.playing("reachy").sequence == 8, "sequences continue after a flush"
+
+
+def test_each_robot_has_its_own_timeline(monkeypatch):
+    now = _clocked(monkeypatch)
+    window = SpeechEnvelopeWindow()
+    window.accept([sample(n) for n in range(8)], performer_ids=("reachy",))
+    window.accept([sample(8), sample(9)], performer_ids=("reachy",))
+    now[0] += 0.3
+    window.accept([sample(0, stream_id="other")], performer_ids=("stackchan",))
+    assert window.playing("stackchan").stream_id == "other"
+    assert window.playing("reachy").sequence == 6

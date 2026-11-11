@@ -68,10 +68,10 @@ async def test_startup_speech_features_dispatch_through_real_stdio(tmp_path):
         result = await session.call_tool("ensemble_speech_envelope", {
             "session_id": "room", "performer_id": "reachy", "frames": [{
                 "schema": "forge.speech_envelope.v1", "stream_id": "speech",
-                "sequence": 0, "offset_ms": 0, "duration_ms": 50,
+                "sequence": n, "offset_ms": n * 50, "duration_ms": 50,
                 "active": True, "intensity": 0.6, "rms_dbfs": -18.0,
                 "timing_source": "generated_pcm", "acoustic_playout_measured": False,
-            }],
+            } for n in range(8)],  # 0.4 s of audio: motion follows playback, not arrival
         })
         assert result.structured_content["outcome"] == "observed"
         with anyio.fail_after(2):
