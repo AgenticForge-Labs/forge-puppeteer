@@ -20,15 +20,21 @@ from dataclasses import dataclass
 JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
 PRESENCE = ("idle", "listening", "speaking")
 BLEND_S = 0.6
+#: Leaving speaking fades the talking out faster than other blends, so it ends with the sound.
+SPEAK_FADE_OUT_S = 0.25
 #: Speech-level response: attack/release time constants and gain.
 LEVEL_ATTACK_S = 0.06
-LEVEL_RELEASE_S = 0.25
+LEVEL_RELEASE_S = 0.12
 LEVEL_GAIN = 2.0
 NOD_HZ = 1.1
 TILT_HZ = 0.6
 TILT_SCALE = 0.6
-#: Without fresh speech features the talking keeps a gentle rhythm.
+#: Without any speech features for a turn the talking keeps a gentle rhythm, starting after
+#: this wait. Once features have been seen in a turn, their end means the voice has ended.
 FALLBACK_LEVEL = 0.5
+FALLBACK_AFTER_S = 0.5
+#: Features that stop advancing this long mean the generated audio has ended.
+FEATURES_STILL_S = 0.25
 
 
 @dataclass(frozen=True)
@@ -91,6 +97,10 @@ class LivePresence:
         if behavior not in PRESENCE:
             raise ValueError("unknown presence behavior")
         with self._lock:
+            if behavior == "speaking" and self._behavior != "speaking":
+                self._turn_started = self._clock()  # a new turn of talking: features not seen yet
+                self._features_seen = False
+                self._feature_id = None
             self._behavior = behavior
 
     @property
@@ -109,6 +119,10 @@ class LivePresence:
         self._weights = {name: 1.0 if name == "idle" else 0.0 for name in PRESENCE}
         self._level = 0.0
         self._source = "idle"
+        self._turn_started = self._t0
+        self._features_seen = False
+        self._feature_id = None
+        self._feature_changed = self._t0
 
     @property
     def source(self) -> str:
@@ -126,7 +140,8 @@ class LivePresence:
         for name in PRESENCE:
             goal = 1.0 if name == behavior else 0.0
             current = self._weights[name]
-            self._weights[name] = min(goal, current + step) if goal > current else max(goal, current - step)
+            down = dt / SPEAK_FADE_OUT_S if name == "speaking" else step
+            self._weights[name] = min(goal, current + step) if goal > current else max(goal, current - down)
         settings = self.settings
         t = now - self._t0
         out = [0.0] * 5
@@ -155,8 +170,26 @@ class LivePresence:
         channel = self.speech
         values = channel.latest() if channel is not None else None
         if values is None:
-            self._source = "fallback"
-            return FALLBACK_LEVEL
+            if self._features_seen:
+                # The features for this turn have ended (they run slightly ahead of the
+                # sound): the voice is ending, so stop rather than keep nodding.
+                self._source = "ended"
+                return 0.0
+            if channel is None or self._clock() - self._turn_started >= FALLBACK_AFTER_S:
+                self._source = "fallback"
+                return FALLBACK_LEVEL
+            self._source = "waiting"
+            return 0.0
+        identity = (values.get("stream_id"), values.get("sequence"))
+        now = self._clock()
+        if identity != self._feature_id:
+            self._feature_id, self._feature_changed = identity, now
+        elif identity[1] is not None and now - self._feature_changed > FEATURES_STILL_S:
+            # The hops stopped advancing: the audio they describe has ended.
+            self._features_seen = True
+            self._source = "ended"
+            return 0.0
+        self._features_seen = True
         self._source = "speech"
         if values.get("active") is False:
             return 0.0

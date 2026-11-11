@@ -43,6 +43,10 @@ class Speech:
     def latest(self):
         return self.values
 
+    def advance(self, **changes):
+        """The next hop arrives."""
+        self.values = {**self.values, "sequence": self.values.get("sequence", 0) + 1, **changes}
+
 
 def make():
     clock = Clock()
@@ -82,15 +86,23 @@ def test_talking_follows_the_speech_level_and_goes_quiet_in_silence():
     speech = Speech({"active": True, "mouth": 0.6, "stream_id": "s", "sequence": 1})
     presence.speech = speech
     presence.set_behavior("speaking")
-    loud = clock.run(presence, 6)
+    loud = []
+    for _ in range(120):  # hops keep arriving while the voice is on
+        speech.advance()
+        clock.now += 0.05
+        loud.append(presence.offsets())
     flex = column(loud[40:], 3)
     assert max(flex) == pytest.approx(5 * DEG, abs=0.5 * DEG) and min(flex) == pytest.approx(-5 * DEG, abs=0.5 * DEG)
     assert presence.source == "speech"
-    speech.values = {"active": False, "mouth": 0.0, "stream_id": "s", "sequence": 2}
+    speech.advance(active=False, mouth=0.0)
     quiet = clock.run(presence, 3)
     assert max(abs(v) for v in column(quiet[-10:], 3)) < 0.2 * DEG
-    speech.values = {"active": True, "mouth": 0.1, "stream_id": "s", "sequence": 3}
-    soft = column(clock.run(presence, 4)[30:], 3)
+    soft = []
+    for _ in range(80):
+        speech.advance(active=True, mouth=0.1)
+        clock.now += 0.05
+        soft.append(presence.offsets()[3])
+    soft = soft[30:]
     assert 0.5 * DEG < max(soft) < 3 * DEG, "a quiet voice nods less than a loud one"
 
 
@@ -215,3 +227,59 @@ async def test_a_request_for_a_different_envelope_is_never_sent():
     with pytest.raises(PermissionError):
         await client(sdk, presence).execute(request)
     assert sdk.calls == []
+
+
+def test_talking_stops_when_the_speech_features_end_instead_of_falling_back_to_nodding():
+    presence, clock = make()
+    speech = Speech({"active": True, "mouth": 0.6})
+    presence.speech = speech
+    presence.set_behavior("speaking")
+    clock.run(presence, 3)
+    assert presence.source == "speech"
+    speech.values = None  # the features stop arriving: the generated audio has ended
+    tail = clock.run(presence, 1.0)
+    assert presence.source == "ended"
+    assert max(abs(v) for v in column(tail[-8:], 3)) < 0.3 * DEG, "quiet well within a second"
+
+
+def test_talking_waits_briefly_for_features_then_falls_back_only_if_none_come():
+    presence, clock = make()
+    presence.speech = Speech(None)
+    presence.set_behavior("speaking")
+    early = clock.run(presence, 0.4)
+    assert presence.source == "waiting" and not any(column(early, 3))
+    clock.run(presence, 1.5)
+    assert presence.source == "fallback"
+    # A new turn starts the wait over, and features arriving end it.
+    presence.set_behavior("listening")
+    clock.run(presence, 1.0)
+    presence.speech = Speech({"active": True, "mouth": 0.5})
+    presence.set_behavior("speaking")
+    clock.run(presence, 1.0)
+    assert presence.source == "speech"
+
+
+def test_leaving_speaking_fades_the_talking_out_quickly():
+    presence, clock = make()
+    presence.speech = Speech({"active": True, "mouth": 1.0})
+    presence.set_behavior("speaking")
+    clock.run(presence, 4)
+    presence.set_behavior("listening")
+    after = clock.run(presence, 0.5)
+    assert max(abs(v) for v in column(after[-3:], 3)) < 0.5 * DEG
+
+
+def test_features_that_stop_advancing_end_the_talking_quickly_without_waiting_for_staleness():
+    presence, clock = make()
+    speech = Speech({"active": True, "mouth": 0.6, "stream_id": "s", "sequence": 0})
+    presence.speech = speech
+    presence.set_behavior("speaking")
+    for _ in range(60):  # three seconds of hops arriving every tick
+        speech.advance()
+        clock.now += 0.05
+        presence.offsets()
+    assert presence.source == "speech"
+    held = clock.run(presence, 0.8)  # the last hop stays "latest" but never advances
+    assert presence.source == "ended"
+    assert max(abs(v) for v in column(held[-4:], 3)) < 0.5 * DEG
+    assert max(abs(v) for v in column(held[:5], 3)) > 1 * DEG, "it did not cut off at once either"
