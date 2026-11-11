@@ -201,6 +201,66 @@ def author_presence_programs(
     }
 
 
+def _monotone_cubic(times, values):
+    """Fritsch-Carlson shape-preserving cubic through ``values``: no overshoot, smooth speed."""
+    import numpy as np
+
+    t = np.asarray(times, dtype=float)
+    y = np.asarray(values, dtype=float)
+    h = np.diff(t)
+    d = np.diff(y) / h
+    m = np.zeros_like(y)
+    for i in range(1, len(y) - 1):
+        if d[i - 1] * d[i] > 0:
+            w1, w2 = 2 * h[i] + h[i - 1], h[i] + 2 * h[i - 1]
+            m[i] = (w1 + w2) / (w1 / d[i - 1] + w2 / d[i])
+    # Gentle ends: start and finish at rest.
+
+    def evaluate(x):
+        i = int(np.clip(np.searchsorted(t, x, side="right") - 1, 0, len(h) - 1))
+        u = (x - t[i]) / h[i]
+        h00, h10 = 2 * u**3 - 3 * u**2 + 1, u**3 - 2 * u**2 + u
+        h01, h11 = -2 * u**3 + 3 * u**2, u**3 - u**2
+        return h00 * y[i] + h10 * h[i] * m[i] + h01 * y[i + 1] + h11 * h[i] * m[i + 1]
+
+    return evaluate
+
+
+def author_pose_gesture(
+    robot_id, calibration_id, neutral, pose, *, name,
+    keyframes=((0.0, 0.0), (0.45, 0.30), (1.9, 1.0), (2.7, 1.0), (4.9, 0.0)),
+    max_speed_deg_s=47.0, max_accel_deg_s2=450.0, sample_s=0.05,
+):
+    """Author ``neutral -> pose -> neutral`` as one continuous move with a chosen shape.
+
+    ``keyframes`` are (seconds, fraction of the way to ``pose``). Joints share the shape, so the
+    path is a straight line in joint space with a snap first, then a slower rise, a hold and a
+    slow return. The program is stretched in time (never clipped) until its peak speed and
+    acceleration fit the limits, so the shape is kept and the timing is what gives way.
+    """
+    from soarm101_motion.choreography import JointChoreography, JointFrame
+
+    if len(neutral) != 5 or len(pose) != 5:
+        raise ValueError("neutral and pose need five joints")
+    stretch = 1.0
+    for _ in range(80):
+        shape = _monotone_cubic([t * stretch for t, _ in keyframes], [f for _, f in keyframes])
+        end = keyframes[-1][0] * stretch
+        steps = max(2, math.ceil(end / sample_s))
+        frames = []
+        for i in range(steps + 1):
+            at = end * i / steps
+            g = shape(at)
+            frames.append(JointFrame(float(at), tuple(
+                float(n + (p - n) * g) for n, p in zip(neutral, pose, strict=True))))
+        program = JointChoreography.author(name, robot_id, calibration_id, tuple(frames))
+        speed, accel = program_limits(program)
+        if speed <= max_speed_deg_s and accel <= max_accel_deg_s2:
+            return program
+        stretch *= 1.03
+    raise ValueError("gesture cannot be made to fit the speed and acceleration limits")
+
+
 def program_limits(program) -> tuple[float, float]:
     """Peak joint speed (deg/s) and acceleration (deg/s^2) of a program's frames."""
     import numpy as np
